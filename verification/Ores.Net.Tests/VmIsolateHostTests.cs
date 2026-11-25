@@ -300,6 +300,97 @@ internal static class VmIsolateHostTests
         Console.WriteLine("NET_SUPERVISOR_DISPATCH_PRIORITY_HOST_TESTS_PASS");
     }
 
+    private static void CheckMigratableCarrierSegments()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("migratable-carrier", maxActors: 2);
+        host.Start(tenant);
+        var actor = host.RegisterActor(tenant, 1);
+        var other = host.RegisterActor(tenant, 2);
+        host.ConfigureNamedActorState(tenant, actor, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        var foreignScheduler = host.CreateTrustedScheduler();
+        scheduler.Enqueue(tenant, actor);
+        int firstThread = Environment.CurrentManagedThreadId;
+        OresVmHost.ActorDispatchScope? oldScope = null;
+        var first = scheduler.StartSegment(tenant, actor, "Counter|1:I", scope => {
+            oldScope = scope;
+            if (scope.AddInt64(0, 20) != 20) throw new Exception("first segment state");
+            return true;
+        }) ?? throw new Exception("missing initial continuation");
+        var turn = first.Turn;
+        if (!host.ActorTurnSnapshot(tenant, actor).Suspended ||
+            turn.ScheduledCarrierLease is not null)
+            throw new Exception("suspended segment retained its carrier");
+        ExpectFailure(() => oldScope!.ReadInt64(0), "retired scope access");
+        ExpectFailure(() => host.ResumeActorTurn(tenant, actor, turn), "raw resume bypass");
+        ExpectFailure(() => host.CompleteActorTurn(tenant, actor, turn), "raw completion bypass");
+        ExpectFailure(() => host.BeginActorTurn(tenant, actor), "serial logical lane retained");
+        ExpectFailure(() => foreignScheduler.ResumeSegment(tenant, actor, first, _ => false),
+            "foreign scheduler continuation");
+        ExpectFailure(() => scheduler.ResumeSegment(tenant, other, first, _ => false),
+            "foreign actor continuation");
+        var forged = new OresVmHost.ActorContinuation(scheduler, turn);
+        ExpectFailure(() => scheduler.ResumeSegment(tenant, actor, forged, _ => false),
+            "forged continuation identity");
+
+        var second = Task.Factory.StartNew(() =>
+            scheduler.ResumeSegment(tenant, actor, first, scope => {
+                if (Environment.CurrentManagedThreadId == firstThread)
+                    throw new Exception("fixture did not migrate carrier");
+                ExpectFailure(() => oldScope!.ReadInt64(0), "old scope after migration");
+                ExpectFailure(() => scheduler.ResumeSegment(tenant, actor, first, _ => false),
+                    "reentrant ticket replay");
+                if (scope.AddInt64(0, 22) != 42) throw new Exception("migrated state");
+                return true;
+            }), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)
+            .GetAwaiter().GetResult() ?? throw new Exception("missing second continuation");
+        if (ReferenceEquals(first, second) || !ReferenceEquals(turn, second.Turn))
+            throw new Exception("continuation freshness or logical identity");
+        ExpectFailure(() => scheduler.ResumeSegment(tenant, actor, first, _ => false),
+            "old continuation after resuspension");
+        ExpectFailure(() => scheduler.DiscardContinuation(tenant, actor, second),
+            "discard without cancellation");
+        host.CancelActorTurn(tenant, actor, turn);
+        ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, actor, turn),
+            "raw cancel acknowledgment bypass");
+        ExpectFailure(() => scheduler.ResumeSegment(tenant, actor, second, _ => false),
+            "cancelled continuation resume");
+        ExpectFailure(() => scheduler.DiscardContinuation(tenant, actor, first),
+            "old continuation discard");
+        scheduler.DiscardContinuation(tenant, actor, second);
+        ExpectFailure(() => scheduler.DiscardContinuation(tenant, actor, second),
+            "duplicate discard");
+
+        scheduler.Enqueue(tenant, actor);
+        var completed = scheduler.StartSegment(tenant, actor, "Counter|1:I", scope => {
+            if (scope.ReadInt64(0) != 42) throw new Exception("state after cancellation");
+            return false;
+        });
+        if (completed is not null || host.ActorTurnSnapshot(tenant, actor).Active)
+            throw new Exception("completed segment retained authority");
+
+        scheduler.Enqueue(tenant, actor);
+        bool cancelled = false;
+        try {
+            scheduler.StartSegment(tenant, actor, "Counter|1:I", scope => {
+                var current = actor.ActiveTurn ?? throw new Exception("no running segment");
+                host.CancelActorTurn(tenant, actor, current);
+                ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, actor, current),
+                    "running segment cancel acknowledgment");
+                return true;
+            });
+        } catch (OperationCanceledException) { cancelled = true; }
+        if (!cancelled || host.ActorTurnSnapshot(tenant, actor).Active)
+            throw new Exception("cancelled segment returned a false success or retained lane");
+
+        host.RetireActor(tenant, actor);
+        host.RetireActor(tenant, other);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_MIGRATABLE_CARRIER_SEGMENTS_HOST_TESTS_PASS");
+    }
+
     internal static void RunSupervisorTerminalChecks()
     {
         CheckSupervisorTerminalReservations();
@@ -307,6 +398,7 @@ internal static class VmIsolateHostTests
         CheckCancellationRetirement();
         CheckScheduledCarrierRetirement();
         CheckSupervisorDispatchPriority();
+        CheckMigratableCarrierSegments();
     }
 
     public static void Run()
