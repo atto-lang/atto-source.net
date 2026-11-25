@@ -18,7 +18,8 @@ public static partial class OresStructuredParser
     {
         private StructuredExpr ReadMatchValue(int offset, int depth)
         {
-            var match = ReadMatch(depth + 1, imperative: false);
+            var match = ReadMatch(depth + 1, imperative: false,
+                writebackRoot: matchWritebackRoot == offset);
             var children = new List<StructuredExpr> { match.Subject };
             foreach (var arm in match.Arms)
             {
@@ -28,7 +29,7 @@ public static partial class OresStructuredParser
             return TaggedPostfix(TypedNode(new StructuredMatchValue(offset, match), children.ToArray()), depth);
         }
 
-        private StructuredMatch ReadMatch(int depth, bool imperative)
+        private StructuredMatch ReadMatch(int depth, bool imperative, bool writebackRoot = false)
         {
             Budget(depth);
             IrValueType? result = imperative ? IrValueType.Void : null;
@@ -96,8 +97,7 @@ public static partial class OresStructuredParser
                             if (braced && !Take("return") && !Take("^"))
                                 throw Error("MATCH_ARM_RETURN_REQUIRED: a value match block requires return or ^");
                             if (!braced && !arrow) throw Error("Expected a match arm block or '->'");
-                            var value = (result ?? context) is { } expected
-                                ? ExpectedExpr(depth + 1, expected) : Expr(depth + 1);
+                            var value = ReadMatchStatementArm(depth + 1, result ?? context, writebackRoot);
                             if (value.Type is IrValueType.FixedArrayI64 or IrValueType.Void)
                                 throw Error("MATCH_VALUE_ABI_UNSUPPORTED: match requires a supported scalar or tagged result");
                             result ??= value.Type;
