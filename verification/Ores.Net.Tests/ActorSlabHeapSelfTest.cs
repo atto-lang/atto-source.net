@@ -15,6 +15,7 @@ internal static class ActorSlabHeapSelfTest
         BudgetFailureIsAtomic();
         HandlesFifoStaleAndQuarantine();
         StressIntegrity();
+        SmallClassSteadyStateAllocatesNoManagedBytes();
         GoldenMatchesCppAndRust();
         GoldenV2MatchesCppAndRust();
         Console.WriteLine("ActorSlabHeapSelfTest: PASS (Offset32/Handle32, golden v1 + v2)");
@@ -144,6 +145,30 @@ internal static class ActorSlabHeapSelfTest
         }
         foreach (var (w, _, _) in live) Check(h.Free(w) == SlabStatus.Ok, "final free");
         Check(h.Stats.LiveObjects == 0 && h.Stats.LivePages == 0, "empty at end");
+    }
+
+    private static void SmallClassSteadyStateAllocatesNoManagedBytes()
+    {
+        using var h = Heap(1 << 20, 1 << 20);
+        static void Exercise(ActorSlabHeap heap, int repetitions)
+        {
+            for (var pass = 0; pass < repetitions; pass++)
+                foreach (var size in ActorSlabHeap.ClassBytes)
+                {
+                    Check(heap.Allocate(size, 8, out var word) == SlabStatus.Ok, "allocation probe alloc");
+                    Check(heap.Bytes(word, size, out var bytes) == SlabStatus.Ok, "allocation probe resolve");
+                    bytes.Fill(0x2A);
+                    Check(heap.Free(word) == SlabStatus.Ok, "allocation probe free");
+                }
+        }
+        // Warm up all class paths and the accounting API outside measurement.
+        Exercise(h, 32);
+        _ = GC.GetAllocatedBytesForCurrentThread();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        Exercise(h, 256);
+        var delta = GC.GetAllocatedBytesForCurrentThread() - before;
+        Check(delta == 0, $"steady-state slab operations allocated {delta} managed bytes");
+        Check(h.Stats.LiveObjects == 0 && h.Stats.LivePages == 0, "allocation probe reclaimed all objects");
     }
 
     private static void GoldenMatchesCppAndRust()
