@@ -10,6 +10,8 @@ on:
       - 'verification/Ores.Net.Tests/Program.cs'
       - 'compiler/Ores.Net.Compiler.Core/StaticImportGraph.cs'
       - 'verification/Ores.Net.Tests/StaticImportGraphSelfTest.cs'
+      - 'compiler/Ores.Net.Compiler.Core/FrozenImportSnapshot.cs'
+      - 'verification/Ores.Net.Tests/FrozenImportSnapshotSelfTest.cs'
       - 'global.json'
 permissions:
   contents: read
@@ -47,6 +49,10 @@ jobs:
           cmp verification/Ores.Net.Tests/ContextualImportPathSelfTest.cs "$work/ContextualImportPathSelfTest.cs"
           cp compiler/Ores.Net.Compiler.Core/StaticImportGraph.cs "$work/"
           cp verification/Ores.Net.Tests/StaticImportGraphSelfTest.cs "$work/"
+          cp compiler/Ores.Net.Compiler.Core/FrozenImportSnapshot.cs "$work/"
+          cp verification/Ores.Net.Tests/FrozenImportSnapshotSelfTest.cs "$work/"
+          cmp compiler/Ores.Net.Compiler.Core/FrozenImportSnapshot.cs "$work/FrozenImportSnapshot.cs"
+          cmp verification/Ores.Net.Tests/FrozenImportSnapshotSelfTest.cs "$work/FrozenImportSnapshotSelfTest.cs"
           cmp compiler/Ores.Net.Compiler.Core/StaticImportGraph.cs "$work/StaticImportGraph.cs"
           cmp verification/Ores.Net.Tests/StaticImportGraphSelfTest.cs "$work/StaticImportGraphSelfTest.cs"
           dotnet run --project "$work" --configuration Release
