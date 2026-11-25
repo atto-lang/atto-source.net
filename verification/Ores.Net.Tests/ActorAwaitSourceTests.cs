@@ -39,6 +39,9 @@ internal static class ActorAwaitSourceTests
         foreach (bool serial in new[] { false, true }) RunProfile(serial);
         RunSourceProducer();
         CheckProducerLifecycle();
+        RunTwoAwaits(fault: false);
+        RunTwoAwaits(fault: true);
+        Console.WriteLine("NET_TWO_AWAIT_ACTOR_FRAMES_TESTS_PASS");
         Console.WriteLine("NET_SOURCE_OWNED_ACTOR_TASK_TESTS_PASS");
         Console.WriteLine("NET_VERIFIED_ACTOR_AWAIT_FRAME_TESTS_PASS");
     }
@@ -97,6 +100,109 @@ internal static class ActorAwaitSourceTests
         host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
     }
 
+    private static void RunTwoAwaits(bool fault)
+    {
+        string name = fault ? "FaultTaskCounter" : "MultiTaskCounter";
+        string source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, name + ".atto"));
+        var plan = OresParser.InspectActorAwait(source);
+        Require(plan.SecondLeft == (fault ? long.MaxValue : 3) &&
+            plan.SecondRight == (fault ? 1 : 4), "second producer operands");
+        var golden = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Generated" + name + ".g.cs"));
+        Require(ActorAwaitSourceEmitter.EmitCSharp(plan) ==
+            golden.Replace("\r\n", "\n", StringComparison.Ordinal), "second await golden");
+        Reject(source.Replace("await next", "await pending", StringComparison.Ordinal));
+        Reject(source.Replace("Future<int> next", "Future<int> pending", StringComparison.Ordinal));
+        Reject(source.Replace("saved + result + second", "saved + second + result", StringComparison.Ordinal));
+        Reject(source.Replace("val int second = await next;", "val int second = await next; await next;", StringComparison.Ordinal));
+
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate(fault ? "two-await-fault" : "two-await-success",
+            maxActors: 1, maxActorWorkers: 1);
+        host.Start(tenant);
+        var actor = fault ? AwaitActor_FaultTaskCounter.Create(host, tenant, 1, true) :
+            AwaitActor_MultiTaskCounter.Create(host, tenant, 1, true);
+        var scheduler = host.CreateTrustedScheduler();
+        var successFrame = new AwaitActor_MultiTaskCounter(23);
+        var faultFrame = new AwaitActor_FaultTaskCounter(23);
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timeout = TimeSpan.FromSeconds(10);
+        using var stop = new CancellationTokenSource();
+        var leases = new HashSet<object>();
+        OresVmHost.ActorDispatchScope? previous = null;
+        OresVmHost.ActorTurnTicket? logical = null;
+        int segments = 0;
+        bool sawOriginalFault = false;
+
+        void CheckSegment(OresVmHost.ActorDispatchScope scope)
+        {
+            var turn = actor.ActiveTurn ?? throw new Exception("missing running actor turn");
+            logical ??= turn;
+            Require(ReferenceEquals(logical, turn), "logical identity across awaits");
+            Require(leases.Add(turn.ScheduledCarrierLease ??
+                throw new Exception("missing physical carrier lease")), "physical lease replay");
+            if (previous is not null) {
+                bool rejected = false;
+                try { previous.ReadInt64(0); }
+                catch (InvalidOperationException) { rejected = true; }
+                Require(rejected, "previous state scope survived suspension");
+            }
+            previous = scope;
+            ++segments;
+        }
+
+        OresVmHost.ActorPumpStep Wrap(OresVmHost.ActorPumpStep step)
+        {
+            Require(step.Producer is not null && !step.Ready.IsCompleted &&
+                step.ObserveFaultInSegment, "source producer/await outcome binding");
+            return step with { Next = scope => {
+                CheckSegment(scope);
+                try {
+                    var next = step.Next(scope);
+                    if (next is not null) return Wrap(next);
+                    done.TrySetResult();
+                    return null;
+                } catch (OverflowException) {
+                    sawOriginalFault = true;
+                    throw;
+                }
+            }};
+        }
+
+        var pump = scheduler.RunPumpAsync(tenant, actor, name + "|1:I",
+            (_, _) => throw new Exception("unexpected DATA"),
+            scope => {
+                CheckSegment(scope);
+                return Wrap(fault ? faultFrame.Start_add(scope) : successFrame.Start_add(scope));
+            }, (_, _) => throw new Exception("unexpected terminal"), stop.Token);
+        try {
+            scheduler.Enqueue(tenant, actor);
+            if (fault) {
+                bool rejected = false;
+                try { pump.WaitAsync(timeout).GetAwaiter().GetResult(); }
+                catch (OverflowException) { rejected = true; }
+                Require(rejected && sawOriginalFault && faultFrame.Result is null,
+                    "original producer overflow must reach resumed frame");
+            } else {
+                done.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+                Require(successFrame.Result == 42, "two source awaits result");
+            }
+        } finally {
+            stop.Cancel();
+            try { pump.WaitAsync(timeout).GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { }
+            catch (OverflowException) when (fault && sawOriginalFault) { }
+        }
+        Require(segments == 3 && leases.Count == 3, "three distinct carrier leases");
+        Require(host.ActorReceiveSnapshot(tenant, actor).Live == 0, "two-await logical retirement");
+        // Read through a new trusted turn after pump exit. No partial actor
+        // update is permitted if the second producer failed.
+        scheduler.Enqueue(tenant, actor);
+        Require(scheduler.DispatchNext(tenant, actor, name + "|1:I",
+            scope => scope.ReadInt64(0)) == (fault ? 0 : 42), "state after producer outcome");
+        host.RetireActor(tenant, actor);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+    }
+
     private static void CheckProducerLifecycle()
     {
         int calls = 0;
@@ -105,6 +211,12 @@ internal static class ActorAwaitSourceTests
         Require(cancelled.Future.IsCanceled && calls == 0, "unstarted cancellation");
         try { cancelled.Run(); throw new Exception("cancelled producer executed"); }
         catch (InvalidOperationException) { }
+        var admitted = new OresVmHost.ActorScalarTask(() => ++calls);
+        admitted.Claim();
+        admitted.CancelUnstarted();
+        admitted.RunClaimed();
+        Require(admitted.Future.GetAwaiter().GetResult() == 1 && calls == 1,
+            "cancellation cannot revoke already admitted producer");
         var faulted = new OresVmHost.ActorScalarTask(static () => throw new OverflowException());
         faulted.Run();
         Require(faulted.Future.IsFaulted &&
