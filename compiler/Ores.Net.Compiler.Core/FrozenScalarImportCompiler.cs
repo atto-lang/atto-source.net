@@ -64,7 +64,16 @@ public static partial class OresStructuredParser
         if(!reader.Take("->")) reader.Expect(":");
         reader.Expect("int"); reader.Expect("{"); reader.Expect("return");
         string call=reader.Path();
-        reader.Expect("("); reader.Expect(")"); reader.Expect(";"); reader.Expect("}");
+        reader.Expect("(");
+        var arguments=new List<StructuredExpr>();
+        if(!reader.Take(")")) {
+            do {
+                if(arguments.Count>=16) throw new FormatException("E_SOURCE_LIMIT: call argument budget exceeded");
+                arguments.Add(new StructuredInt(0,reader.Integer()));
+            } while(reader.Take(","));
+            reader.Expect(")");
+        }
+        reader.Expect(";"); reader.Expect("}");
         if(!reader.AtEnd) throw new FormatException("E_UNSUPPORTED: trailing guest source");
         if(!call.Contains('.')) throw new FormatException("E_UNSUPPORTED: qualified static call required");
 
@@ -96,14 +105,14 @@ public static partial class OresStructuredParser
         var provider=ParseFrozenProvider(owner,target.Path[..dot]);
         string member=target.Path[(dot+1)..];
         var functions=provider.Functions ?? throw new FormatException("E_IMPORT_KIND: missing provider functions");
-        if(!functions.TryGetValue(member,out var function) || function.Parameters.Count!=0 ||
-           function.ResultType!=IrValueType.I64)
-            throw new FormatException("E_IMPORT_KIND: selected function must have signature ():int");
+        if(!functions.TryGetValue(member,out var function) || function.Parameters.Count!=arguments.Count ||
+           function.Parameters.Any(p=>p.Type!=IrValueType.I64) || function.ResultType!=IrValueType.I64)
+            throw new FormatException("E_IMPORT_KIND: selected function must accept the exact signed-int argument list and return int");
         // Reserve the entry method name; do not confuse an imported main with
         // the synthesized consumer entry. Other helper names remain unchanged.
         if(functions.ContainsKey("main"))
             throw new FormatException("E_UNSUPPORTED: provider main requires canonical method names");
-        var result=new StructuredCall(0,member,Array.Empty<StructuredExpr>(),IrValueType.I64);
+        var result=new StructuredCall(0,member,arguments.AsReadOnly(),IrValueType.I64);
         var program=new StructuredProgram("main",Array.AsReadOnly<StructuredStmt>(
             new StructuredStmt[]{new StructuredReturn(0,result)}),functions,provider.FunctionOrder);
         return OresStructuredCfgLowering.LowerModule(program);
@@ -139,6 +148,24 @@ public static partial class OresStructuredParser
                 path+="."+Component();
             }
             return path;
+        }
+        internal long Integer()
+        {
+            bool negative=Take("-");
+            string raw=current.Text;
+            if(raw.Length is <1 or >37) throw new FormatException("E_IMPORT_KIND: invalid decimal int argument");
+            int digits=0;
+            for(int i=0;i<raw.Length;i++) {
+                if(raw[i] is >= '0' and <= '9') digits++;
+                else if(raw[i]!='_'||i==0||i==raw.Length-1||
+                    raw[i-1] is <'0' or >'9'||raw[i+1] is <'0' or >'9')
+                    throw new FormatException("E_IMPORT_KIND: expected decimal int argument");
+            }
+            if(digits>19||!long.TryParse((negative?"-":"")+raw.Replace("_","",StringComparison.Ordinal),
+                System.Globalization.NumberStyles.AllowLeadingSign,System.Globalization.CultureInfo.InvariantCulture,out long value))
+                throw new FormatException("E_IMPORT_KIND: int argument outside signed i64 range");
+            Advance();
+            return value;
         }
         internal string StaticString()
         {
