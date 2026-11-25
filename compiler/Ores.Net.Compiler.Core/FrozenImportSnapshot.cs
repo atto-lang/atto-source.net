@@ -114,6 +114,23 @@ public sealed class FrozenImportSnapshot
         if(!namespaces.TryGetValue(ns,out var provider)) throw Fail("E_UNBOUND","undeclared namespace");
         return sources[provider];
     }
+    // Explicit root selector or pinned public subpath; no physical fallback.
+    public string SelectNamespace(string source,string selector) {
+        if(!NamespaceOk(selector)) throw Fail("E_IMPORT_PATH","invalid namespace selector");
+        if(source==Name) {
+            if(namespaces.ContainsKey(selector)) return selector;
+            int dot=selector.LastIndexOf('.');
+            if(dot>=0) {
+                string leaf=selector[(dot+1)..];
+                var matches=namespaces.Keys.Where(k=>k==leaf||k.EndsWith("."+leaf,StringComparison.Ordinal)).OrderBy(k=>k,StringComparer.Ordinal).ToArray();
+                if(matches.Length>1) throw Fail("E_AMBIGUOUS","ambiguous namespace selector");
+                if(matches.Length==1) return matches[0];
+            }
+            throw Fail("E_UNBOUND","namespace not declared");
+        }
+        if(source is null||!source.StartsWith(Name+"/",StringComparison.Ordinal)) throw Fail("E_IMPORT_PATH","wrong pinned package");
+        return NamespaceForSubpath(source[(Name.Length+1)..]);
+    }
     // No graph view until arbitrary source namespace parsing and visibility
     // become available in the actual .NET compiler. Never infer from filenames.
 }
