@@ -1167,11 +1167,11 @@ public static partial class OresParser
             while (Current.Text is "*" or "/")
             {
                 char op = Current.Text[0];
-                // int/int is float in Oreslang and remains unsupported in this
+                // Checked int/int division remains unsupported in this
                 // i64-only bootstrap; % and ^ are removed at lexical admission.
                 if (op == '/')
                     throw new FormatException(
-                        "Division requires float result lowering; unsupported in the i64 source subset");
+                        "Checked integer division requires typed guest error lowering; unsupported in the i64 source subset");
                 _index++;
                 var rhs = ParseUnary(depth + 1);
                 left = new Binary(op, left, rhs);
