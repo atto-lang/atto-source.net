@@ -51,3 +51,7 @@ The #257 and #258 task jobs failed at offset 338 of inline-shortcircuit-writebac
 ### Parenthesized logical negation admission
 
 Separate prefix `!(bool-expression)` from unsupported macro invocation using a narrow token-context predicate. Prefix punctuation and separated expression-introducing keywords admit boolean operands; adjacent keyword macro-like forms and identifier-led invocations (including spaced bang) retain the existing macro diagnostic. Typed Unary checks bool and now uses CheckedConditional to account for the AST height. No macro or ownership lowering is added. A dedicated native/managed guest plus three no-artifact denials and structured parser assertions exercise the boundary. This is a separate candidate so the prefix-not regression repair can finish its exact-head CI unchanged.
+
+### CI admission-first execution
+
+Build the exact compiler once per lane. Check and compile every positive fixture (including the opt-in scheduled root guest) and run every diagnostic-specific negative before expensive native linking. A compilation marker is separate from a runtime receipt; any admission failure fails the job before linking, and all negative outcomes require both check and compile denials. Source and generated CIL blob IDs are logged. Native compiler and each guest use strict Mach-O release validation, fresh output directories, clean host intermediates and no managed fallback. This is CI harness work, not a new compiler capability. Exact-head guest execution is still required.
