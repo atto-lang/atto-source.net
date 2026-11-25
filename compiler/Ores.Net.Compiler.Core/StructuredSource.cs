@@ -2518,6 +2518,7 @@ public static partial class OresStructuredParser
         private StructuredExpr Conditional(int depth)
         {
             Budget(depth);
+            int expressionStart = Current.Offset;
             if (Current.Text is "if" or "ifnot" or "unless")
             {
                 int valueIfAt = Current.Offset;
@@ -2547,9 +2548,11 @@ public static partial class OresStructuredParser
             int at = Current.Offset;
             index++;
             Require(test, IrValueType.Bool, "Conditional test requires bool");
-            var yes = Expr(depth + 1);
+            bool ternaryWritebackRoot = conditionalWritebackRoot == expressionStart;
+            var yes = ReadConditionalStatementArm(depth + 1, ternaryWritebackRoot, ":");
             Expect(":");
-            var no = Conditional(depth + 1);
+            var no = ReadConditionalStatementArm(depth + 1, ternaryWritebackRoot, ";",
+                conditionalOnly: true);
             if (yes.Type != no.Type)
                 throw new FormatException($"Conditional result types differ at offset {at}");
             return CheckedConditional(at, test, yes, no);

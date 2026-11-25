@@ -39,3 +39,7 @@ Complete runtime declaration or mutable assignment values may use keyword `if ..
 ### Bounded match statement writeback
 
 Complete mutable assignment or runtime declaration values may use a value match with immediate semicolon-terminated sync-task arms. The parser grants permission only at the root match offset and verifies the resulting AST. Existing exhaustiveness, immutable binders, pure pattern/guard selection and per-arm environments remain intact. The lexical continuation joins the result plus outer mutable scalar and Option bindings; arm binders never escape. Subject, guard, nested arm expressions and inherited restricted scopes cannot publish writes. A four-path runtime fixture exercises guarded fallthrough and Option payload binders; four new diagnostic denials cover forbidden contexts. Exact-head execution required.
+
+### Bounded ternary statement writeback
+
+A complete runtime declaration or mutable assignment may also use `condition ? task-arm : task-arm` with immediate complete sync-task branches. The parser uses the statement entry offset and arm delimiters to grant permission; the final AST must still be the conditional root. Existing keyword conditional typed continuation joins apply unchanged, including closed Option tags and payloads. The false arm keeps the existing right-associative Conditional parser. Predicate, nested arithmetic, nonroot conditionals and inherited restricted scopes cannot publish writes. New four-path fixture and four denial fixtures are registered in both guest lanes. Exact-head execution pending.

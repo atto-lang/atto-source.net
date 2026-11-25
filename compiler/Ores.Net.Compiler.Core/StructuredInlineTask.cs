@@ -88,13 +88,14 @@ public static partial class OresStructuredParser
         // A conditional's own parser selects only its immediate, complete
         // arms. Nested conditionals and other expression nodes cannot inherit
         // the permission. The caller verifies the resulting root AST.
-        private StructuredExpr ReadConditionalStatementArm(int depth, bool root, string terminator)
+        private StructuredExpr ReadConditionalStatementArm(int depth, bool root, string terminator,
+            bool conditionalOnly = false)
         {
             int? previous = directInlineWritebackOffset;
             bool selected = root && IsDirectInlineStatementValue(index, terminator);
             directInlineWritebackOffset = selected ? Current.Offset : null;
             if (selected) conditionalWritebackArms!.Add(Current.Offset);
-            try { return Expr(depth); }
+            try { return conditionalOnly ? Conditional(depth) : Expr(depth); }
             finally { directInlineWritebackOffset = previous; }
         }
 
@@ -136,8 +137,11 @@ public static partial class OresStructuredParser
             matchWritebackRoot = keywordMatch ? Current.Offset : null;
             matchWritebackArms = keywordMatch ? new HashSet<int>() : null;
             bool keywordConditional = allowWriteback && Current.Text is ("if" or "ifnot" or "unless");
-            conditionalWritebackRoot = keywordConditional ? Current.Offset : null;
-            conditionalWritebackArms = keywordConditional ? new HashSet<int>() : null;
+            // The statement entry offset also identifies a possible ternary.
+            // Only its parser can grant permission after consuming '?'.
+            bool allowConditional = allowWriteback && !keywordMatch;
+            conditionalWritebackRoot = allowConditional ? Current.Offset : null;
+            conditionalWritebackArms = allowConditional ? new HashSet<int>() : null;
             int? selected = allowWriteback && !keywordConditional && !keywordMatch ? StatementWritebackOffset() : null;
             directInlineWritebackOffset = selected;
             try
