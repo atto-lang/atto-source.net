@@ -51,6 +51,7 @@ jobs:
           grep -Fx NET_SOURCE_OWNED_ACTOR_TASK_TESTS_PASS supervisor-terminal.log
           grep -Fx NET_TWO_AWAIT_ACTOR_FRAMES_TESTS_PASS supervisor-terminal.log
           grep -Fx NET_TRAPPED_ACTOR_AWAIT_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_CAPTURED_ACTOR_TASKS_TESTS_PASS supervisor-terminal.log
       - name: Verify CLI-generated source identity and standalone NativeAOT actor frame
         shell: bash
         run: |
@@ -59,7 +60,7 @@ jobs:
           git diff --no-index --ignore-cr-at-eol verification/Ores.Net.Tests/GeneratedAwaitActor.g.cs "$RUNNER_TEMP/AwaitActor.g.cs"
           dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- emit-actor-await-csharp verification/Ores.Net.Tests/TaskCounter.atto --out "$RUNNER_TEMP/TaskActor.g.cs"
           git diff --no-index --ignore-cr-at-eol verification/Ores.Net.Tests/GeneratedTaskActor.g.cs "$RUNNER_TEMP/TaskActor.g.cs"
-          for actor in MultiTaskCounter FaultTaskCounter TrapTaskCounter TrapFaultCounter TrapFutureCounter; do
+          for actor in MultiTaskCounter FaultTaskCounter TrapTaskCounter TrapFaultCounter TrapFutureCounter CaptureTaskCounter; do
             dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- emit-actor-await-csharp "verification/Ores.Net.Tests/$actor.atto" --out "$RUNNER_TEMP/Generated$actor.g.cs"
             git diff --no-index --ignore-cr-at-eol "verification/Ores.Net.Tests/Generated$actor.g.cs" "$RUNNER_TEMP/Generated$actor.g.cs"
           done
@@ -70,4 +71,5 @@ jobs:
           grep -Fx NET_SOURCE_OWNED_ACTOR_TASK_TESTS_PASS actor-await-native.log
           grep -Fx NET_TWO_AWAIT_ACTOR_FRAMES_TESTS_PASS actor-await-native.log
           grep -Fx NET_TRAPPED_ACTOR_AWAIT_TESTS_PASS actor-await-native.log
+          grep -Fx NET_CAPTURED_ACTOR_TASKS_TESTS_PASS actor-await-native.log
 
