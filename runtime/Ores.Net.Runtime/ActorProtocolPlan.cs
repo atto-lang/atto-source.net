@@ -110,7 +110,8 @@ public sealed class ActorProtocolPlan
         BinaryPrimitives.WriteUInt16LittleEndian(frame[37..], message);
         for (int i = 0; i < fields.Length; i++)
             BinaryPrimitives.WriteInt64LittleEndian(frame[(HeaderSize + sizeof(long) * i)..], fields[i]);
-        runtime.Send(actor, frame);
+        // Route through the existing reviewed in-memory mailbox admission.
+        runtime.PostHostMessage(actor, frame);
     }
 
     public ActorRef Spawn(ActorRuntime runtime, ActorRef replyTo)
@@ -126,7 +127,7 @@ public sealed class ActorProtocolPlan
                 context.Execution.ExecutionSequence, status, source, state.State);
             Span<byte> output = stackalloc byte[ProtocolTurnReceipt.FrameSize];
             receipt.Write(output);
-            runtime.Send(replyTo, output);
+            runtime.PostHostMessage(replyTo, output);
         });
     }
 
