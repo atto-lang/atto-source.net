@@ -6,18 +6,39 @@ namespace Ores.Net.Compiler;
 internal readonly record struct VerifiedI64Range
 {
     private readonly long low, high;
+    private readonly int exclusions;
+    private static int Bit(long n) => n == 0 ? 1 : n == -1 ? 2 : 0;
 
-    public VerifiedI64Range(long low, long high)
+    public VerifiedI64Range(long low, long high, int exclusions = 0)
     {
+        while (low <= high && (exclusions & Bit(low)) != 0) low++;
+        while (low <= high && (exclusions & Bit(high)) != 0) high--;
         if (low > high) throw Empty();
+        if (low > 0 || high < 0) exclusions &= ~1;
+        if (low > -1 || high < -1) exclusions &= ~2;
         this.low = low;
         this.high = high;
+        this.exclusions = exclusions;
     }
+    internal bool ContainsValue(long n) => low <= n && n <= high && (exclusions & Bit(n)) == 0;
+    internal VerifiedI64Range Excluding(long n)
+    {
+        if (!ContainsValue(n)) return this;
+        if (low == high) throw Empty();
+        if (low == n) return new(low+1, high, exclusions);
+        if (high == n) return new(low, high-1, exclusions);
+        return new(low, high, exclusions | Bit(n));
+    }
+    internal VerifiedI64Range Join(VerifiedI64Range other) => new(
+        Math.Min(low, other.low), Math.Max(high, other.high),
+        (!ContainsValue(0) && !other.ContainsValue(0) ? 1 : 0)
+        | (!ContainsValue(-1) && !other.ContainsValue(-1) ? 2 : 0));
 
     internal static VerifiedI64Range Full => new(long.MinValue, long.MaxValue);
     internal static VerifiedI64Range Point(long value) => new(value, value);
 
-    internal bool Includes(VerifiedI64Range actual) => low <= actual.low && high >= actual.high;
+    internal bool Includes(VerifiedI64Range actual) => low <= actual.low && high >= actual.high
+        && (!actual.ContainsValue(0) || ContainsValue(0)) && (!actual.ContainsValue(-1) || ContainsValue(-1));
 
     internal long Minimum => low;
     internal long Maximum => high;
@@ -38,11 +59,11 @@ internal readonly record struct VerifiedI64Range
 
     internal VerifiedI64Range Constrain(string op, long value) => op switch
     {
-        "eq" => new(Math.Max(low, value), Math.Min(high, value)),
-        "<=" => new(low, Math.Min(high, value)),
-        ">=" => new(Math.Max(low, value), high),
-        "<" when value != long.MinValue => new(low, Math.Min(high, value - 1)),
-        ">" when value != long.MaxValue => new(Math.Max(low, value + 1), high),
+        "eq" => new(Math.Max(low, value), Math.Min(high, value), exclusions),
+        "<=" => new(low, Math.Min(high, value), exclusions),
+        ">=" => new(Math.Max(low, value), high, exclusions),
+        "<" when value != long.MinValue => new(low, Math.Min(high, value - 1), exclusions),
+        ">" when value != long.MaxValue => new(Math.Max(low, value + 1), high, exclusions),
         "<" or ">" => throw Empty(),
         _ => throw new FormatException("E_REFINEMENT_PREDICATE: expected an interval comparison"),
     };
