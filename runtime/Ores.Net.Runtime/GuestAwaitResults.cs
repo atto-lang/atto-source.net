@@ -7,13 +7,28 @@ namespace Ores.Net.Runtime;
 /// </summary>
 internal static class GuestAwaitResults
 {
-    internal static GuestResultI64 TrapCompletedI64(Task<long> pending)
+    // Task completion is monotonic. Only these two reviewed sites may
+    // observe the CLR result synchronously, and neither may park a carrier.
+    internal static void ObserveCompleted(Task pending)
     {
         ArgumentNullException.ThrowIfNull(pending);
         if (!pending.IsCompleted)
             throw new InvalidOperationException("await result not ready");
+        pending.GetAwaiter().GetResult();
+    }
+
+    internal static long ReadCompletedI64(Task<long> pending)
+    {
+        ArgumentNullException.ThrowIfNull(pending);
+        if (!pending.IsCompleted)
+            throw new InvalidOperationException("await result not ready");
+        return pending.GetAwaiter().GetResult();
+    }
+
+    internal static GuestResultI64 TrapCompletedI64(Task<long> pending)
+    {
         try {
-            return GuestResults.Ok(pending.GetAwaiter().GetResult());
+            return GuestResults.Ok(ReadCompletedI64(pending));
         }
         catch (GuestThrowSignal signal) {
             return GuestResults.FromThrow(signal);

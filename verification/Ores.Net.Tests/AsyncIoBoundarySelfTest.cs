@@ -50,6 +50,19 @@ internal static class AsyncIoBoundarySelfTest
             !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(actor, "OresVmHost.cs"))) ||
             !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(tenant, "OtherRuntime.cs"))))
             throw new Exception("FAILED: tenant host mailbox exception became broader than its reviewed site");
+        // Completed Task state is monotonic. Admit only the exact reviewed
+        // helper bodies, not arbitrary waits in the file or a missing guard.
+        const string completed = "internal static void ObserveCompleted(Task pending) { ArgumentNullException.ThrowIfNull(pending); if (!pending.IsCompleted) throw new InvalidOperationException(); pending.GetAwaiter().GetResult(); }";
+        const string scalar = "internal static long ReadCompletedI64(Task<long> pending) { ArgumentNullException.ThrowIfNull(pending); if (!pending.IsCompleted) throw new InvalidOperationException(); return pending.GetAwaiter().GetResult(); }";
+        bool ForbiddenWait(string value, string file) =>
+            Forbidden.Any(r => r.Pattern.IsMatch(ReviewedCompletedTaskCode(value, file)));
+        if (ForbiddenWait(completed + scalar, "GuestAwaitResults.cs") ||
+            !ForbiddenWait(completed + scalar, "OtherRuntime.cs") ||
+            !ForbiddenWait(completed.Replace("!pending.IsCompleted", "pending.IsCompleted") + scalar, "GuestAwaitResults.cs") ||
+            !ForbiddenWait(completed + scalar.Replace("if (!pending.IsCompleted) throw new InvalidOperationException();", ""), "GuestAwaitResults.cs") ||
+            !ForbiddenWait(completed + scalar + " another.GetAwaiter().GetResult();", "GuestAwaitResults.cs") ||
+            !ForbiddenWait(completed + completed + scalar, "GuestAwaitResults.cs"))
+            throw new Exception("FAILED: completed-task audit admitted an unguarded or duplicate wait");
         string root = FindRepositoryRoot();
         string runtime = Path.Combine(root, "runtime");
         int scanned = 0;
@@ -64,6 +77,7 @@ internal static class AsyncIoBoundarySelfTest
             scanned++;
             string code = StripCommentsAndLiterals(File.ReadAllText(path, Encoding.UTF8));
             code = ReviewedMailboxCode(code, Path.GetFileName(path));
+            code = ReviewedCompletedTaskCode(code, Path.GetFileName(path));
             foreach (var rule in Forbidden)
             {
                 if (rule.Pattern.IsMatch(code))
@@ -97,6 +111,24 @@ internal static class AsyncIoBoundarySelfTest
         // removed from this lexical socket audit. All other calls still scan.
         return Regex.Replace(code, @"\b" + receiver + @"\s*\.\s*Mailbox\s*\.\s*Send\s*\(",
             "VerifiedActorMailboxAdmission(", RegexOptions.CultureInvariant);
+    }
+
+    private static string ReviewedCompletedTaskCode(string code, string fileName)
+    {
+        if (fileName != "GuestAwaitResults.cs") return code;
+        const string guard = @"ArgumentNullException\s*\.\s*ThrowIfNull\s*\(\s*pending\s*\)\s*;\s*if\s*\(\s*!\s*pending\s*\.\s*IsCompleted\s*\)\s*throw\s+new\s+InvalidOperationException\s*\(\s*\)\s*;\s*";
+        const string observe = @"pending\s*\.\s*GetAwaiter\s*\(\s*\)\s*\.\s*GetResult\s*\(\s*\)\s*;\s*\}";
+        var patterns = new[] {
+            @"\binternal\s+static\s+void\s+ObserveCompleted\s*\(\s*Task\s+pending\s*\)\s*\{\s*" + guard + observe,
+            @"\binternal\s+static\s+long\s+ReadCompletedI64\s*\(\s*Task\s*<\s*long\s*>\s+pending\s*\)\s*\{\s*" + guard + @"return\s+" + observe
+        };
+        // A duplicate reviewed method is itself invalid; never exempt it.
+        foreach (var pattern in patterns)
+            if (Regex.Matches(code, pattern, RegexOptions.CultureInvariant).Count != 1)
+                return code;
+        foreach (var pattern in patterns)
+            code = Regex.Replace(code, pattern, "VerifiedCompletedTaskObservation", RegexOptions.CultureInvariant);
+        return code;
     }
 
     private static string FindRepositoryRoot()

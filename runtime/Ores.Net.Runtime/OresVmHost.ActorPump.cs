@@ -145,7 +145,7 @@ public sealed partial class OresVmHost
                         // outcome on its fresh carrier, outside the host gate.
                         // Legacy callbacks retain the fail-closed success gate.
                         if (!item.Step.ObserveFaultInSegment)
-                            item.Step.Ready.GetAwaiter().GetResult();
+                            GuestAwaitResults.ObserveCompleted(item.Step.Ready);
                         ValidateContinuation(scheduler, actor, item.Ticket);
                         lease = new object();
                         turn = item.Ticket.Turn;
