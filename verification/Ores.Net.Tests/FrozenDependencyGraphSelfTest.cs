@@ -95,6 +95,7 @@ internal static class FrozenDependencyGraphSelfTest
     internal static void EmitPersistentCilGuests(string output,string lane)
     {
         if(!OperatingSystem.IsLinux())throw new PlatformNotSupportedException("Linux fixture only");
+        if(lane.StartsWith("bound-",StringComparison.Ordinal)){EmitBoundInputCilGuests(output,lane);return;}
         var c=Snapshot(C,"1.0.0",new(),new(),"use namespace network; pub fnc answer(int x):int{return x*2"+(lane=="edit"?"+1":"")+";}");
         var d=WithDeps(D);string main="import pkg '"+C+"' as p; pub fnc main()->int{return p.network.answer(21);}";
         string root=System.IO.Path.Combine(output,"cache");
@@ -149,6 +150,42 @@ internal static class FrozenDependencyGraphSelfTest
         }
         System.IO.File.WriteAllBytes(System.IO.Path.Combine(output,lane+".dll"),build.Cil);
         Console.WriteLine("PERSISTENT_NET_CIL|"+lane+"|reused="+build.Reused+"|stale-pin-denied");
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    private static void EmitBoundInputCilGuests(string output,string lane)
+    {
+        var c=Snapshot(C,"1.0.0",new(),new(),"use namespace network; pub fnc answer(int x):int{return x*2"+(lane=="bound-edit"?"+1":"")+";}");
+        var d=Snapshot(D,"1.0.0",new(),new(),"use namespace network; pub fnc answer():int{return "+(lane=="bound-cold"?"900":"901")+";}");
+        string main="import pkg '"+C+"' as p; pub fnc main()->int{return p.network.answer(21);}";
+        string root=System.IO.Path.Combine(output,"bound-cache");
+        System.IO.Directory.CreateDirectory(output);
+        System.IO.Directory.CreateDirectory(root,System.IO.UnixFileMode.UserRead|System.IO.UnixFileMode.UserWrite|System.IO.UnixFileMode.UserExecute);
+        var master=Enumerable.Repeat((byte)7,32).ToArray();
+        var record=CompilerCacheLedger.Record("tenant/bound",2,master);var pin=SHA256.HashData(record);
+        var compiler=Sha(System.IO.File.ReadAllBytes(typeof(FrozenCilSession).Assembly.Location));
+        var session=new PersistentFrozenCilSession(root,"tenant/bound",compiler,Sha(Bytes("fixture-net10-compiler")));
+        var build=session.CompileBoundInput(main,Sha(Bytes(main)),new[]{d,c},record,pin,master,lane=="bound-cold");
+        if(build.Reused!=(lane=="bound-warm"))throw new InvalidOperationException("wrong bound cache outcome");
+        if(!build.Cil.AsSpan().SequenceEqual(CilEmitter.BuildLibrary(OresStructuredParser.CompileFrozenScalar(main,new[]{c,d}))))
+            throw new InvalidOperationException("bound CIL differs from clean");
+        if(lane=="bound-warm"&&!build.Cil.AsSpan().SequenceEqual(System.IO.File.ReadAllBytes(System.IO.Path.Combine(output,"bound-cold.dll"))))
+            throw new InvalidOperationException("restart output differs");
+        Deny("E_CACHE_INPUT",()=>session.CompileBoundInput(main,new string('0',64),new[]{c,d},record,pin,master));
+        Deny("E_CACHE_LEDGER",()=>session.CompileBoundInput(main,Sha(Bytes(main)),new[]{c,d},record,new byte[32],master));
+        var bad=main.Replace("answer(21)","missing(21)");
+        Deny("E_UNBOUND",()=>session.CompileBoundInput(bad,Sha(Bytes(bad)),new[]{c,d},record,pin,master));
+        var dependent=WithDeps(D,c);
+        Deny("E_CACHE_PROFILE",()=>session.CompileBoundInput(main,Sha(Bytes(main)),new[]{c,dependent},record,pin,master));
+        if(!session.CompileBoundInput(main,Sha(Bytes(main)),new[]{c,d},record,pin,master).Reused)
+            throw new InvalidOperationException("failed build lost bound cache");
+        if(lane=="bound-edit"){
+            var changedManifest=Snapshot(D,"1.0.1",new(),new(),d.ProviderSource("network"));
+            var miss=session.CompileBoundInput(main,Sha(Bytes(main)),new[]{c,changedManifest},record,pin,master);
+            if(miss.Reused||!miss.Cil.AsSpan().SequenceEqual(build.Cil))throw new InvalidOperationException("manifest invalidation");
+        }
+        System.IO.File.WriteAllBytes(System.IO.Path.Combine(output,lane+".dll"),build.Cil);
+        Console.WriteLine("BOUND_NET_CIL|"+lane+"|reused="+build.Reused+"|clean-equivalent|current-binding-denials");
     }
 
     internal static void EmitCilCacheGuests(string output)
