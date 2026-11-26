@@ -588,7 +588,7 @@ public static class CilEmitter
         return BlobContentId.FromHash(hash.GetHashAndReset());
     }
 
-    private readonly record struct Pending(Expression Node, bool EmitOperator);
+    private readonly record struct Pending(Expression Node, bool EmitOperator, bool Discard = false);
 
     // A flat expression such as a+b+c+... may create thousands of AST nodes,
     // even with shallow source nesting. Traversal MUST NOT recurse on the CLR
@@ -604,7 +604,14 @@ public static class CilEmitter
         while (pending.Count > 0)
         {
             var work = pending.Pop();
-            if (work.EmitOperator)
+            if (work.Discard)
+            {
+                if (evaluationDepth < 1)
+                    throw new FormatException("Invalid CIL discard stack");
+                il.OpCode(ILOpCode.Pop);
+                evaluationDepth--;
+            }
+            else if (work.EmitOperator)
             {
                 if (evaluationDepth < 2)
                     throw new FormatException("Invalid CIL operator stack");
@@ -640,6 +647,21 @@ public static class CilEmitter
                         evaluationDepth++;
                         pending.Push(new Pending(unary, true));
                         pending.Push(new Pending(unary.Value, false));
+                        break;
+                    case EntryScalarProjection projection:
+                        // key: first, second, pop; value: first, pop, second.
+                        // Both are evaluated once, left-to-right.
+                        if (projection.SelectKey)
+                        {
+                            pending.Push(new Pending(projection, false, true));
+                            pending.Push(new Pending(projection.Second, false));
+                        }
+                        else
+                        {
+                            pending.Push(new Pending(projection.Second, false));
+                            pending.Push(new Pending(projection, false, true));
+                        }
+                        pending.Push(new Pending(projection.First, false));
                         break;
                     case NamedBitXor bitXor:
                         pending.Push(new Pending(bitXor, true));
