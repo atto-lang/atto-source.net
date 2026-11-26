@@ -315,7 +315,8 @@ public static partial class OresStructuredParser
         ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source, allowCompileTimeRows: true);
-        var lexer = new Lexer(source, linking is not null || frozenNamespace is not null);
+        var lexer = new Lexer(source, linking is not null || frozenNamespace is not null,
+            allowStaticTupleProjection: linking is null && frozenNamespace is null);
         var tokens = new List<Token>();
         // Distinguish a forbidden local nominal declaration from an
         // unsupported top-level class/actor before either reaches lowering.
@@ -906,12 +907,15 @@ public static partial class OresStructuredParser
     }
 
     private readonly record struct Token(string Text, int Offset);
-    private sealed class Lexer(string source, bool moduleMode = false)
+    private sealed class Lexer(string source, bool moduleMode = false,
+        bool allowStaticTupleProjection = false)
     {
         private int index;
         private bool previousWasWith;
         private bool previousWasString;
         private bool previousWasSync;
+        private bool previousWasConst;
+        private bool sawTupleDeclaration;
         public Token Read()
         {
             while (index < source.Length)
@@ -969,7 +973,10 @@ public static partial class OresStructuredParser
                     + $"owned field layout/drop and Native AOT reconstruction at offset {index}");
             // Keep safe-collection denial from current main in the separate
             // structured/linked parser, including when Option<int> is enabled.
-            SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, offset);
+            // Only standalone source following a lexical const Tuple declaration
+            // may defer bracket admission to the verified static projection reader.
+            if (!(allowStaticTupleProjection && sawTupleDeclaration))
+                SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, offset);
             // Injection changes ownership and lifetime authority. The scalar
             // CIL bootstrap cannot treat an annotation as harmless metadata.
             // Perform this check after comments have been skipped so comment
@@ -1138,6 +1145,7 @@ public static partial class OresStructuredParser
             else if (ch == '!') index++;
             else if ("()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
                 (ch == '|' && precededByString) ||
+                (allowStaticTupleProjection && sawTupleDeclaration && ch is ('[' or ']')) ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             var tokenText = source[offset..index];
@@ -1157,6 +1165,8 @@ public static partial class OresStructuredParser
                 throw new FormatException($"E_LINKED_GUEST_EFFECT_UNSUPPORTED: linked guest effect ABI is not verified at offset {offset}");
             previousWasString = tokenText is "String" or "string";
             previousWasSync = tokenText == "sync";
+            sawTupleDeclaration |= previousWasConst && tokenText == "Tuple";
+            previousWasConst = tokenText == "const";
             return new Token(tokenText, offset);
         }
     }
@@ -1257,7 +1267,15 @@ public static partial class OresStructuredParser
         {
             if (depth > MaxDepth) throw Error("Structured syntax nesting exceeds limit");
         }
-        public StructuredProgram ReadProgram() => ReadDeclarations(true);
+        private readonly HashSet<int> verifiedTupleBrackets = new();
+        public StructuredProgram ReadProgram()
+        {
+            var program = ReadDeclarations(true);
+            foreach (var token in tokens)
+                if (token.Text is "[" or "]" && !verifiedTupleBrackets.Contains(token.Offset))
+                    SafeCollectionSourceAdmission.RejectUnverifiedBracket(token.Text[0], token.Offset);
+            return program;
+        }
 
         internal IReadOnlyList<SourceImport> ReadImports()
         {
@@ -3434,13 +3452,18 @@ public static partial class OresStructuredParser
                 string field;
                 if (aggregate.Wrapper == "Tuple")
                 {
+                    int openAt = Current.Offset;
                     Expect("[");
                     if (!int.TryParse(Current.Text, NumberStyles.None, CultureInfo.InvariantCulture,
                         out int slot) || slot < 0)
                         throw Error("Tuple projection requires a nonnegative constant index");
                     index++;
+                    int closeAt = Current.Offset;
                     Expect("]");
                     field = slot.ToString(CultureInfo.InvariantCulture);
+                    if (!aggregate.Values.ContainsKey(field)) throw Error("Tuple projection outside checked static shape");
+                    verifiedTupleBrackets.Add(openAt);
+                    verifiedTupleBrackets.Add(closeAt);
                 }
                 else
                 {
