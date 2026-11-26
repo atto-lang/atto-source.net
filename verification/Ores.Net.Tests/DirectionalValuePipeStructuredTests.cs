@@ -85,6 +85,52 @@ internal static class DirectionalValuePipeStructuredTests
         RejectStructured(funcs + "fnc main():int{return 20 pipe increment;}",
             "E_ACTOR_PIPE_BACKEND_UNSUPPORTED");
 
+        CheckCil(funcs + "fnc main():int{return 41 |> await |> increment;}",
+            42, "immediate await stage");
+        CheckCil(funcs + "fnc main():int{return increment(await 41);}",
+            42, "prefix immediate await");
+        CheckCil(funcs + "fnc main():int{return 2 |> match<int> over { on 2 -> 41, on _ -> 0, } |> increment;}",
+            42, "brace match receiver");
+        CheckCil(funcs + "fnc main():int{return 2 |> match over on 2 -> 41, on _ -> 0, end |> increment;}",
+            42, "end match receiver");
+        CheckCil(funcs + "fnc main():int{return 2 |> await |> match over { on 2 -> 41, on _ -> 0, } |> increment;}",
+            42, "await and match receiver composition");
+        RejectStructured("fnc main():int{return true |> await;}", "immediate await requires int");
+        RejectStructured("fnc main():int{return 42 |> await(7);}", "await takes only the left-hand value");
+        RejectStructured("fnc main():int{return 42 |> std.await;}", "E_SUSPENDS_UNSUPPORTED");
+        RejectStructured("fnc main():int{return 2 |> match over { on 2 -> 42, };}", "MATCH_NON_EXHAUSTIVE");
+
+        foreach (string expr in new[] {
+            "42 |> if is int then 30 else 20 fi",
+            "42 |> is type int ? 30 : 20",
+            "42 |> > 10 ? 30 : 20",
+            "true |> ? 30 : 20",
+            "true |> if then 30 else 20 fi",
+            "false |> ifnot then 30 else 20 fi",
+            "true |> if then 30 else 1/0 fi"
+        })
+            CheckCil(funcs + "fnc main():int{return " + expr + ";}", 30, expr);
+        CheckCil(funcs + "fnc main():int{return 42 |> await |> if > 10 then 30 else 20 fi |> increment |> > 30 |> ? 100 : 200;}",
+            100, "conditional receiver chain");
+        CheckCil(funcs + "fnc main():int{return true |> ? 30 : 20 |> increment;}",
+            31, "ternary receiver continuation");
+        RejectStructured("fnc main():int{return 42 |> if then 30 else 20 fi;}", "Value if condition requires bool");
+        RejectStructured("fnc main():int{return true |> is int ? 30 : 20;}", "Receiver int type test requires proven int");
+        RejectStructured("fnc main():int{return true |> ? 30 : false;}", "Conditional result types differ");
+
+        CheckCil("fnc main():int{return 42 |> match over { on 42 -> 100; is int -> -20; };}",
+            100, "literal before type pattern");
+        CheckCil("fnc main():int{return 7 |> await |> match over { on 42 -> 100; is int -> -20; };}",
+            -20, "bare type pattern after await");
+        CheckCil("fnc main():int{return match 7 over { on 42 -> 100; on is int -> -20; };}",
+            -20, "legacy type arm equivalent");
+        CheckCil("fnc main():int{return true |> match over { is bool -> 42; };}",
+            42, "statically proven bool type pattern");
+        RejectStructured("fnc main():int{return 7 |> match over { 7 -> 42; on _ -> 0; };}", "MATCH_SYNTAX");
+        RejectStructured("fnc main():int{return 7 |> match over { _ -> 0; };}", "MATCH_SYNTAX");
+        RejectStructured("fnc main():int{return 7 |> match over { is bool -> 42; on _ -> 0; };}", "MATCH_PATTERN_TYPE");
+        RejectStructured("fnc main():int{return 7 |> match over { is int -> 42; on _ -> 0; };}", "MATCH_UNREACHABLE_ARM");
+
         // The shipping one-main i64 compiler does not support named helper
         // definitions or tagged pipelines and must remain fail-closed.
         foreach (string op in new[] { "|>", "<|" })
