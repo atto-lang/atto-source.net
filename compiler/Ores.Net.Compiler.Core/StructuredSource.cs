@@ -315,7 +315,8 @@ public static partial class OresStructuredParser
         ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source, allowCompileTimeRows: true);
-        var lexer = new Lexer(source, linking is not null || frozenNamespace is not null);
+        var lexer = new Lexer(source, linking is not null || frozenNamespace is not null,
+            allowStaticTupleProjection: linking is null && frozenNamespace is null);
         var tokens = new List<Token>();
         // Distinguish a forbidden local nominal declaration from an
         // unsupported top-level class/actor before either reaches lowering.
@@ -906,12 +907,15 @@ public static partial class OresStructuredParser
     }
 
     private readonly record struct Token(string Text, int Offset);
-    private sealed class Lexer(string source, bool moduleMode = false)
+    private sealed class Lexer(string source, bool moduleMode = false,
+        bool allowStaticTupleProjection = false)
     {
         private int index;
         private bool previousWasWith;
         private bool previousWasString;
         private bool previousWasSync;
+        private bool previousWasConst;
+        private bool sawTupleDeclaration;
         public Token Read()
         {
             while (index < source.Length)
@@ -969,7 +973,10 @@ public static partial class OresStructuredParser
                     + $"owned field layout/drop and Native AOT reconstruction at offset {index}");
             // Keep safe-collection denial from current main in the separate
             // structured/linked parser, including when Option<int> is enabled.
-            SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, offset);
+            // Only standalone source following a lexical const Tuple declaration
+            // may defer bracket admission to the verified static projection reader.
+            if (!(allowStaticTupleProjection && sawTupleDeclaration))
+                SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, offset);
             // Injection changes ownership and lifetime authority. The scalar
             // CIL bootstrap cannot treat an annotation as harmless metadata.
             // Perform this check after comments have been skipped so comment
@@ -1138,6 +1145,7 @@ public static partial class OresStructuredParser
             else if (ch == '!') index++;
             else if ("()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
                 (ch == '|' && precededByString) ||
+                (allowStaticTupleProjection && sawTupleDeclaration && ch is ('[' or ']')) ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             var tokenText = source[offset..index];
@@ -1157,6 +1165,8 @@ public static partial class OresStructuredParser
                 throw new FormatException($"E_LINKED_GUEST_EFFECT_UNSUPPORTED: linked guest effect ABI is not verified at offset {offset}");
             previousWasString = tokenText is "String" or "string";
             previousWasSync = tokenText == "sync";
+            sawTupleDeclaration |= previousWasConst && tokenText == "Tuple";
+            previousWasConst = tokenText == "const";
             return new Token(tokenText, offset);
         }
     }
@@ -1172,7 +1182,16 @@ public static partial class OresStructuredParser
         // Constant scalar aggregates are compile-time values only; no hidden
         // managed object, dynamic descriptor or NativeAOT aggregate ABI.
         private sealed record StaticAggregate(ClosedAggregateShape Shape,
-            IReadOnlyDictionary<string, StructuredExpr> Values);
+            IReadOnlyDictionary<string, StructuredExpr> Values, string? Wrapper = null);
+        private sealed record NamedAggregateType(string Wrapper, ClosedAggregateShape Shape);
+        private readonly List<Dictionary<string, NamedAggregateType>> namedAggregateScopes = new();
+
+        private NamedAggregateType? FindNamedAggregateType(string name)
+        {
+            for (int i = namedAggregateScopes.Count - 1; i >= 0; --i)
+                if (namedAggregateScopes[i].TryGetValue(name, out var type)) return type;
+            return null;
+        }
         private readonly List<Dictionary<string, StaticAggregate>> aggregateScopes = new();
         private int aggregateSentinels;
         private StaticAggregate? FindAggregate(string name)
@@ -1248,7 +1267,15 @@ public static partial class OresStructuredParser
         {
             if (depth > MaxDepth) throw Error("Structured syntax nesting exceeds limit");
         }
-        public StructuredProgram ReadProgram() => ReadDeclarations(true);
+        private readonly HashSet<int> verifiedTupleBrackets = new();
+        public StructuredProgram ReadProgram()
+        {
+            var program = ReadDeclarations(true);
+            foreach (var token in tokens)
+                if (token.Text is "[" or "]" && !verifiedTupleBrackets.Contains(token.Offset))
+                    SafeCollectionSourceAdmission.RejectUnverifiedBracket(token.Text[0], token.Offset);
+            return program;
+        }
 
         internal IReadOnlyList<SourceImport> ReadImports()
         {
@@ -1664,6 +1691,8 @@ public static partial class OresStructuredParser
             Expect("::");
             scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
             localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+            aggregateScopes.Add(new Dictionary<string, StaticAggregate>(StringComparer.Ordinal));
+            namedAggregateScopes.Add(new Dictionary<string, NamedAggregateType>(StringComparer.Ordinal));
             var body = new List<StructuredStmt>();
             bool terminated = false;
             while (Current.Text != "end")
@@ -1730,6 +1759,8 @@ public static partial class OresStructuredParser
             Expect("end");
             scopes.RemoveAt(scopes.Count - 1);
             localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+            aggregateScopes.RemoveAt(aggregateScopes.Count - 1);
+            namedAggregateScopes.RemoveAt(namedAggregateScopes.Count - 1);
             if (!terminated) throw Error("Non-void comma body requires terminal expression");
             return (Array.AsReadOnly(body.ToArray()), true);
         }
@@ -1741,6 +1772,7 @@ public static partial class OresStructuredParser
             scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
             localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
             aggregateScopes.Add(new Dictionary<string, StaticAggregate>(StringComparer.Ordinal));
+            namedAggregateScopes.Add(new Dictionary<string, NamedAggregateType>(StringComparer.Ordinal));
             var body = new List<StructuredStmt>();
             bool terminated = false;
             while (Current.Text != "}")
@@ -1757,6 +1789,7 @@ public static partial class OresStructuredParser
             scopes.RemoveAt(scopes.Count - 1);
             localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
             aggregateScopes.RemoveAt(aggregateScopes.Count - 1);
+            namedAggregateScopes.RemoveAt(namedAggregateScopes.Count - 1);
             return (Array.AsReadOnly(body.ToArray()), terminated);
         }
         // The existing bracketed CFG path remains available. Canonical ores.core
@@ -1767,6 +1800,8 @@ public static partial class OresStructuredParser
             Budget(depth);
             scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
             localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+            aggregateScopes.Add(new Dictionary<string, StaticAggregate>(StringComparer.Ordinal));
+            namedAggregateScopes.Add(new Dictionary<string, NamedAggregateType>(StringComparer.Ordinal));
             var body = new List<StructuredStmt>();
             bool terminated = false;
             while (Current.Text is not ("else" or "fi"))
@@ -1782,6 +1817,8 @@ public static partial class OresStructuredParser
             }
             scopes.RemoveAt(scopes.Count - 1);
             localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+            aggregateScopes.RemoveAt(aggregateScopes.Count - 1);
+            namedAggregateScopes.RemoveAt(namedAggregateScopes.Count - 1);
             return (Array.AsReadOnly(body.ToArray()), terminated);
         }
 
@@ -1794,6 +1831,7 @@ public static partial class OresStructuredParser
             scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
             localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
             aggregateScopes.Add(new Dictionary<string, StaticAggregate>(StringComparer.Ordinal));
+            namedAggregateScopes.Add(new Dictionary<string, NamedAggregateType>(StringComparer.Ordinal));
             try
             {
                 var body = new List<StructuredStmt>();
@@ -1817,13 +1855,128 @@ public static partial class OresStructuredParser
                 scopes.RemoveAt(scopes.Count - 1);
                 localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
                 aggregateScopes.RemoveAt(aggregateScopes.Count - 1);
+                namedAggregateScopes.RemoveAt(namedAggregateScopes.Count - 1);
             }
+        }
+
+        // Type-first aggregate binder, limited to the existing checked scalar
+        // structured CIL profile. Tuple slots use decimal keys internally;
+        // their wrapper kind is separate from Record and struct.
+        private bool StartsNamedAggregate()
+        {
+            if (Current.Text != "const" || index + 3 >= tokens.Count) return false;
+            string kind = tokens[index + 1].Text;
+            if (kind is not ("Record" or "Tuple" or "struct")) return false;
+            if (tokens[index + 2].Text == "<") return true;
+            return index + 4 < tokens.Count && tokens[index + 3].Text == "=" &&
+                tokens[index + 4].Text == (kind == "struct" ? "{" : "(");
+        }
+
+        // Aggregate names are erased by static scalar lowering. Do not let
+        // this path accept language keywords that the ordinary parser rejects
+        // (or that belong to unsupported statement forms).
+        private string NamedAggregateIdentifier(bool typeAlias = false)
+        {
+            string name = Current.Text;
+            if (name is "infer" or "unsafe" or "sync" or "task" or "pipe" or "rpipe"
+                or "def" or "namespace" or "contract" or "conforms" or "interface"
+                or "trait" or "types" or "typeof" or "abstract" or "extends" or "implements"
+                or "impl" or "using" or "pure" or "suspends" or "generator" or "yield"
+                or "nlex" or "begin" or "self" or "super" or "static" or "private" or "mut"
+                or "then" or "elif" or "elseif" or "done" or "for" or "of" or "block"
+                or "switch" or "maybe" or "matches" or "over" or "default" or "recover"
+                or "defer" or "persistent" or "durable" or "shared" or "untrusted"
+                or "spawn" or "stop" or "rt" or "await" or "nb" or "cb" or "select"
+                or "readch" or "writech" or "eq" or "neq" or "null" or "void"
+                or "obj" or "arr" or "cpu" or "gpu" or "quantum")
+                throw Error("E_TYPE_NAME: reserved aggregate identifier");
+            if (typeAlias && (CoreTypeRegistry.Lookup(name) is not null ||
+                CoreTypeRegistry.IsProtectedIdentity(name) ||
+                name is "Record" or "Tuple" or "Pointer" or "ActorRef" or "ActorMail"
+                    or "ReadLoan" or "WriteLoan" or "AtomicInt" or "AtomicBool"
+                    or "RwLock" or "Mutex" or "boolean"))
+                throw Error("E_TYPE_NAME: compiler-owned aggregate type name");
+            return Name();
+        }
+
+        private (StructuredStmt Statement, bool Returns) NamedAggregate(int depth, int at)
+        {
+            Expect("const");
+            string wrapper = Current.Text;
+            index++;
+            string? alias = null;
+            bool introduce = false;
+            NamedAggregateType? expected = null;
+            if (Take("<"))
+            {
+                introduce = Take("infer");
+                alias = NamedAggregateIdentifier(typeAlias: true);
+                if (alias is "infer" or "Record" or "Tuple" or "Map" or "Set" or "String" or "string"
+                    or "Integer" or "Bool" or "Any" or "Unknown" or "void" or "null" or "self"
+                    or "List" or "Vector" or "Slice" or "Pair" or "Entry" or "Future" or "Channel")
+                    throw Error("E_TYPE_NAME: reserved aggregate alias");
+                Expect(">");
+                expected = FindNamedAggregateType(alias);
+                if (introduce && (expected is not null ||
+                    localTypeScopes.Any(scope => scope.Contains(alias))))
+                    throw Error("E_DUPLICATE_TYPE: inferred aggregate alias already declared");
+                if (!introduce && expected is null)
+                    throw Error("E_UNKNOWN_TYPE: missing inferred aggregate alias");
+                if (!introduce && expected!.Wrapper != wrapper)
+                    throw Error("E_AGGREGATE_KIND: incompatible named aggregate");
+            }
+            string rowName = NamedAggregateIdentifier();
+            if (scopes.Any(scope => scope.ContainsKey(rowName)) ||
+                aggregateScopes.Any(scope => scope.ContainsKey(rowName)))
+                throw Error("Duplicate aggregate binding");
+            Expect("=");
+            string close = wrapper == "struct" ? "}" : ")";
+            Expect(wrapper == "struct" ? "{" : "(");
+            var plan = new ClosedAggregateSpreadPlan(wrapper == "struct"
+                ? ClosedAggregateKind.ExactStruct : ClosedAggregateKind.ReadonlyRecord);
+            var values = new Dictionary<string, StructuredExpr>(StringComparer.Ordinal);
+            do
+            {
+                if (values.Count >= 64) throw Error("AGGREGATE_FIELD_BUDGET");
+                int offset = Current.Offset;
+                string field = wrapper == "Tuple"
+                    ? values.Count.ToString(CultureInfo.InvariantCulture) : NamedAggregateIdentifier();
+                if (wrapper != "Tuple") Expect(wrapper == "struct" ? ":" : "=");
+                if (values.ContainsKey(field)) throw Error("E_DUPLICATE_FIELD: duplicate aggregate field");
+                var expr = Expr(depth + 1);
+                if (expr.Type is not (IrValueType.Bool or IrValueType.I64))
+                    throw Error("E_TYPE_INFER_AMBIGUOUS: only bool/int constant fields admitted");
+                long value;
+                try { value = ConstantValue(expr); }
+                catch (OverflowException) { throw Error("Aggregate const field overflow"); }
+                catch (DivideByZeroException) { throw Error("Aggregate const field division by zero"); }
+                plan.AddNamed(field, expr.Type == IrValueType.Bool ? "bool" : "int");
+                values.Add(field, expr.Type == IrValueType.Bool
+                    ? new StructuredBool(offset, value != 0) : new StructuredInt(offset, value));
+            } while (Take(","));
+            Expect(close);
+            Expect(";");
+            var shape = plan.InferShape();
+            if (!introduce && expected is not null &&
+                !shape.Fields.SequenceEqual(expected.Shape.Fields))
+                throw Error("E_TYPE_MISMATCH: named aggregate shape differs");
+            if (introduce)
+            {
+                localTypeScopes[^1].Add(alias!);
+                namedAggregateScopes[^1].Add(alias!, new NamedAggregateType(wrapper, shape));
+            }
+            aggregateScopes[^1].Add(rowName, new StaticAggregate(shape,
+                new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredExpr>(values),
+                wrapper));
+            return (new StructuredLet(at, "$aggregate_" + aggregateSentinels++, IrValueType.I64,
+                new StructuredInt(at, 0), StructuredBindingKind.Const), false);
         }
 
         private (StructuredStmt Statement, bool Returns) Statement(int depth, bool outerElse = false)
         {
             Budget(depth);
             int at = Current.Offset;
+            if (StartsNamedAggregate()) return NamedAggregate(depth, at);
             if (Current.Text is "class" or "actor" ||
                 (Current.Text == "define" && index + 1 < tokens.Count &&
                  (tokens[index + 1].Text is "class" or "actor")))
@@ -1904,6 +2057,7 @@ public static partial class OresStructuredParser
                         if (source is null)
                             throw new FormatException(
                                 $"Aggregate spread requires an immutable earlier row at offset {sourceAt}");
+                        if (source.Wrapper == "Tuple") throw Error("Tuple cannot spread into a named row");
                         plan.AddCheckedSpread(source.Shape);
                         // Iterate canonical checked source shape, never a dynamic dictionary.
                         foreach (var field in source.Shape.Fields)
@@ -1985,6 +2139,8 @@ public static partial class OresStructuredParser
                         if (origin is null)
                             throw new FormatException(
                                 $"Aggregate spread requires a previous immutable closed local at offset {offset}");
+                        if (origin.Wrapper == "Tuple")
+                            throw Error("Tuple cannot spread into a named row");
                         // A const value requires every spread field to be a
                         // compile-time scalar. A runtime val row may only be
                         // spread into another runtime val aggregate.
@@ -3293,8 +3449,27 @@ public static partial class OresStructuredParser
             var aggregate = FindAggregate(name);
             if (aggregate is not null)
             {
-                if (!Take(".")) throw Error("Aggregate value cannot escape its compile-time local");
-                string field = Name();
+                string field;
+                if (aggregate.Wrapper == "Tuple")
+                {
+                    int openAt = Current.Offset;
+                    Expect("[");
+                    if (!int.TryParse(Current.Text, NumberStyles.None, CultureInfo.InvariantCulture,
+                        out int slot) || slot < 0)
+                        throw Error("Tuple projection requires a nonnegative constant index");
+                    index++;
+                    int closeAt = Current.Offset;
+                    Expect("]");
+                    field = slot.ToString(CultureInfo.InvariantCulture);
+                    if (!aggregate.Values.ContainsKey(field)) throw Error("Tuple projection outside checked static shape");
+                    verifiedTupleBrackets.Add(openAt);
+                    verifiedTupleBrackets.Add(closeAt);
+                }
+                else
+                {
+                    if (!Take(".")) throw Error("Aggregate value cannot escape its compile-time local");
+                    field = Name();
+                }
                 if (!aggregate.Values.TryGetValue(field, out var exact))
                     throw Error("Unknown inferred aggregate field");
                 return exact switch
