@@ -117,7 +117,7 @@ public static partial class OresParser
         return stripped;
     }
 
-    private static List<Token> Tokenize(string source, bool allowCaretReturn = false)
+    private static List<Token> Tokenize(string source, bool allowCaretReturn = false, bool strictBoolean = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
@@ -149,7 +149,7 @@ public static partial class OresParser
         ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
-        var lexer = new Lexer(source, allowCaretReturn);
+        var lexer = new Lexer(source, allowCaretReturn, strictBoolean);
         var tokens = new List<Token>();
         for (;;)
         {
@@ -519,7 +519,7 @@ public static partial class OresParser
     }
     private readonly record struct Token(string Text, int Offset);
 
-    private sealed class Lexer(string text, bool allowCaretReturn)
+    private sealed class Lexer(string text, bool allowCaretReturn, bool strictBoolean = false)
     {
         private int _i;
         private bool previousWasWith;
@@ -761,6 +761,14 @@ public static partial class OresParser
                 if (_i == text.Length)
                     throw new FormatException($"Unterminated host import literal at offset {start}");
                 _i++;
+                return new Token(text[start.._i], start);
+            }
+            // Only the strict verified frontend consumes typed lazy Boolean
+            // pairs. Never admit separated '& &' or '| |' as a pair.
+            if (strictBoolean && _i + 1 < text.Length &&
+                ((ch == '&' && text[_i+1] == '&') || (ch == '|' && text[_i+1] == '|')))
+            {
+                _i += 2;
                 return new Token(text[start.._i], start);
             }
             // Recognize the contiguous operator as one token, but never
