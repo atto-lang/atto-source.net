@@ -61,7 +61,15 @@ public static partial class OresParser
     {
         if (languageVersion.HasValue && languageVersion.Value is not (1 or 2))
             throw new FormatException("E_LANGUAGE_VERSION: expected language version 1 or 2");
-        var tokens = StripFileExports(Tokenize(source, allowCaretReturn: languageVersion.HasValue), source);
+        var tokens = StripFileExports(Tokenize(source, allowCaretReturn: languageVersion.HasValue, allowScalarTupleProjection: true), source);
+        // Preserve the dedicated removal diagnostic for old tuple factory
+        // syntax even when it contains a bracket projection. Nothing is emitted.
+        for (int i = 0; i + 2 < tokens.Count; i++)
+            if (tokens[i].Text == "~" && tokens[i + 1].Text == "tuple" &&
+                tokens[i + 2].Text == "(")
+                throw new FormatException(
+                    $"E_COLLECTION_FACTORY_REMOVED: '~' denotes structural typing, not a collection constructor; use Tuple.of(...) at offset {tokens[i].Offset}");
+        RejectUnverifiedScalarBrackets(tokens);
         RejectUnsupportedSourceActors(tokens);
         RejectUnsupportedInvertedClasses(tokens);
         RejectUnsupportedScalarTokens(tokens);
@@ -117,7 +125,7 @@ public static partial class OresParser
         return stripped;
     }
 
-    private static List<Token> Tokenize(string source, bool allowCaretReturn = false)
+    private static List<Token> Tokenize(string source, bool allowCaretReturn = false, bool allowScalarTupleProjection = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
@@ -149,7 +157,7 @@ public static partial class OresParser
         ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
-        var lexer = new Lexer(source, allowCaretReturn);
+        var lexer = new Lexer(source, allowCaretReturn, allowScalarTupleProjection);
         var tokens = new List<Token>();
         for (;;)
         {
@@ -220,6 +228,48 @@ public static partial class OresParser
             if (token.Text.Length == 0) break;
         }
         return tokens;
+    }
+
+    // Only the scalar parser's immediate Tuple.of literal projection can
+    // pass this bracket gate. No array literal, general indexing, nested
+    // bracket, arbitrary receiver, or dynamic index receives admission.
+    // The Reader still validates operands, witnesses, index and bounds.
+    private static void RejectUnverifiedScalarBrackets(List<Token> tokens)
+    {
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            if (tokens[i].Text is not ("[" or "]")) continue;
+            bool allowed = false;
+            if (tokens[i].Text == "[" && i >= 5 && i + 2 < tokens.Count &&
+                tokens[i - 1].Text == ")" && tokens[i + 2].Text == "]" &&
+                tokens[i + 1].Text.Length > 0 && tokens[i + 1].Text[0] is >= '0' and <= '9')
+            {
+                int j = i - 2;
+                // At most 32 signed literal operands and 32 type witnesses.
+                while (j >= 0 && i - j <= 100 &&
+                    (tokens[j].Text is "," or "+" or "-" ||
+                    (tokens[j].Text.Length > 0 && tokens[j].Text[0] is >= '0' and <= '9'))) j--;
+                if (j >= 0 && tokens[j].Text == "(")
+                {
+                    j--;
+                    if (j >= 0 && tokens[j].Text == ">")
+                    {
+                        j--;
+                        while (j >= 0 && i - j <= 170 &&
+                            tokens[j].Text is "int" or ",") j--;
+                        if (j >= 0 && tokens[j].Text == "<") j--;
+                        else j = -1;
+                    }
+                    allowed = j >= 2 && tokens[j].Text == "of" &&
+                        tokens[j - 1].Text == "." && tokens[j - 2].Text == "Tuple" &&
+                        (j == 2 || tokens[j - 3].Text != ".");
+                }
+            }
+            if (!allowed)
+                SafeCollectionSourceAdmission.RejectUnverifiedBracket(tokens[i].Text[0], tokens[i].Offset);
+            else
+                i += 2; // the exactly one literal index and its matching closer
+        }
     }
 
     private static void RejectUnsupportedScalarTokens(List<Token> tokens)
@@ -516,7 +566,7 @@ public static partial class OresParser
     }
     private readonly record struct Token(string Text, int Offset);
 
-    private sealed class Lexer(string text, bool allowCaretReturn)
+    private sealed class Lexer(string text, bool allowCaretReturn, bool allowScalarTupleProjection)
     {
         private int _i;
         private bool previousWasWith;
@@ -604,7 +654,7 @@ public static partial class OresParser
             bool exportScopeBracket =
                 (ch == '[' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*$")) ||
                 (ch == ']' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*$"));
-            if (!exportScopeBracket)
+            if (!exportScopeBracket && !allowScalarTupleProjection)
                 SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
             // Scalar and structured CIL frontends must agree: state-changing
             // annotations are compiler effects, never inert metadata. Check
@@ -1409,7 +1459,7 @@ public static partial class OresParser
             return new Literal(result);
         }
 
-        // A nominal Entry<K,V> and a Pair<A,B> remain different source
+        // A nominal Entry<K,V> and a Pair<V> remain different source
         // families: an Entry exposes only .key/.value; a Pair exposes only
         // .first/.second. The scalar bootstrap can represent neither as an
         // escaping object. A checked pure literal immediate projection is
@@ -1420,15 +1470,43 @@ public static partial class OresParser
             CheckDepth(depth);
             if (Take("<"))
             {
-                Expect("int");
-                Expect(",");
-                Expect("int");
+                if (isEntry)
+                {
+                    Expect("int"); Expect(","); Expect("int");
+                }
+                else if (Take("string"))
+                {
+                    Expect(","); Expect("int");
+                }
+                else
+                {
+                    Expect("int");
+                    if (Current.Text == ",")
+                        throw new FormatException($"E_PAIR_KEY_TYPE: Pair first type argument must be string at offset {at}");
+                }
                 Expect(">");
             }
             Expect("(");
-            long first = ReadPureI64Literal();
+            long first = 0;
+            if (isEntry) first = ReadPureI64Literal();
+            else
+            {
+                // Narrow, effect-free literal subset: discard only a proven
+                // plain string when projecting .second. No template, escapes,
+                // runtime string expression or owned Pair representation.
+                string key = Current.Text;
+                if (key.Length < 2 || key[0] != '"' || key[^1] != '"')
+                    throw new FormatException($"E_PAIR_KEY_TYPE: Pair requires a string key at offset {Current.Offset}");
+                foreach (char c in key.AsSpan(1, key.Length - 2))
+                    if (c < ' ' || c > '~' || c is '\\' or '"' or '$')
+                        throw new FormatException($"E_PAIR_KEY_UNSUPPORTED: only plain static string literals in scalar Pair projection at offset {Current.Offset}");
+                _index++;
+            }
             Expect(",");
-            long second = ReadPureI64Literal();
+            // The static Pair key is effect-free. Preserve the second
+            // expression in the real checked scalar IR. Entry still requires
+            // pure literals because either operand may be discarded.
+            Expression second = isEntry ? new Literal(ReadPureI64Literal()) : ParseAdd(depth + 1);
             Expect(")");
             if (!Take("."))
                 throw new FormatException(
@@ -1439,11 +1517,12 @@ public static partial class OresParser
             if (isEntry)
             {
                 if (field == "key") return new Literal(first);
-                if (field == "value") return new Literal(second);
+                if (field == "value") return second;
                 throw new FormatException($"E_ENTRY_FIELD: only key/value projections are supported at offset {fieldAt}");
             }
-            if (field == "first") return new Literal(first);
-            if (field == "second") return new Literal(second);
+            if (field == "first")
+                throw new FormatException($"E_PAIR_STRING_PROJECTION_UNSUPPORTED: string result needs typed CIL lowering at offset {fieldAt}");
+            if (field == "second") return second;
             throw new FormatException($"E_PAIR_FIELD: only first/second projections are supported at offset {fieldAt}");
         }
 
