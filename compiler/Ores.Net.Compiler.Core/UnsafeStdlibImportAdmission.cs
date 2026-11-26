@@ -7,13 +7,6 @@ namespace Ores.Net.Compiler;
 /// </summary>
 public static class UnsafeStdlibImportAdmission
 {
-    private static readonly string[] ReservedRoots =
-    {
-        "ores.std/unsafe", "std/unsafe",
-        "ores.std.unsafe", "std.unsafe",
-        "ores.std:unsafe", "std:unsafe"
-    };
-
     public static bool IsReserved(string? specifier)
     {
         if (specifier is null) return false;
@@ -22,7 +15,8 @@ public static class UnsafeStdlibImportAdmission
         // The typed source linker must not see std/./unsafe as an ordinary
         // local package that it then normalizes into a native stdlib import.
         if (path.StartsWith("std/", StringComparison.Ordinal) ||
-            path.StartsWith("ores.std/", StringComparison.Ordinal))
+            path.StartsWith("ores.std/", StringComparison.Ordinal) ||
+            path.StartsWith("atto.std/", StringComparison.Ordinal))
         {
             var parts = new System.Collections.Generic.List<string>();
             foreach (var part in path.Split('/'))
@@ -53,13 +47,11 @@ public static class UnsafeStdlibImportAdmission
             }
             path = string.Join("/", parts);
         }
-        foreach (string root in ReservedRoots)
-        {
-            if (path == root || path.StartsWith(root + "/", StringComparison.Ordinal)
-                             || path.StartsWith(root + ".", StringComparison.Ordinal))
-                return true;
-        }
-        return false;
+        // Normalize delimiter aliases to exact components after slash traversal.
+        string[] segments = path.Split(new[] { '/', '.', ':' }, StringSplitOptions.RemoveEmptyEntries);
+        int offset = segments.Length > 0 && (segments[0] == "atto" || segments[0] == "ores") ? 1 : 0;
+        return segments.Length > offset + 1 &&
+               segments[offset] == "std" && segments[offset + 1] == "unsafe";
     }
 
     public static void RequireGuestSafe(string specifier)
