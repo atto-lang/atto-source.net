@@ -77,22 +77,37 @@ internal static class HeapContainerSourceBoundaryTests
             catch (OverflowException) { }
         }
 
-        // Same fault-order witnesses as Forge: both operands fail, but
-        // the earlier source operand must determine the observed exception.
-        var orderedEntryFaults = new (string Source, Type Expected)[]
+        // Source division is deliberately denied in this scalar profile.
+        // Test the same fault ordering at the public checked AST -> SSA ->
+        // CIL boundary; separately prove both source operands are rejected.
+        Expression divideFault = new Binary('/', new Literal(1), new Literal(0));
+        Expression overflowFault = new Binary('+', new Literal(long.MaxValue), new Literal(1));
+        var orderedEntryFaults = new (Expression Ast, Type Expected)[]
         {
-            ("pub fnc main():int{return Entry.of(1/0,9223372036854775807+1).key;}", typeof(DivideByZeroException)),
-            ("pub fnc main():int{return Entry.of(1/0,9223372036854775807+1).value;}", typeof(DivideByZeroException)),
-            ("pub fnc main():int{return Entry.of(9223372036854775807+1,1/0).key;}", typeof(OverflowException)),
-            ("pub fnc main():int{return Entry.of(9223372036854775807+1,1/0).value;}", typeof(OverflowException))
+            (new EntryScalarProjection(divideFault, overflowFault, true), typeof(DivideByZeroException)),
+            (new EntryScalarProjection(divideFault, overflowFault, false), typeof(DivideByZeroException)),
+            (new EntryScalarProjection(overflowFault, divideFault, true), typeof(OverflowException)),
+            (new EntryScalarProjection(overflowFault, divideFault, false), typeof(OverflowException))
         };
+        foreach (string source in new[] {
+            "pub fnc main():int{return Entry.of(1/0,42).value;}",
+            "pub fnc main():int{return Entry.of(42,1/0).key;}"
+        })
+        {
+            try
+            {
+                _ = OresParser.Parse(source);
+                throw new Exception("Unsupported discarded source division admitted");
+            }
+            catch (FormatException ex) when (ex.Message.Contains("Checked integer division requires typed guest error lowering", StringComparison.Ordinal)) { }
+        }
         Directory.CreateDirectory(folder);
         try
         {
             for (int i = 0; i < orderedEntryFaults.Length; i++)
             {
-                var (source, expected) = orderedEntryFaults[i];
-                var ir = OresIrLowering.Lower(OresParser.Parse(source));
+                var (ast, expected) = orderedEntryFaults[i];
+                var ir = OresIrLowering.Lower(ast);
                 ExpectEntryFault(() => OresIrReferenceEvaluator.Evaluate(ir), expected, "IR");
                 string output = Path.Combine(folder, "entry-order-" + i + ".dll");
                 CilEmitter.EmitLibrary(ir, output);
