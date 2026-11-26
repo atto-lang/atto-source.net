@@ -13,23 +13,85 @@ using Ores.Net.Compiler;
 /// </summary>
 internal static class AttoLibrariesV1SelfTest
 {
+    private static readonly HashSet<string> Required = new(StringComparer.Ordinal)
+    {
+        "core_num.atto", "core_cmp.atto", "core_option_result.atto", "core_mem.atto",
+        "alloc_arena.atto", "std_io.atto", "std_path_posix.atto", "std_path_windows.atto",
+        "aliases.atto", "neg_unknown_core.atto", "neg_unknown_std.atto", "neg_traversal.atto",
+        "neg_nested.atto", "neg_private.atto", "neg_dotted_selector.atto", "neg_ores_selector.atto"
+    };
+    private static readonly Dictionary<string, string> KnownUnsupported = new(StringComparer.Ordinal)
+    {
+        ["core_num.atto"] = "atto.core/option",
+        ["core_mem.atto"] = "atto.core/option",
+        ["core_option_result.atto"] = "atto.core/option",
+        ["alloc_arena.atto"] = "atto.alloc/arena",
+        ["std_io.atto"] = "atto.std/io",
+        ["std_path_posix.atto"] = "atto.std/path",
+        ["std_path_windows.atto"] = "atto.std/path"
+    };
+
+    private static bool ExplicitUnsupported(string name, string error)
+    {
+        if (!KnownUnsupported.TryGetValue(name, out string? unit)) return false;
+        string layer = unit.Split('/')[0];
+        return error.StartsWith($"compiler-owned {layer} module '{unit}' is not implemented by the .NET backend yet",
+            StringComparison.Ordinal);
+    }
+
+    private static void RequireCorpus(IEnumerable<string> cases)
+    {
+        var names = cases.Select(p => Path.GetFileName(p)).ToHashSet(StringComparer.Ordinal);
+        if (!Required.IsSubsetOf(names))
+            throw new Exception("FAILED: missing library cases " + string.Join(", ", Required.Except(names).Order()));
+    }
+
+    private static void GuardControls()
+    {
+        RequireCorpus(Required);
+        foreach (var missing in Required)
+        {
+            bool denied = false;
+            try { RequireCorpus(Required.Where(n => n != missing)); }
+            catch (Exception error) when (error.Message.StartsWith("FAILED: missing library cases", StringComparison.Ordinal)) { denied = true; }
+            if (!denied) throw new Exception("FAILED: missing-case control " + missing);
+        }
+        string explicitError = "compiler-owned atto.std module 'atto.std/io' is not implemented by the .NET backend yet";
+        if (!ExplicitUnsupported("std_io.atto", explicitError) ||
+            ExplicitUnsupported("std_io.atto", "arbitrary parser failure") ||
+            ExplicitUnsupported("aliases.atto", explicitError) ||
+            ExplicitUnsupported("std_path_posix.atto", explicitError))
+            throw new Exception("FAILED: unsupported classification controls");
+    }
+
     [ModuleInitializer]
     internal static void Run()
     {
+        GuardControls();
         string root = FindRepositoryRoot();
         string corpus = Path.Combine(root, "tests", "atto_libraries");
         string scratch = Path.Combine(Path.GetTempPath(), "atto-libs-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(scratch);
-        int passed = 0, unsupported = 0;
+        int executed = 0, rejected = 0, unsupported = 0;
         var failures = new List<string>();
         try
         {
             var cases = Directory.GetFiles(corpus, "*.atto").OrderBy(p => p, StringComparer.Ordinal).ToArray();
-            if (cases.Length == 0) throw new Exception("FAILED: shared library corpus is missing");
+            RequireCorpus(cases);
             foreach (string path in cases)
             {
                 string name = Path.GetFileName(path);
                 var meta = Headers(path);
+                if (Required.Contains(name) && meta.Reject != name.StartsWith("neg_", StringComparison.Ordinal))
+                {
+                    failures.Add($"{name}: invalid fixture polarity");
+                    continue;
+                }
+                if (!meta.Reject && meta.Exit is null)
+                {
+                    failures.Add($"{name}: missing explicit expected exit");
+                    continue;
+                }
                 SourceModuleCompilation? compiled = null;
                 string? error = null;
                 try { compiled = OresSourceModuleCompiler.Compile(path, new[] { corpus }); }
@@ -40,35 +102,47 @@ internal static class AttoLibrariesV1SelfTest
                     string? missing = meta.Errors.FirstOrDefault(e => error is null || !error.Contains(e, StringComparison.Ordinal));
                     if (error is null) failures.Add($"{name}: expected rejection, compiled");
                     else if (missing is not null) failures.Add($"{name}: diagnostic lacks '{missing}': {error}");
-                    else passed++;
+                    else if (string.IsNullOrWhiteSpace(error)) failures.Add($"{name}: rejection lacked diagnostic");
+                    else { rejected++; Console.WriteLine($"REJECTED {name}"); }
                     continue;
                 }
                 if (error is not null)
                 {
-                    if (error.Contains("not implemented by the .NET backend", StringComparison.Ordinal) ||
-                        meta.Stdout is not null || meta.Flags.Count > 0)
+                    if (ExplicitUnsupported(name, error))
                     {
                         unsupported++;
+                        Console.WriteLine($"UNSUPPORTED {name}: {error}");
                         continue;
                     }
                     failures.Add($"{name}: compile failed: {error}");
                     continue;
                 }
+                if (meta.Flags.Count > 0)
+                {
+                    failures.Add($"{name}: runner must implement required target flags before claiming execution");
+                    continue;
+                }
                 string assembly = Path.Combine(scratch, Path.GetFileNameWithoutExtension(name), "OresGenerated.dll");
                 Directory.CreateDirectory(Path.GetDirectoryName(assembly)!);
                 CilEmitter.EmitLibrary(compiled!.Module, assembly);
-                long result = Execute(assembly);
+                var originalOut = Console.Out;
+                using var captured = new StringWriter();
+                long result;
+                try { Console.SetOut(captured); result = Execute(assembly); }
+                finally { Console.SetOut(originalOut); }
                 if (result != meta.Exit) failures.Add($"{name}: main returned {result}, expected {meta.Exit}");
-                else passed++;
+                else if (meta.Stdout is not null && captured.ToString() != meta.Stdout)
+                    failures.Add($"{name}: stdout mismatch");
+                else { executed++; Console.WriteLine($"EXECUTED {name}"); }
             }
         }
         finally
         {
             try { Directory.Delete(scratch, true); } catch (IOException) { }
         }
-        Console.WriteLine($"ATTO_LIBRARIES_V1 net passed={passed} unsupported={unsupported} failed={failures.Count}");
+        Console.WriteLine($"ATTO_LIBRARIES_V1 net passed={executed + rejected} executed={executed} rejected={rejected} unsupported={unsupported} failed={failures.Count}");
         if (failures.Count > 0) throw new Exception("FAILED: " + string.Join("; ", failures));
-        if (passed < 9) throw new Exception($"FAILED: only {passed} library guests executed");
+        if (executed < 3 || rejected < 7) throw new Exception($"FAILED: insufficient positive/rejection coverage {executed}/{rejected}");
     }
 
     private static long Execute(string assemblyPath)
@@ -86,12 +160,12 @@ internal static class AttoLibrariesV1SelfTest
         finally { context.Unload(); }
     }
 
-    private sealed record Meta(List<string> Flags, long Exit, string? Stdout, bool Reject, List<string> Errors);
+    private sealed record Meta(List<string> Flags, long? Exit, string? Stdout, bool Reject, List<string> Errors);
 
     private static Meta Headers(string path)
     {
         var flags = new List<string>(); var errors = new List<string>();
-        long exit = 0; string? stdout = null; bool reject = false;
+        long? exit = null; string? stdout = null; bool reject = false;
         foreach (string line in File.ReadLines(path))
         {
             if (!line.StartsWith("//", StringComparison.Ordinal)) break;
