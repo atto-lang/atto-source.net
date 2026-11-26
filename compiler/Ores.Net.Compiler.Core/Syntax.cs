@@ -1393,6 +1393,12 @@ public static partial class OresParser
                 Expect(")");
                 return inner;
             }
+            // This closed scalar lane has no general name binding. Preserve
+            // identifier-shaped tokens as a distinct compile-time diagnostic,
+            // without admitting calls, names, or non-integer values.
+            if (Current.Text.Length > 0 &&
+                (Current.Text[0] is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or '_'))
+                throw new FormatException($"Unknown or unsupported scalar identifier at offset {Current.Offset}");
             if (Current.Text.Length == 0 || Current.Text[0] is < '0' or > '9')
                 throw new FormatException($"Expected integer at offset {Current.Offset}");
             var raw = Current.Text;
