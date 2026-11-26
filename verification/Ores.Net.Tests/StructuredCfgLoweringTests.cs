@@ -245,6 +245,16 @@ internal static class StructuredCfgLoweringTests
             "break outside loop");
     }
 
+    public static void RunExplicitTernaryArms()
+    {
+        Check("fnc main():int{let int x=true ? {return 40;} : {^ 7;};return x+2;}",
+            42, "explicit arm return is not a function return");
+        Check("fnc main():int{return false ? 7 : {^ 42;};}",
+            42, "selected explicit false arm");
+        Check("fnc main():int{let int x=9223372036854775807;return true ? {^ 42;} : {return x+1;};}",
+            42, "unselected explicit arm does not overflow");
+    }
+
     public static void Run()
     {
         NegatedDoIfAotControlFlow();
@@ -672,12 +682,7 @@ internal static class StructuredCfgLoweringTests
         Check("fnc inc(int x):int{return x+1;}" +
             "fnc main():int{return inc((false xor true) ? 41 : 0);}",
             42, "ternary and eager xor inside typed call argument");
-        Check("fnc main():int{let int x=true ? {return 40;} : {^ 7;};return x+2;}",
-            42, "explicit arm return is not a function return");
-        Check("fnc main():int{return false ? 7 : {^ 42;};}",
-            42, "selected explicit false arm");
-        Check("fnc main():int{let int x=9223372036854775807;return true ? {^ 42;} : {return x+1;};}",
-            42, "unselected explicit arm does not overflow");
+        RunExplicitTernaryArms();
         Check("fnc main():int{if true or (false and true){return 42;}else{return 7;}}",
             42, "nested logical short-circuit branches");
         Check("fnc main():int{const bool b=false and (9223372036854775807+1>0);" +
