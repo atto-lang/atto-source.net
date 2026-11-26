@@ -22,6 +22,8 @@ public sealed class SelectContinuationFence
 
     private readonly object _gate = new();
     private readonly Slot[] _slots;
+    private readonly int[] _free;
+    private int _freeCount;
     private ulong _generation;
     private ulong _nextId = 1;
     private bool _closed;
@@ -38,8 +40,13 @@ public sealed class SelectContinuationFence
 
         _generation = generation;
         _slots = new Slot[maxTickets];
+        _free = new int[maxTickets];
+        _freeCount = maxTickets;
         for (var i = 0; i < maxTickets; i++)
+        {
             _slots[i] = new Slot();
+            _free[i] = maxTickets - 1 - i;
+        }
     }
 
     public ulong Generation
@@ -59,7 +66,7 @@ public sealed class SelectContinuationFence
         {
             if (_closed) return false;
             _closed = true;
-            foreach (var slot in _slots) ClearLocked(slot);
+            ClearPendingLocked();
             return true;
         }
     }
@@ -68,7 +75,7 @@ public sealed class SelectContinuationFence
 
     public bool RetirementReady
     {
-        get { lock (_gate) return _closed && _executing == 0; }
+        get { lock (_gate) return _closed && _executing == 0 && _freeCount == _slots.Length; }
     }
 
     public int PendingTickets
@@ -77,10 +84,7 @@ public sealed class SelectContinuationFence
         {
             lock (_gate)
             {
-                var count = 0;
-                foreach (var slot in _slots)
-                    if (slot.Active) count++;
-                return count;
+                return _slots.Length - _freeCount;
             }
         }
     }
@@ -94,30 +98,25 @@ public sealed class SelectContinuationFence
             if (expectedGeneration != _generation)
                 throw new InvalidOperationException("stale actor generation");
 
-            if (PendingTickets + _executing >= _slots.Length)
+            if (_slots.Length - _freeCount + _executing >= _slots.Length)
                 throw new InvalidOperationException("Continuation physical capacity exhausted");
-            var index = -1;
-            for (var i = 0; i < _slots.Length; i++)
-            {
-                if (!_slots[i].Active)
-                {
-                    index = i;
-                    break;
-                }
-            }
-            if (index < 0)
-                throw new InvalidOperationException(
-                    "Continuation ticket capacity exhausted");
+            if (_freeCount == 0)
+                throw new InvalidOperationException("Continuation ticket capacity exhausted");
+            var index = _free[_freeCount - 1];
             if (_nextId == ulong.MaxValue)
                 throw new OverflowException(
                     "Continuation ticket identity exhausted");
 
-            var id = _nextId++;
+            var id = _nextId;
+            // Construct the ticket before changing quota or slot state.
+            var ticket = new Ticket(this, index, id, _generation);
+            _nextId++;
+            _freeCount--;
             var slot = _slots[index];
             slot.Id = id;
             slot.Generation = _generation;
             slot.Active = true;
-            return new Ticket(this, index, id, _generation);
+            return ticket;
         }
     }
 
@@ -129,7 +128,7 @@ public sealed class SelectContinuationFence
         {
             if (!MatchesLocked(ticket, requireCurrent: true))
                 return false;
-            ClearLocked(_slots[ticket.Index]);
+            ClearLocked(ticket.Index);
             return true;
         }
     }
@@ -143,7 +142,7 @@ public sealed class SelectContinuationFence
             if (_closed || !MatchesLocked(ticket, requireCurrent: true)) return null;
             // Allocate the lease before consuming the pending slot.
             var lease = new Execution(this, _generation);
-            ClearLocked(_slots[ticket.Index]);
+            ClearLocked(ticket.Index);
             _executing++;
             return lease;
         }
@@ -182,8 +181,7 @@ public sealed class SelectContinuationFence
                 throw new OverflowException("Actor generation exhausted");
 
             _generation++;
-            foreach (var slot in _slots)
-                ClearLocked(slot);
+            ClearPendingLocked();
             return true;
         }
     }
@@ -194,7 +192,7 @@ public sealed class SelectContinuationFence
         {
             if (!MatchesLocked(ticket, requireCurrent: false))
                 return false;
-            ClearLocked(_slots[ticket.Index]);
+            ClearLocked(ticket.Index);
             return true;
         }
     }
@@ -213,10 +211,18 @@ public sealed class SelectContinuationFence
         return !requireCurrent || ticket.Generation == _generation;
     }
 
-    private static void ClearLocked(Slot slot)
+    private void ClearPendingLocked()
     {
+        for (var index = 0; index < _slots.Length; index++)
+            if (_slots[index].Active) ClearLocked(index);
+    }
+
+    private void ClearLocked(int index)
+    {
+        var slot = _slots[index];
         slot.Active = false;
         slot.Generation = 0;
+        _free[_freeCount++] = index;
     }
 
     public sealed class Ticket
