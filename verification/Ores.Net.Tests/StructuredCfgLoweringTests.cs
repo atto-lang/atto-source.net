@@ -239,8 +239,21 @@ internal static class StructuredCfgLoweringTests
             7, "ifnot-value");
         Check("fnc main():int{return unless true then 7 else 9 fi;}",
             9, "unless-value");
-        Reject("fnc main():int{loop{if true then break; fi}return 0;}",
-            "keyword value-if cannot contain break");
+        const string legacy = "fnc main():int{loop{if true then break; fi}return 0;}";
+        Check(legacy, 0, "migration-only keyword statement");
+        try
+        {
+            _ = OresStructuredCfgLowering.LowerStrictConditionals(legacy);
+            throw new Exception("Strict conditional CFG incorrectly admitted a bare keyword statement");
+        }
+        catch (FormatException ex) when (ex.Message.Contains("E_CONDITIONAL_STATEMENT", StringComparison.Ordinal)) { }
+        foreach (string head in new[] { "if", "ifnot", "unless" })
+        {
+            var strict = OresStructuredCfgLowering.LowerStrictConditionals(
+                "fnc main():int{do " + head + " true then return 42; else return 42; fi}");
+            if (CfgReferenceEvaluator.Evaluate(strict) != 42)
+                throw new Exception("Strict conditional CFG mismatch: " + head);
+        }
         Reject("fnc main():int{do ifnot false then break; fi return 0;}",
             "break outside loop");
     }
