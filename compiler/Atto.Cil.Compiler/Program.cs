@@ -389,6 +389,25 @@ internal sealed class Parser
                     {
                         PointerNeed("("); PointerNeed(")"); PointerNeed(";"); live = false;
                     }
+                    else if (Eat("fill"))
+                    {
+                        PointerNeed("(");
+                        // Evaluate once before updating any cell, including a source cell.
+                        var value = Bind(Value());
+                        PointerNeed(")"); PointerNeed(";");
+                        for (int i = 0; i < count; i++) cells[i] = value;
+                    }
+                    else if (Eat("swap_at"))
+                    {
+                        PointerNeed("("); var i = Index(0, count - 1);
+                        PointerNeed(","); var j = Index(0, count - 1);
+                        PointerNeed(")"); PointerNeed(";");
+                        var first = cells[i] ?? throw new CompilerError("E_POINTER_INITIALIZE", "swap requires initialized elements");
+                        var second = cells[j] ?? throw new CompilerError("E_POINTER_INITIALIZE", "swap requires initialized elements");
+                        // Stored immutable CIL locals retain the original values.
+                        // Rebinding the compiler's cell map needs no extra guest allocation.
+                        cells[i] = second; cells[j] = first;
+                    }
                     else
                     {
                         bool singleton = Eat("write");
