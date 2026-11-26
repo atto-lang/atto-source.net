@@ -6,6 +6,8 @@ public abstract record Expression;
 public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
+// Eager closed i64 projection, not an owned aggregate or host tuple.
+public sealed record EntryScalarProjection(Expression First, Expression Second, bool SelectKey) : Expression;
 // Named intrinsic only. Single '^' is not AttoLang syntax ('^^' is boolean XOR).
 public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
 // Named signed-64 Integer.rem/mod/pow (Java StrictIntegerArithmetic parity):
@@ -1487,8 +1489,8 @@ public static partial class OresParser
                 Expect(">");
             }
             Expect("(");
-            long first = 0;
-            if (isEntry) first = ReadPureI64Literal();
+            Expression? first = null;
+            if (isEntry) first = ParseAdd(depth + 1);
             else
             {
                 // Narrow, effect-free literal subset: discard only a proven
@@ -1503,10 +1505,8 @@ public static partial class OresParser
                 _index++;
             }
             Expect(",");
-            // The static Pair key is effect-free. Preserve the second
-            // expression in the real checked scalar IR. Entry still requires
-            // pure literals because either operand may be discarded.
-            Expression second = isEntry ? new Literal(ReadPureI64Literal()) : ParseAdd(depth + 1);
+            // Both Entry operands are eager. The static Pair key is pure.
+            Expression second = ParseAdd(depth + 1);
             Expect(")");
             if (!Take("."))
                 throw new FormatException(
@@ -1516,8 +1516,12 @@ public static partial class OresParser
             _index++;
             if (isEntry)
             {
-                if (field == "key") return new Literal(first);
-                if (field == "value") return second;
+                if (field is "key" or "value")
+                {
+                    if (first is Literal && second is Literal)
+                        return field == "key" ? first : second;
+                    return new EntryScalarProjection(first!, second, field == "key");
+                }
                 throw new FormatException($"E_ENTRY_FIELD: only key/value projections are supported at offset {fieldAt}");
             }
             if (field == "first")

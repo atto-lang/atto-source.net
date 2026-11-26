@@ -25,6 +25,8 @@ internal static class HeapContainerSourceBoundaryTests
             ("pub fnc main():int{return Record.of(a: -9223372036854775808, b: 42).b;}", 42),
             ("pub fnc main():int{return Entry.of(11, 23).value + 19;}", 42),
             ("pub fnc main():int{return Entry.of(11, 23).key + 31;}", 42),
+            ("pub fnc main():int{return Entry.of<int,int>(11+31, 3*5).key;}", 42),
+            ("pub fnc main():int{return Entry.of(11+31, (10+11)*2).value;}", 42),
             ("pub fnc main():int{return Pair.of(\"count\", 23).second + 19;}", 42),
             ("pub fnc main():int{return Pair.of<int>(\"count\", 11).second + 31;}", 42),
             ("pub fnc main():int{return Entry.of<int,int>(-9223372036854775808, 42).value;}", 42),
@@ -58,6 +60,22 @@ internal static class HeapContainerSourceBoundaryTests
             Directory.Delete(folder, recursive: true);
         }
 
+        // A discarded operand must still trap. Lowering keeps its SSA
+        // instructions even when the selected return ID precedes them.
+        foreach (string source in new[] {
+            "pub fnc main():int{return Entry.of(42,9223372036854775807+1).key;}",
+            "pub fnc main():int{return Entry.of(9223372036854775807+1,42).value;}"
+        })
+        {
+            var ir = OresIrLowering.Lower(OresParser.Parse(source));
+            try
+            {
+                _ = OresIrReferenceEvaluator.Evaluate(ir);
+                throw new Exception("Discarded Entry operand overflow erased");
+            }
+            catch (OverflowException) { }
+        }
+
         var forbiddenFactories = new[]
         {
             "Tuple.of(1,2)",           // cannot escape as a first-class value
@@ -88,8 +106,9 @@ internal static class HeapContainerSourceBoundaryTests
             "Entry.of(1,2).key.foo", // no dynamic member fallback
             "Pair.of(\"a\",true).second",
             "Pair.of(\"a\",missing).second",
-            "Entry.of(1+2,3).key",
-            "Entry.of(1,2+3).value",
+            "Entry.of(1,missing).key",
+            "Entry.of(missing,2).value",
+            "Entry.of(1,true).key",
             "Entry.of<int>(1,2).key", // both type slots required, int-only
             "~entry(1+2,3).key", // no unproven effects
             "Array.of(1,2)",
