@@ -180,7 +180,16 @@ internal static class StructuredCfgLoweringTests
         int offset = source.LastIndexOf(spelling, StringComparison.Ordinal);
         if (offset < 0 || source[offset] != '!')
             throw new Exception("Missing operator boundary in fixture: " + label);
-        RejectWithDiagnostic(source, "Invalid character at offset " + offset, label);
+        // Standalone ! is now a typed unary operator. In these infix
+        // fixtures the left integer is not a bool condition, so the reader
+        // rejects before consuming the malformed alias. Require that exact
+        // typed diagnostic (or the original lexical boundary diagnostic).
+        try { _ = OresStructuredCfgLowering.Lower(source); }
+        catch (FormatException e) when (
+            e.Message.Contains("Invalid character at offset " + offset, StringComparison.Ordinal) ||
+            e.Message.Contains("If condition must be bool at offset " + (offset - 2), StringComparison.Ordinal))
+        { return; }
+        throw new Exception("Malformed !eq alias was accepted: " + label);
     }
 
     private static void NegatedDoIfAotControlFlow()
