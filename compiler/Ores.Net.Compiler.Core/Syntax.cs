@@ -1389,7 +1389,7 @@ public static partial class OresParser
             return new Literal(result);
         }
 
-        // A nominal Entry<K,V> and a Pair<A,B> remain different source
+        // A nominal Entry<K,V> and a Pair<V> remain different source
         // families: an Entry exposes only .key/.value; a Pair exposes only
         // .first/.second. The scalar bootstrap can represent neither as an
         // escaping object. A checked pure literal immediate projection is
@@ -1400,13 +1400,38 @@ public static partial class OresParser
             CheckDepth(depth);
             if (Take("<"))
             {
-                Expect("int");
-                Expect(",");
-                Expect("int");
+                if (isEntry)
+                {
+                    Expect("int"); Expect(","); Expect("int");
+                }
+                else if (Take("string"))
+                {
+                    Expect(","); Expect("int");
+                }
+                else
+                {
+                    Expect("int");
+                    if (Current.Text == ",")
+                        throw new FormatException($"E_PAIR_KEY_TYPE: Pair first type argument must be string at offset {at}");
+                }
                 Expect(">");
             }
             Expect("(");
-            long first = ReadPureI64Literal();
+            long first = 0;
+            if (isEntry) first = ReadPureI64Literal();
+            else
+            {
+                // Narrow, effect-free literal subset: discard only a proven
+                // plain string when projecting .second. No template, escapes,
+                // runtime string expression or owned Pair representation.
+                string key = Current.Text;
+                if (key.Length < 2 || key[0] != '"' || key[^1] != '"')
+                    throw new FormatException($"E_PAIR_KEY_TYPE: Pair requires a string key at offset {Current.Offset}");
+                foreach (char c in key.AsSpan(1, key.Length - 2))
+                    if (c < ' ' || c > '~' || c is '\\' or '"' or '$')
+                        throw new FormatException($"E_PAIR_KEY_UNSUPPORTED: only plain static string literals in scalar Pair projection at offset {Current.Offset}");
+                _index++;
+            }
             Expect(",");
             long second = ReadPureI64Literal();
             Expect(")");
@@ -1422,7 +1447,8 @@ public static partial class OresParser
                 if (field == "value") return new Literal(second);
                 throw new FormatException($"E_ENTRY_FIELD: only key/value projections are supported at offset {fieldAt}");
             }
-            if (field == "first") return new Literal(first);
+            if (field == "first")
+                throw new FormatException($"E_PAIR_STRING_PROJECTION_UNSUPPORTED: string result needs typed CIL lowering at offset {fieldAt}");
             if (field == "second") return new Literal(second);
             throw new FormatException($"E_PAIR_FIELD: only first/second projections are supported at offset {fieldAt}");
         }
