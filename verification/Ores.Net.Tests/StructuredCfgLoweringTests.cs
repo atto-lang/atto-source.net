@@ -508,6 +508,19 @@ internal static class StructuredCfgLoweringTests
         Check("fnc main():int{const Record r=(a=10);const Tuple t=(true,12);const struct s={a:20};return r.a+t[1]+s.a;}",
             42, "bare aggregate annotations create no named type");
         Reject("fnc main():int{const Record<infer> r=(a=1);return 0;}", "bare infer invalid");
+        foreach (string name in new[] { "select", "await", "Pointer", "ActorMail",
+            "ReadLoan", "AtomicInt", "RwLock", "boolean", "String", "while" })
+            Reject("fnc main():int{const Record<infer " + name + "> r=(a=1);return 0;}",
+                "reserved aggregate type cannot disappear during lowering: " + name);
+        Reject("fnc main():int{const Record<infer R> select=(a=1);return 0;}",
+            "reserved aggregate local");
+        Reject("fnc main():int{const struct<infer S> s={await:1};return 0;}",
+            "reserved aggregate field");
+        Check("fnc main():int{const Record<infer If> r=(a=1);const Record<If> s=(a=42);return s.a;}",
+            42, "case-sensitive type alias remains legal");
+        Check("fnc main():int{const Record<infer R> r=(a=1,b=true);const Record<R> r2=(b=false,a=11);const Tuple<infer T> t=(true,1);const Tuple<T> t2=(false,14);const struct<infer S> s={a:1};const struct<S> s2={a:23};return r2.a+t2[1]+s2.a;}",
+            48, "named shape reuse observes the second values");
+
         Reject("fnc main():int{const Record<Missing> r=(a=1);return 0;}", "unknown aggregate alias");
         Reject("fnc main():int{const Record<infer R> r=(a=1);const Tuple<infer R> t=(1,2);return 0;}", "duplicate alias");
         Reject("fnc main():int{const Record<infer R> r=(a=1);const Record<R> r2=(a=true);return 0;}", "record field type mismatch");
