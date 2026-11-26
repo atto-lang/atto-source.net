@@ -27,6 +27,7 @@ internal static class HeapContainerSourceBoundaryTests
             ("pub fnc main():int{return Entry.of(11, 23).key + 31;}", 42),
             ("pub fnc main():int{return Entry.of<int,int>(11+31, 3*5).key;}", 42),
             ("pub fnc main():int{return Entry.of(11+31, (10+11)*2).value;}", 42),
+            ("pub fnc main():int{return Entry.of(Entry.of(20,21).value,Entry.of(21,22).key).key+21;}", 42),
             ("pub fnc main():int{return Pair.of(\"count\", 23).second + 19;}", 42),
             ("pub fnc main():int{return Pair.of<int>(\"count\", 11).second + 31;}", 42),
             ("pub fnc main():int{return Entry.of<int,int>(-9223372036854775808, 42).value;}", 42),
@@ -74,6 +75,43 @@ internal static class HeapContainerSourceBoundaryTests
                 throw new Exception("Discarded Entry operand overflow erased");
             }
             catch (OverflowException) { }
+        }
+
+        // Same fault-order witnesses as Forge: both operands fail, but
+        // the earlier source operand must determine the observed exception.
+        var orderedEntryFaults = new (string Source, Type Expected)[]
+        {
+            ("pub fnc main():int{return Entry.of(1/0,9223372036854775807+1).key;}", typeof(DivideByZeroException)),
+            ("pub fnc main():int{return Entry.of(1/0,9223372036854775807+1).value;}", typeof(DivideByZeroException)),
+            ("pub fnc main():int{return Entry.of(9223372036854775807+1,1/0).key;}", typeof(OverflowException)),
+            ("pub fnc main():int{return Entry.of(9223372036854775807+1,1/0).value;}", typeof(OverflowException))
+        };
+        Directory.CreateDirectory(folder);
+        try
+        {
+            for (int i = 0; i < orderedEntryFaults.Length; i++)
+            {
+                var (source, expected) = orderedEntryFaults[i];
+                var ir = OresIrLowering.Lower(OresParser.Parse(source));
+                ExpectEntryFault(() => OresIrReferenceEvaluator.Evaluate(ir), expected, "IR");
+                string output = Path.Combine(folder, "entry-order-" + i + ".dll");
+                CilEmitter.EmitLibrary(ir, output);
+                using var assembly = Mono.Cecil.AssemblyDefinition.ReadAssembly(output);
+                var entry = assembly.MainModule.Types.Single(t =>
+                    t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+                ExpectEntryFault(() => CilReferenceEvaluator.Evaluate(entry), expected, "CIL");
+            }
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+
+        static void ExpectEntryFault(Func<long> evaluate, Type expected, string lane)
+        {
+            try { _ = evaluate(); }
+            catch (Exception ex) when (ex.GetType() == expected) { return; }
+            throw new Exception(lane + " erased eager Entry fault: " + expected.Name);
         }
 
         var forbiddenFactories = new[]
