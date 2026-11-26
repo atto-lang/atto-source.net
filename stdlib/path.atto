@@ -1,0 +1,385 @@
+// Native Atto std/path lexical admission (.NET NativeAOT implementation).
+// Paths are data, NEVER filesystem authorization. The trusted std/fs host
+// must enforce canonical handles, symlinks, mount boundaries and capabilities.
+// All indices are Unicode scalar positions; Windows applies conservative
+// ASCII basename rules and forbids ADS, device names, and ambiguous suffixes.
+// This v1 exposes a checked lexical normalization DEPTH; it does not create
+// native paths, return a normalized string, or perform I/O.
+define module path as
+  pub fnc is_ascii_letter(int scalar): bool {
+    return (scalar >= 65 && scalar <= 90) || (scalar >= 97 && scalar <= 122);
+  }
+
+  fnc to_upper_ascii(int scalar): int {
+    if scalar >= 97 && scalar <= 122 then return scalar - 32; fi
+    return scalar;
+  }
+
+  pub fnc is_separator(int scalar, bool windows): bool {
+    return scalar == 47 || (windows && scalar == 92);
+  }
+
+  // Windows reserved devices are special even with an extension: CON.txt.
+  fnc is_windows_device(Array<int> points, int begin, int end): bool {
+    let mut int stem_end = begin;
+    for (let int i = begin; i < end; i = i + 1) {
+      if points.get(i) == 46 then break; fi
+      stem_end = i + 1;
+    }
+    let int size = stem_end - begin;
+    if size == 3; do
+      let int a = to_upper_ascii(points.get(begin));
+      let int b = to_upper_ascii(points.get(begin + 1));
+      let int c = to_upper_ascii(points.get(begin + 2));
+      if a == 67 && b == 79 && c == 78 then return true; fi
+      if a == 80 && b == 82 && c == 78 then return true; fi
+      if a == 65 && b == 85 && c == 88 then return true; fi
+      if a == 78 && b == 85 && c == 76 then return true; fi
+    fi
+    if size == 4; do
+      let int a = to_upper_ascii(points.get(begin));
+      let int b = to_upper_ascii(points.get(begin + 1));
+      let int c = to_upper_ascii(points.get(begin + 2));
+      let int d = points.get(begin + 3);
+      if d >= 49 && d <= 57; do
+        if a == 67 && b == 79 && c == 77 then return true; fi
+        if a == 76 && b == 80 && c == 84 then return true; fi
+      fi
+    fi
+    return false;
+  }
+
+  // 0=ordinary, 1='.', 2='..', -1=invalid segment.
+  fnc checked_component_kind_points(Array<int> points, int begin, int end, bool windows): int {
+    let int size = end - begin;
+    if size < 1 || size > 255 then return -1; fi
+    if size == 1 && points.get(begin) == 46 then return 1; fi
+    if size == 2 && points.get(begin) == 46 && points.get(begin + 1) == 46 then return 2; fi
+
+    for (let int i = begin; i < end; i = i + 1) {
+      let int scalar = points.get(i);
+      if scalar < 32 || scalar == 127 || scalar > 1114111 ||
+         (scalar >= 55296 && scalar <= 57343) then return -1; fi
+      if windows; do
+        // Restrict to an unambiguous portable Windows filename subset.
+        if !(is_ascii_letter(scalar) || (scalar >= 48 && scalar <= 57) ||
+             scalar == 95 || scalar == 45 || scalar == 46) then return -1; fi
+      fi
+    }
+    if windows; do
+      if points.get(end - 1) == 46 then return -1; fi
+      if is_windows_device(points, begin, end) then return -1; fi
+    fi
+    return 0;
+  }
+
+  // Returns -1 for invalid, absolute, empty or root-escaping paths.
+  // A zero result is a normalized "." (e.g. "a/.." or ".").
+  // No string concatenation, platform I/O or allocator-owned output.
+  fnc normalized_depth_points(Array<int> points, bool windows): int {
+    let int count = points.size;
+    if count < 1 || count > 4096 then return -1; fi
+    if is_separator(points.get(0), windows) then return -1; fi
+    if windows && count >= 2 && points.get(1) == 58 then return -1; fi
+    let mut int depth = 0;
+    let mut int components = 0;
+    let mut int start = 0;
+    for (let int i = 0; i <= count; i = i + 1) {
+      if i < count; do
+        let int ch = points.get(i);
+        if ch == 0 || ch < 32 || ch == 127 then return -1; fi
+      fi
+      if i == count || (i < count && is_separator(points.get(i), windows)); do
+        let int kind = checked_component_kind_points(points, start, i, windows);
+        if kind < 0 then return -1; fi
+        components = components + 1;
+        if components > 256 then return -1; fi
+        if kind == 2; do
+          if depth == 0 then return -1; fi
+          depth = depth - 1;
+        fi
+        if kind == 0 then depth = depth + 1; fi
+        start = i + 1;
+      fi
+    }
+    return depth;
+  }
+
+  pub fnc normalized_depth(String value, bool windows): int {
+    return normalized_depth_points(value.codepoints(), windows);
+  }
+
+  // Reject dot, dot-dot, repeated separators, trailing separators and root.
+  // This indicates lexical canonicality, NOT confinement under a real root.
+  pub fnc is_canonical_relative(String value, bool windows): bool {
+    let points = value.codepoints();
+    let int count = points.size;
+    if normalized_depth_points(points, windows) < 0 then return false; fi
+    if count == 1 && points.get(0) == 46 then return true; fi
+    let mut int start = 0;
+    for (let int i = 0; i <= count; i = i + 1) {
+      if i == count || (i < count && is_separator(points.get(i), windows)); do
+        if checked_component_kind_points(points, start, i, windows) != 0 then return false; fi
+        start = i + 1;
+      fi
+    }
+    return true;
+  }
+
+  pub fnc normalized_windows_depth(String value): int {
+    return normalized_depth(value, true);
+  }
+
+  pub fnc is_canonical_windows_relative(String value): bool {
+    return is_canonical_relative(value, true);
+  }
+
+  // Component view of the lexically normalized relative path. This returns
+  // Unicode scalar offsets into the ORIGINAL input; it is not a native path
+  // or a serialized normalized string. Dot segments are ignored and each
+  // dot-dot cancels its nearest surviving predecessor. All access is bounded.
+  // Reverse scan preserves the surviving components without stack arrays.
+  // Each view call validates and scans one bounded scalar snapshot.
+  fnc normalized_component_start_points(Array<int> points, bool windows, int requested): int {
+    let int depth = normalized_depth_points(points, windows);
+    if requested < 0 || requested >= depth then return -1; fi
+    let mut int end = points.size;
+    let mut int canceled = 0;
+    let mut int surviving_from_end = 0;
+    for (let int i = points.size; i >= 0; i = i - 1) {
+      if i == 0 || is_separator(points.get(i - 1), windows); do
+        let int kind = checked_component_kind_points(points, i, end, windows);
+        if kind == 2; do
+          canceled = canceled + 1;
+        else
+          if kind == 0; do
+            if canceled > 0; do
+              canceled = canceled - 1;
+            else
+              if depth - surviving_from_end - 1 == requested then return i; fi
+              surviving_from_end = surviving_from_end + 1;
+            fi
+          fi
+        fi
+        end = i - 1;
+      fi
+    }
+    return -1;
+  }
+
+  pub fnc normalized_component_start(String value, bool windows, int requested): int {
+    return normalized_component_start_points(value.codepoints(), windows, requested);
+  }
+
+  fnc component_length_points(Array<int> points, bool windows, int start): int {
+    if start < 0 then return -1; fi
+    for (let int i = start; i < points.size; i = i + 1) {
+      if is_separator(points.get(i), windows) then return i - start; fi
+    }
+    return points.size - start;
+  }
+
+  pub fnc normalized_component_length(String value, bool windows, int requested): int {
+    let points = value.codepoints();
+    let int start = normalized_component_start_points(points, windows, requested);
+    return component_length_points(points, windows, start);
+  }
+
+  // -1 is reserved for an invalid component/offset; no valid scalar is -1.
+  pub fnc normalized_component_scalar(String value, bool windows, int requested, int offset): int {
+    let points = value.codepoints();
+    let int start = normalized_component_start_points(points, windows, requested);
+    let int length = component_length_points(points, windows, start);
+    if start < 0 || offset < 0 || offset >= length then return -1; fi
+    return points.get(start + offset);
+  }
+
+  // Offset and length refer to Unicode scalars of the ORIGINAL spelling,
+  // never to a filesystem-resolved native path or UTF-8 byte positions.
+  pub fnc file_name_start(String value, bool windows): int {
+    let int depth = normalized_depth(value, windows);
+    if depth < 1 then return -1; fi
+    return normalized_component_start(value, windows, depth - 1);
+  }
+
+  pub fnc file_name_length(String value, bool windows): int {
+    let int depth = normalized_depth(value, windows);
+    if depth < 1 then return -1; fi
+    return normalized_component_length(value, windows, depth - 1);
+  }
+
+  // Dotfiles such as ".env" have no extension. Trailing dots are not an
+  // extension; Windows rejects them independently in component validation.
+  // Returns the first scalar AFTER the final non-leading, non-trailing dot.
+  pub fnc extension_start(String value, bool windows): int {
+    let int start = file_name_start(value, windows);
+    let int length = file_name_length(value, windows);
+    if start < 0 || length < 3 then return -1; fi
+    let points = value.codepoints();
+    let mut int result = -1;
+    for (let int i = start + 1; i < start + length - 1; i = i + 1) {
+      if points.get(i) == 46 then result = i + 1; fi
+    }
+    return result;
+  }
+
+  pub fnc file_stem_length(String value, bool windows): int {
+    let int start = file_name_start(value, windows);
+    let int length = file_name_length(value, windows);
+    if start < 0 then return -1; fi
+    let int extension = extension_start(value, windows);
+    if extension < 0 then return length; fi
+    return extension - start - 1;
+  }
+
+  // A parent is reported as a component count, not a native path string.
+  pub fnc parent_depth(String value, bool windows): int {
+    let int depth = normalized_depth(value, windows);
+    if depth < 1 then return -1; fi
+    return depth - 1;
+  }
+
+  // A deliberately strict join preflight: both inputs must already be
+  // canonical relative spellings (no ".." components), and the hypothetical
+  // single-separator concatenation must fit the same scalar/depth budget.
+  // The caller MUST NOT treat this as filesystem confinement or allocation.
+  pub fnc join_admissible(String base, String child, bool windows): bool {
+    if !is_canonical_relative(base, windows) then return false; fi
+    if !is_canonical_relative(child, windows) then return false; fi
+    let int base_depth = normalized_depth(base, windows);
+    let int child_depth = normalized_depth(child, windows);
+    if base_depth > 256 - child_depth then return false; fi
+    let int base_size = base.codepoints().size;
+    let int child_size = child.codepoints().size;
+    return base_size + child_size + 1 <= 4096;
+  }
+
+  pub fnc is_portable_relative(String value): bool {
+    // A backslash denotes an ordinary POSIX character but a Windows
+    // separator. Never call an ambiguous spelling portable.
+    let points = value.codepoints();
+    for (let int i = 0; i < points.size; i = i + 1) {
+      if points.get(i) == 92 then return false; fi
+    }
+    return is_canonical_relative(value, false) &&
+           is_canonical_relative(value, true);
+  }
+
+  // Immutable lexical Path value. The object is NOT a filesystem handle,
+  // cannot authorize I/O, and never resolves symlinks/mounts.
+  // The original spelling is retained for bounded scalar component views.
+  pub define class Path as
+    let String spelling;
+    let bool windows;
+
+    pub constructor(String spelling, bool windows) {
+      if normalized_depth(spelling, windows) < 0; do
+        rt fail("std/path: invalid relative path");
+      fi
+      self.spelling = spelling;
+      self.windows = windows;
+    }
+
+    pub fnc component_count(): int {
+      return normalized_depth(self.spelling, self.windows);
+    }
+
+    pub fnc component_start(int index): int {
+      return normalized_component_start(self.spelling, self.windows, index);
+    }
+
+    pub fnc component_length(int index): int {
+      return normalized_component_length(self.spelling, self.windows, index);
+    }
+
+    pub fnc component_scalar(int index, int offset): int {
+      return normalized_component_scalar(self.spelling, self.windows, index, offset);
+    }
+
+    pub fnc file_name_offset(): int {
+      return file_name_start(self.spelling, self.windows);
+    }
+
+    pub fnc file_name_size(): int {
+      return file_name_length(self.spelling, self.windows);
+    }
+
+    pub fnc extension_offset(): int {
+      return extension_start(self.spelling, self.windows);
+    }
+
+    pub fnc stem_length(): int {
+      return file_stem_length(self.spelling, self.windows);
+    }
+
+    pub fnc parent_component_count(): int {
+      return parent_depth(self.spelling, self.windows);
+    }
+
+    pub fnc is_canonical(): bool {
+      return is_canonical_relative(self.spelling, self.windows);
+    }
+
+    pub fnc is_portable(): bool {
+      return is_portable_relative(self.spelling);
+    }
+
+    pub fnc can_join(String child): bool {
+      return join_admissible(self.spelling, child, self.windows);
+    }
+  end
+
+  pub fnc relative_path(String spelling, bool windows): Path {
+    return new Path(spelling, windows);
+  }
+
+  // Conformance-v1 lexical scalar ABI. This is NOT an OS path authority.
+  // The existing array/string path API remains backend-owned and unchanged.
+  pub fnc is_safe_scalar(int scalar, bool windows): bool {
+    if scalar < 32 || scalar == 127 || scalar > 1114111 then return false; fi
+    if scalar >= 55296 && scalar <= 57343 then return false; fi
+    if is_separator(scalar, windows) then return false; fi
+    if windows && !(is_ascii_letter(scalar) ||
+                    (scalar >= 48 && scalar <= 57) ||
+                    scalar == 46 || scalar == 45 || scalar == 95)
+       then return false; fi
+    return true;
+  }
+
+  // 0 = ordinary, 1 = ".", 2 = ".."; -1 = invalid length.
+  // Character validation is a separate, strict lexical check.
+  pub fnc component_kind(int length, int first, int second): int {
+    if length < 1 || length > 255 then return -1; fi
+    if length == 1 && first == 46 then return 1; fi
+    if length == 2 && first == 46 && second == 46 then return 2; fi
+    return 0;
+  }
+
+  pub fnc advance_relative_depth(int depth, int component): int {
+    if depth < 0 || depth > 256 then return -1; fi
+    if component == 1 then return depth; fi
+    if component == 2 && depth == 0 then return -1; fi
+    if component == 2 then return depth - 1; fi
+    if component != 0 || depth == 256 then return -1; fi
+    return depth + 1;
+  }
+
+  pub fnc is_windows_drive_prefix(int first, int second): bool {
+    return is_ascii_letter(first) && second == 58;
+  }
+
+  pub fnc relative_join_budget_admissible(int left_scalars, int right_scalars,
+                                         int left_components, int right_components): bool {
+    if left_scalars < 1 || left_scalars > 4096 then return false; fi
+    if right_scalars < 1 || right_scalars > 4096 then return false; fi
+    if left_components < 0 || right_components < 0 then return false; fi
+    if left_components > 256 || right_components > 256 then return false; fi
+    if left_scalars > 4095 - right_scalars then return false; fi
+    return left_components <= 256 - right_components;
+  }
+
+  pub fnc extension_offset_admissible(int filename_scalars, int dot_index): bool {
+    if filename_scalars < 3 || filename_scalars > 255 then return false; fi
+    return dot_index >= 1 && dot_index < filename_scalars - 1;
+  }
+end

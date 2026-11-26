@@ -1,0 +1,15 @@
+pub fnc main(): int {
+    let int count = 0;
+    do match true over
+        on true -> {
+            loop {
+                count = count + 1;
+                if count eq 2 { continue; } fi
+                if count eq 42 { break; } fi
+            }
+            return;
+        }
+        on false -> { return; }
+    end
+    return count;
+}

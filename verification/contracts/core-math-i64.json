@@ -1,0 +1,237 @@
+{
+  "schemaVersion": 1,
+  "contract": "ores-core-math-signed-i64-v1",
+  "integerDomain": "signed-i64",
+  "statement": "clamp_int returns lower when lower > upper",
+  "sourceOfTruth": "independent mathematical reference; not compiler output",
+  "cases": [
+    {
+      "id": "min-int64-lowest",
+      "function": "min_int",
+      "args": [
+        "-9223372036854775808",
+        "9223372036854775807"
+      ],
+      "expected": "-9223372036854775808"
+    },
+    {
+      "id": "min-int64-swapped",
+      "function": "min_int",
+      "args": [
+        "9223372036854775807",
+        "-9223372036854775808"
+      ],
+      "expected": "-9223372036854775808"
+    },
+    {
+      "id": "min-equality",
+      "function": "min_int",
+      "args": [
+        "7",
+        "7"
+      ],
+      "expected": "7"
+    },
+    {
+      "id": "min-large-precise",
+      "function": "min_int",
+      "args": [
+        "9007199254740993",
+        "9007199254740992"
+      ],
+      "expected": "9007199254740992"
+    },
+    {
+      "id": "min-negative",
+      "function": "min_int",
+      "args": [
+        "-7",
+        "-9"
+      ],
+      "expected": "-9"
+    },
+    {
+      "id": "min-near-upper",
+      "function": "min_int",
+      "args": [
+        "9223372036854775807",
+        "9223372036854775806"
+      ],
+      "expected": "9223372036854775806"
+    },
+    {
+      "id": "max-int64-highest",
+      "function": "max_int",
+      "args": [
+        "-9223372036854775808",
+        "9223372036854775807"
+      ],
+      "expected": "9223372036854775807"
+    },
+    {
+      "id": "max-int64-swapped",
+      "function": "max_int",
+      "args": [
+        "9223372036854775807",
+        "-9223372036854775808"
+      ],
+      "expected": "9223372036854775807"
+    },
+    {
+      "id": "max-equality",
+      "function": "max_int",
+      "args": [
+        "-7",
+        "-7"
+      ],
+      "expected": "-7"
+    },
+    {
+      "id": "max-large-precise",
+      "function": "max_int",
+      "args": [
+        "9007199254740993",
+        "9007199254740992"
+      ],
+      "expected": "9007199254740993"
+    },
+    {
+      "id": "max-negative",
+      "function": "max_int",
+      "args": [
+        "-7",
+        "-9"
+      ],
+      "expected": "-7"
+    },
+    {
+      "id": "max-zero",
+      "function": "max_int",
+      "args": [
+        "0",
+        "-1"
+      ],
+      "expected": "0"
+    },
+    {
+      "id": "clamp-below",
+      "function": "clamp_int",
+      "args": [
+        "-9223372036854775808",
+        "-12",
+        "13"
+      ],
+      "expected": "-12"
+    },
+    {
+      "id": "clamp-above",
+      "function": "clamp_int",
+      "args": [
+        "9223372036854775807",
+        "-12",
+        "13"
+      ],
+      "expected": "13"
+    },
+    {
+      "id": "clamp-inside",
+      "function": "clamp_int",
+      "args": [
+        "0",
+        "-12",
+        "13"
+      ],
+      "expected": "0"
+    },
+    {
+      "id": "clamp-low-bound",
+      "function": "clamp_int",
+      "args": [
+        "-12",
+        "-12",
+        "13"
+      ],
+      "expected": "-12"
+    },
+    {
+      "id": "clamp-high-bound",
+      "function": "clamp_int",
+      "args": [
+        "13",
+        "-12",
+        "13"
+      ],
+      "expected": "13"
+    },
+    {
+      "id": "clamp-equal",
+      "function": "clamp_int",
+      "args": [
+        "11",
+        "11",
+        "11"
+      ],
+      "expected": "11"
+    },
+    {
+      "id": "clamp-inverted-returns-lower",
+      "function": "clamp_int",
+      "args": [
+        "0",
+        "9223372036854775807",
+        "-9223372036854775808"
+      ],
+      "expected": "9223372036854775807"
+    },
+    {
+      "id": "clamp-inverted-extreme",
+      "function": "clamp_int",
+      "args": [
+        "-9223372036854775808",
+        "9223372036854775807",
+        "-9223372036854775808"
+      ],
+      "expected": "9223372036854775807"
+    },
+    {
+      "id": "clamp-all-extreme",
+      "function": "clamp_int",
+      "args": [
+        "9223372036854775807",
+        "-9223372036854775808",
+        "9223372036854775807"
+      ],
+      "expected": "9223372036854775807"
+    },
+    {
+      "id": "clamp-large-inside",
+      "function": "clamp_int",
+      "args": [
+        "9007199254740993",
+        "9007199254740992",
+        "9007199254740994"
+      ],
+      "expected": "9007199254740993"
+    },
+    {
+      "id": "clamp-all-zero",
+      "function": "clamp_int",
+      "args": [
+        "0",
+        "0",
+        "0"
+      ],
+      "expected": "0"
+    },
+    {
+      "id": "clamp-inverted-near",
+      "function": "clamp_int",
+      "args": [
+        "100",
+        "10",
+        "9"
+      ],
+      "expected": "10"
+    }
+  ]
+}

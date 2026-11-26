@@ -1,0 +1,7 @@
+// expect-error: E_SYMBOL
+pub fnc main(): int {
+  return (match 7 over
+    on n when n > 1 -> n,
+    on _ -> -1,
+  end) + n;
+}

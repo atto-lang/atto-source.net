@@ -1,0 +1,7 @@
+fnc half(int x): int {
+  return x / 2;
+}
+
+pub fnc main(): int {
+  return half(84);
+}

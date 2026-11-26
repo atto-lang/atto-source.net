@@ -1,0 +1,48 @@
+name: Runner admission canary
+
+on:
+  push:
+    branches:
+      - ci/source-free-runner-admission-20261027
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/runner-admission-canary.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: runner-admission-net-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  admission:
+    name: source-free-runner-admission
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Execute source-free admission probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          # No source checkout, credentials, or private data access.
+          [[ "${GITHUB_ACTIONS:-}" == "true" ]] || { echo 'Not running inside GitHub Actions' >&2; exit 1; }
+          [[ "${RUNNER_OS:-}" == "Linux" ]] || { echo 'Runner OS mismatch' >&2; exit 1; }
+          [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]*[1-9][0-9]*$ ]] || { echo 'Missing valid workflow-run identity' >&2; exit 1; }
+          [[ "${GITHUB_RUN_ATTEMPT:-}" =~ ^[0-9]*[1-9][0-9]*$ ]] || { echo 'Missing valid workflow-run attempt' >&2; exit 1; }
+          [[ "${GITHUB_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'Missing 40-hex workflow commit' >&2; exit 1; }
+          case "${GITHUB_EVENT_NAME:-}" in
+            push|pull_request|workflow_dispatch) ;;
+            *) echo 'Unexpected runner admission event' >&2; exit 1 ;;
+          esac
+          command -v sha256sum >/dev/null || { echo 'SHA-256 implementation missing' >&2; exit 1; }
+          digest="$(printf %s 'oreslang-source-free-runner-admission-v1' | sha256sum)"
+          [[ "${digest%% *}" == "4a35cbaad4c7ea93615312c3e39ee83cae0405a29bdf9540094fb89524266b1e" ]] || {
+            echo 'Canary digest mismatch' >&2
+            exit 1
+          }
+          # Proves runner admission only; not source checkout or compiler execution.
+          printf 'RUNNER_ADMISSION_MEANINGFUL_STEP_EXECUTED run=%s attempt=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"

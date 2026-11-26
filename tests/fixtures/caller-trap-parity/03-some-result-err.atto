@@ -1,0 +1,14 @@
+// ATTO-TRAP-V1-03: exit 7, the value's own Err passes through as Err.
+fnc checked_id(int id): Result<int,String> {
+  if id < 0 then
+    return Err("invalid");
+  fi
+  return Ok(id);
+}
+pub fnc main(): int {
+  val Result<int, String | Error> outer = trap checked_id(-1);
+  if outer.is_err() then
+    return 7;
+  fi
+  return 0;
+}

@@ -1,0 +1,3 @@
+pub async fnc main(): int {
+    return sync task<int> { return 42; };
+}

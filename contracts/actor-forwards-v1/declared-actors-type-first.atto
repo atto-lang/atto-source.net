@@ -1,0 +1,49 @@
+// Canonical external type-first actor receiver declarations.
+// Two actors can expose methods with the same name. Mailbox handlers bind
+// through the same actor-owned method table, not runtime monkey patching.
+use namespace workers;
+
+declare actor Foo1;
+declare actor Foo2;
+
+mtd (Foo1 self) foo(): int {
+  return 41;
+}
+
+mtd (Foo2 self) foo(): int {
+  return 42;
+}
+
+mtd (Foo1 mut self) receive(ActorMail<String> mail): void {
+  self.send(self.foo());
+  self.end();
+  return;
+}
+
+mtd (Foo2 mut self) receive(ActorMail<String> mail): void {
+  self.send(self.foo());
+  self.end();
+  return;
+}
+
+pub async routine main(): void {
+  val first = spawn Foo1();
+  val second = spawn Foo2();
+
+  await first.get_ready();
+  await second.get_ready();
+
+  first.send("go");
+  second.send("go");
+
+  val a = (await first.outputs.next()).value.unwrap();
+  val b = (await second.outputs.next()).value.unwrap();
+
+  stdio.stdout.write(a.value);
+  stdio.stdout.write("|");
+  stdio.stdout.write(b.value);
+
+  await first.get_done();
+  await second.get_done();
+  return;
+}

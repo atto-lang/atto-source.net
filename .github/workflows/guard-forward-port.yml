@@ -1,0 +1,41 @@
+name: Guard dual-form current-main guest
+on:
+  pull_request:
+    paths:
+      - 'compiler/**'
+      - 'runtime/**'
+      - 'host/**'
+      - 'ci/test-guard-dual-form-net.sh'
+      - 'tests/fixtures/guard-dual-form-v1/**'
+      - '.github/workflows/guard-forward-port.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  guest:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            profile: coreclr
+          - runner: macos-15
+            profile: macos-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Execute exact-head guard guests and denials
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git log -1 --format='%H %T'
+          bash -n ci/test-guard-dual-form-net.sh
+          bash ci/test-guard-dual-form-net.sh "${{ matrix.profile }}"

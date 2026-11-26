@@ -1,0 +1,27 @@
+// ACTOR-REPLY-06/07: future compiler acceptance target, NOT_EXECUTED.
+// Expected reply stream: Some(1), Some(2), then normal None/EOF.
+// This bounded fixture requires at least two stream-item credits.
+define class SubscribeUpdates implements StreamRequest<int> as
+    const int topic_id;
+end
+
+define actor Publisher receives SubscribeUpdates sends int as
+    receive(SubscribeUpdates request) {
+        const out = reply_to(request);
+        out.try_send(1);
+        out.try_send(2);
+        out.close();
+    }
+end
+
+pub susp fnc consume_updates(ActorRef<Publisher> publisher): int {
+    match publisher.send(SubscribeUpdates(7)) over
+        on Ok(stream) -> {
+            match await stream.receive() over
+                on Ok(Some(value)) -> return value;
+                on _ -> return 0;
+            end
+        }
+        on Err(_) -> return 0;
+    end
+}
