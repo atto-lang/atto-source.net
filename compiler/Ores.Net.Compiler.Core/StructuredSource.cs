@@ -2880,6 +2880,11 @@ public static partial class OresStructuredParser
                     left = CheckedBinary(at, op, left, right, IrValueType.Bool);
                 }
             }
+            // A standalone ! is valid in prefix position only. After a
+            // complete operand it cannot stand in for the contiguous !eq
+            // token; report the actual boundary before condition typing.
+            if (Current.Text == "!")
+                throw new FormatException($"Invalid infix operator at offset {Current.Offset}");
             return left;
         }
         private StructuredExpr Compare(int depth)
