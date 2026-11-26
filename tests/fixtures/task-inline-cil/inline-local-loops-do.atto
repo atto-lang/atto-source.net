@@ -5,8 +5,8 @@ pub fnc main(): int {
         loop {
             count = count + 1;
 
-            if count eq 2 do continue; fi
-            if count eq 5 do break; fi
+            do if count eq 2 then continue; fi
+            do if count eq 5 then break; fi
         }
 
         return 37;

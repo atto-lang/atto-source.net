@@ -1,7 +1,7 @@
 fnc scalar(bool first): int {
     let int count = 0;
     val int result = sync task<int> {
-        if first do
+        do if first then
             count = 2;
             return 40;
         fi
@@ -15,7 +15,7 @@ fnc tagged(bool first): int {
     let int count = 0;
     let Option<int> state = None;
     state = sync task<Option<int>> {
-        if first do
+        do if first then
             count = 2;
             return Some(40);
         fi

@@ -152,11 +152,13 @@ static class CrossBackendCheckedI64ParityTests
         {
             _ = OresParser.Parse(Header + "define pub fnc main(): int { return 7 / 2; }");
         }
-        catch (FormatException ex) when (ex.Message.Contains("Checked integer division requires typed guest error lowering", StringComparison.Ordinal))
+        catch (FormatException ex) when (ex.Message.Contains(
+            "Checked integer division requires typed guest error lowering; unsupported in the i64 source subset",
+            StringComparison.Ordinal))
         {
             return;
         }
-        throw new Exception("FAILED: int/int division was admitted without checked guest error lowering");
+        throw new Exception("FAILED: scalar int/int division bypassed checked guest error admission");
     }
 
     private static void OreslanaPortableScalarCilBoundary()

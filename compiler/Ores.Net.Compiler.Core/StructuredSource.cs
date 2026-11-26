@@ -184,6 +184,11 @@ public static partial class OresStructuredParser
     public static StructuredProgram Parse(string source)
         => ParseCore(source, null).Program;
 
+    // Explicit conditional-only strict source profile. Ordinary production and
+    // migration entry points retain their existing admitted syntax.
+    public static StructuredProgram ParseStrictConditionals(string source)
+        => ParseCore(source, null, strictConditionals: true).Program;
+
     internal static StructuredProgram ParseProduction(string source)
         => ParseCore(source, null, productionGuard: true).Program;
 
@@ -303,7 +308,8 @@ public static partial class OresStructuredParser
         string? frozenNamespace = null, List<StaticImportGraph.Export>? frozenExports = null,
         string frozenMethodPrefix = "", Func<string,string,StructuredFunction>? frozenResolve = null,
         bool productionGuard = false,
-        Func<string,string,Func<string,StructuredFunction>>? frozenNamespaceResolve = null)
+        Func<string,string,Func<string,StructuredFunction>>? frozenNamespaceResolve = null,
+        bool strictConditionals = false)
     {
         ValidateSourceInput(source);
         ActorPubSubSourceAdmission.RejectUnsupported(source);
@@ -620,7 +626,8 @@ public static partial class OresStructuredParser
                     $"Tuple-v2 explicit spread requires single-evaluation checked lowering at offset {tokens[i].Offset}");
         }
         RejectUnsupportedMacros(tokens);
-        var reader = new Reader(tokens, linking, productionGuard: productionGuard);
+        var reader = new Reader(tokens, linking, productionGuard: productionGuard,
+            strictConditionals: strictConditionals);
         if (frozenNamespace is not null)
             return reader.ReadFrozenNamespace(frozenNamespace, frozenExports!, frozenMethodPrefix, frozenResolve, frozenNamespaceResolve);
         return linking is null
@@ -1136,7 +1143,8 @@ public static partial class OresStructuredParser
     }
 
     private sealed partial class Reader(List<Token> tokens, LinkedModuleContext? linking = null,
-        bool allowCoreNamespace = false, bool productionGuard = false)
+        bool allowCoreNamespace = false, bool productionGuard = false,
+        bool strictConditionals = false)
     {
         private sealed record LocalBinding(IrValueType Type, StructuredBindingKind Kind,
             long? ConstantValue);
@@ -2293,18 +2301,21 @@ public static partial class OresStructuredParser
                 if (inverted)
                     condition = CheckedBinary(at, StructuredOperator.EqualBool,
                         condition, new StructuredBool(at, false), IrValueType.Bool);
-                // Statement conditionals accept braces, then ... fi, and
-                // do ... fi, with or without a separator before the keyword.
-                // Leading "do if" retains its separate then-only contract.
+                // Preserve the legacy '; do ... fi' and brace spellings;
+                // canonical 'then ... fi' may omit its optional semicolon.
                 bool semicolon = Take(";");
                 bool delimited = Take("then");
+                if (strictConditionals && (semicolon || (delimited && !explicitDo)))
+                    throw Error("E_CONDITIONAL_STATEMENT: use 'do if' (or do ifnot/unless) with then/fi, or a brace statement");
                 if (explicitDo && !delimited)
                     throw Error("do if/ifnot/unless requires 'then'");
-                if (!delimited && !explicitDo)
+                // Preserve modern-main legacy if/ifnot/unless ... then ...
+                // imperative acceptance; a separate spec migration must not
+                // silently break older compiled source.
+                if (semicolon && !delimited)
                 {
-                    delimited = Take("do");
-                    if (semicolon && !delimited)
-                        throw Error("Expected 'then' or 'do' after conditional separator");
+                    Expect("do");
+                    delimited = true;
                 }
                 IReadOnlyList<StructuredStmt> yes;
                 bool yesReturns;
@@ -2318,7 +2329,8 @@ public static partial class OresStructuredParser
                     else (no, noReturns) = Block(depth + 1);
                 }
                 if (delimited) Expect("fi");
-                else Take("fi"); // Legacy braced form remains valid without fi.
+                else if (Take("fi") && strictConditionals)
+                    throw Error("E_CONDITIONAL_STATEMENT: brace statements must not end with fi"); // Legacy entry points retain the optional fi.
                 return (new StructuredIf(at, condition, yes, no),
                     yesReturns && noReturns);
             }
@@ -2744,13 +2756,30 @@ public static partial class OresStructuredParser
             index++;
             Require(test, IrValueType.Bool, "Conditional test requires bool");
             bool ternaryWritebackRoot = conditionalWritebackRoot == expressionStart;
-            var yes = ReadConditionalStatementArm(depth + 1, ternaryWritebackRoot, ":");
+            var yes = ReadTernaryArm(depth + 1, ternaryWritebackRoot, ":");
             Expect(":");
-            var no = ReadConditionalStatementArm(depth + 1, ternaryWritebackRoot, ";",
+            var no = ReadTernaryArm(depth + 1, ternaryWritebackRoot, ";",
                 conditionalOnly: true);
             if (yes.Type != no.Type)
                 throw new FormatException($"Conditional result types differ at offset {at}");
             return CheckedConditional(at, test, yes, no);
+        }
+        // A direct brace always commits to an explicit result block.
+        // Single-result blocks require no new local lifetime or task writeback
+        // authority. Preserve the existing typed conditional CFG join.
+        private StructuredExpr ReadTernaryArm(int depth, bool root, string terminator,
+            bool conditionalOnly = false)
+        {
+            Budget(depth);
+            if (!Take("{"))
+                return ReadConditionalStatementArm(depth, root, terminator, conditionalOnly);
+            if (!Take("return") && !Take("^"))
+                throw Error("E_VALUE_ARM: ternary block requires explicit return or ^; lexical prefixes are not lowered");
+            var value = ReadConditionalStatementArm(depth + 1, false, "}");
+            Take(";");
+            if (!Take("}"))
+                throw Error("E_VALUE_ARM: single-result ternary block requires closing '}'");
+            return value;
         }
         private StructuredExpr LogicalOr(int depth)
         {

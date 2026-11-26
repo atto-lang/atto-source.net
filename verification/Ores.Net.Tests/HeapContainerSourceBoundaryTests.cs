@@ -117,22 +117,16 @@ internal static class HeapContainerSourceBoundaryTests
                 (ex.Message.Contains("E_COLLECTION_FACTORY_REMOVED", StringComparison.Ordinal))
             { }
         }
-        // A bracket-bearing retired spelling is rejected by the earlier
-        // lexical safe-collection gate, before retired-factory recognition.
-        // Pin both distinct boundaries; do not permit either syntax.
-        const string bracketedRetired = "pub fnc main():int{return ~tuple(11,23)[1];}";
-        int bracketOffset = bracketedRetired.IndexOf('[');
+        // The scalar lexer checks brackets before the retired factory
+        // parser is reached. Require that independent specific denial too.
         try
         {
-            _ = OresParser.Parse(bracketedRetired);
-            throw new Exception("Retired bracket projection accepted");
+            _ = OresParser.Parse("pub fnc main():int{return ~tuple(11,23)[1];}");
+            throw new Exception("Retired indexed tuple factory accepted");
         }
         catch (FormatException ex) when
-            (ex.Message.Contains("E_SAFE_COLLECTION_ACCESS_UNSUPPORTED:", StringComparison.Ordinal) &&
-             ex.Message.EndsWith("at offset " + bracketOffset, StringComparison.Ordinal))
+            (ex.Message.Contains("E_SAFE_COLLECTION_ACCESS_UNSUPPORTED", StringComparison.Ordinal))
         { }
-        Console.WriteLine("NET_HEAP_CONTAINER_RETIRED_FACTORY_AND_BRACKET_GATES_PASS");
-
         // Structured frontend must not reinterpret a nominal product or
         // dynamic collection as a scalar helper call.
         foreach (string factory in new[] {

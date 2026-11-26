@@ -1,7 +1,7 @@
 pub fnc main(): int {
     loop {
         val int value = sync task<int> {
-            if true do continue; fi
+            do if true then continue; fi
             return 42;
         };
         return value;
