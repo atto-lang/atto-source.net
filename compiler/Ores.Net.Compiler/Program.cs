@@ -85,7 +85,8 @@ bool validEnumCompile = args.Length == 4 &&
 bool validStructuredCheck = args.Length == 2 && args[0] == "check-structured";
 bool validStructuredCompile = args.Length == 4 &&
     args[0] == "compile-structured" && args[2] == "--out";
-bool validDurableCounter = args.Length == 4 && args[0] == "emit-durable-counter-v1" && args[2] == "--out";
+bool scalarCodec = args.Length == 4 && args[0] == "emit-durable-scalar-codec-v1" && args[2] == "--out";
+bool validDurableCounter = scalarCodec || (args.Length == 4 && args[0] == "emit-durable-counter-v1" && args[2] == "--out");
 bool validEmitActorSource = args.Length == 4 && args[0] == "emit-actor-csharp" && args[2] == "--out";
 bool validEmitHttpActors = args.Length == 4 && args[0] == "emit-http-actors-csharp" && args[2] == "--out";
 // This separate mode only binds the verified external receive slice of the
@@ -199,16 +200,16 @@ try
         !string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase) &&
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
         throw new FormatException("Static-facts export requires a .atto or .ores source file");
-    var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts);
+    var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts || validDurableCounter);
     if (validDurableCounter)
     {
         if (Path.GetExtension(args[1]) != ".atto" || Path.GetExtension(args[3]) != ".cs")
-            throw new ArgumentException("usage: oresnet emit-durable-counter-v1 input.atto --out path/Counter.g.cs");
+            throw new ArgumentException("usage: oresnet "+args[0]+" input.atto --out path/Codec.g.cs");
         // Unlike normal managed-source publication, require a fresh output
         // path: a rejected source must not leave a previously admitted guest.
         if (File.Exists(args[3]) || Directory.Exists(args[3]))
             throw new FormatException("E_DURABLE_COUNTER_ACTOR_ABI: output must not exist");
-        WriteAtomicSource(args[3], OresParser.EmitDurableCounterV1(source));
+        WriteAtomicSource(args[3], scalarCodec ? OresParser.EmitDurableScalarV1(source) : OresParser.EmitDurableCounterV1(source));
         return 0;
     }
     if (validEmitHttpActors)

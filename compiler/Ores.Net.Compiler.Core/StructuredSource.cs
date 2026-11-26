@@ -914,6 +914,8 @@ public static partial class OresStructuredParser
         private bool previousWasWith;
         private bool previousWasString;
         private bool previousWasSync;
+        private string previousToken = "", beforePreviousToken = "";
+        private bool insideBooleanLiteralPack;
         private bool previousWasConst;
         private bool sawTupleDeclaration;
         public Token Read()
@@ -975,7 +977,22 @@ public static partial class OresStructuredParser
             // structured/linked parser, including when Option<int> is enabled.
             // Only standalone source following a lexical const Tuple declaration
             // may defer bracket admission to the verified static projection reader.
-            if (!(allowStaticTupleProjection && sawTupleDeclaration))
+            // Brackets remain denied everywhere except the tightly scoped
+            // named Boolean literal pack. Reader independently validates
+            // the intrinsic identity, types, arity and literal-only shape.
+            bool booleanPackBracket = false;
+            if (ch == '[' && !insideBooleanLiteralPack && previousToken == "(" &&
+                beforePreviousToken is ("And" or "Or" or "Xor"))
+            {
+                insideBooleanLiteralPack = true;
+                booleanPackBracket = true;
+            }
+            else if (ch == ']' && insideBooleanLiteralPack)
+            {
+                insideBooleanLiteralPack = false;
+                booleanPackBracket = true;
+            }
+            if (!booleanPackBracket && !(allowStaticTupleProjection && sawTupleDeclaration))
                 SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, offset);
             // Injection changes ownership and lifetime authority. The scalar
             // CIL bootstrap cannot treat an annotation as harmless metadata.
@@ -997,7 +1014,9 @@ public static partial class OresStructuredParser
             if (ch is '\'' or '"' or '\u0060')
             {
                 index = QuotedSourceSyntax.Scan(source, offset);
-                return new Token(source[offset..index], offset);
+                beforePreviousToken = previousToken;
+                previousToken = source[offset..index];
+                return new Token(previousToken, offset);
             }
             if (Digit(ch))
             {
@@ -1143,7 +1162,7 @@ public static partial class OresStructuredParser
             // Preserve the earlier != / !eq recognition and the separate
             // fail-closed macro and ownership admission gates.
             else if (ch == '!') index++;
-            else if ("()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
+            else if (booleanPackBracket || "()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
                 (ch == '|' && precededByString) ||
                 (allowStaticTupleProjection && sawTupleDeclaration && ch is ('[' or ']')) ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
@@ -1167,6 +1186,8 @@ public static partial class OresStructuredParser
             previousWasSync = tokenText == "sync";
             sawTupleDeclaration |= previousWasConst && tokenText == "Tuple";
             previousWasConst = tokenText == "const";
+            beforePreviousToken = previousToken;
+            previousToken = tokenText;
             return new Token(tokenText, offset);
         }
     }
@@ -1268,11 +1289,12 @@ public static partial class OresStructuredParser
             if (depth > MaxDepth) throw Error("Structured syntax nesting exceeds limit");
         }
         private readonly HashSet<int> verifiedTupleBrackets = new();
+        private readonly HashSet<int> verifiedBooleanPackBrackets = new();
         public StructuredProgram ReadProgram()
         {
             var program = ReadDeclarations(true);
             foreach (var token in tokens)
-                if (token.Text is "[" or "]" && !verifiedTupleBrackets.Contains(token.Offset))
+                if (token.Text is "[" or "]" && !verifiedTupleBrackets.Contains(token.Offset) && !verifiedBooleanPackBrackets.Contains(token.Offset))
                     SafeCollectionSourceAdmission.RejectUnverifiedBracket(token.Text[0], token.Offset);
             return program;
         }
@@ -3505,6 +3527,53 @@ public static partial class OresStructuredParser
             {
                 if (localBinding) throw Error("Local value is not a statically bound callable");
                 var target=frozenTarget;
+                // Only the unqualified, unshadowed core gates are admitted.
+                // Frozen/linking profiles keep ordinary resolved dispatch.
+                if (target is null && linking is null && !frozenProvider &&
+                    (name is "And" or "Or" or "Xor") && !visible.ContainsKey(name))
+                {
+                    int packOpen = Current.Offset;
+                    bool pack = Take("[");
+                    var operands = new List<StructuredExpr>();
+                    if (Current.Text != (pack ? "]" : ")"))
+                    {
+                        do
+                        {
+                            if (operands.Count >= 32)
+                                throw Error("Boolean reduction operand budget exceeded");
+                            var operand = Expr(depth + 1);
+                            Require(operand, IrValueType.Bool, name + " requires bool operands");
+                            // Only literal packs in this profile. No premature
+                            // lazy evaluation of effectful array construction.
+                            if (pack && operand is not StructuredBool)
+                                throw Error("Boolean array pack requires bool literals");
+                            operands.Add(operand);
+                        }
+                        while (Take(","));
+                    }
+                    if (pack)
+                    {
+                        int packClose = Current.Offset;
+                        Expect("]");
+                        verifiedBooleanPackBrackets.Add(packOpen);
+                        verifiedBooleanPackBrackets.Add(packClose);
+                    }
+                    Expect(")");
+                    if (!pack && operands.Count < 2)
+                        throw Error(name + " requires at least two scalar operands");
+                    if (operands.Count == 0)
+                        return new StructuredBool(offset, name == "And");
+                    var op = name switch
+                    {
+                        "And" => StructuredOperator.LogicalAnd,
+                        "Or" => StructuredOperator.LogicalOr,
+                        _ => StructuredOperator.LogicalXor
+                    };
+                    var result = operands[0];
+                    for (int i = 1; i < operands.Count; i++)
+                        result = CheckedBinary(offset, op, result, operands[i], IrValueType.Bool);
+                    return result;
+                }
                 if (target is null&&!visible.TryGetValue(name, out target))
                     throw new FormatException(
                         $"Undefined, recursive or forward typed helper call at offset {offset}");
