@@ -16,7 +16,7 @@ internal static class SelectContinuationFenceSelfTest
         throw new Exception("select continuation fence admitted " + why);
     }
 
-    public static void Run()
+    public static void Run(bool print = true)
     {
         Reject<ArgumentOutOfRangeException>(
             () => _ = new SelectContinuationFence(generation: 0),
@@ -305,6 +305,6 @@ internal static class SelectContinuationFenceSelfTest
         Require(failingDispatch.Executing == 0 && failingDispatch.Advance(1),
             "failing callback retires execution credit");
 
-        Console.WriteLine("Select continuation fence lifecycle checks passed");
+        if (print) Console.WriteLine("Select continuation fence lifecycle checks passed");
     }
 }
