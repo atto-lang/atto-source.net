@@ -207,8 +207,9 @@ public static partial class OresStructuredParser
                 if (token.Text == "guard") return true;
                 if (guardOnly) continue;
                 if (token.Text is "/" or "Option" or "Some" or "None" or "Result" or "trap" or "trap!" or "throw" or "throw!" or
-                    "panic" or "panic!" or "raise" or "raise!" or "match" ||
+                    "panic" or "panic!" or "raise" or "raise!" or "match" or "if" or "ifnot" or "unless" ||
                     (previous == "sync" && token.Text == "task") ||
+                    (beforePrevious == "fnc" && token.Text == "<") ||
                     (beforePrevious == "Integer" && previous == "." && token.Text is "rem" or "mod"))
                     return true;
                 beforePrevious = previous;
@@ -1230,6 +1231,8 @@ public static partial class OresStructuredParser
             ? new(StringComparer.Ordinal) : new(linking.Bindings, StringComparer.Ordinal);
         private readonly Dictionary<string, StructuredFunction> exports = new(StringComparer.Ordinal);
         private readonly List<string> functionOrder = linking is null ? new() : new(linking.MethodOrder);
+        // Closed source-local single-int generic identity specialization.
+        private readonly Dictionary<string, string> scalarGenericParameters = new(StringComparer.Ordinal);
         private string? declaredModule;
         private bool namespaceHeader;
         private int index, statements, loopDepth;
@@ -1593,7 +1596,8 @@ public static partial class OresStructuredParser
                 bool trapped = Take("trap") || Take("trap!");
                 if (Current.Text is "class" or "actor")
                     throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
-                if (!Take("fnc"))
+                bool ordinaryFunction = Take("fnc");
+                if (!ordinaryFunction)
                 {
                     if (frozenProvider) throw Error("E_UNSUPPORTED: frozen provider supports ordinary root functions only");
                     Expect("routine");
@@ -1605,6 +1609,54 @@ public static partial class OresStructuredParser
                 // ordinary public CIL method reachable through imports.
                 if (name == "init")
                     throw Error("module init requires once-only reachable initialization lowering");
+                if (Take("<"))
+                {
+                    // Admit only a provably parametric identity body. No
+                    // runtime generic ABI, reflection, or erased fallback.
+                    if (!ordinaryFunction || !entry || exposed || trapped ||
+                        linking is not null || frozenProvider || declaredModule is not null ||
+                        name == "main" || visible.ContainsKey(name) ||
+                        scalarGenericParameters.Count >= 16 || functions.Count >= MaxHelpers)
+                        throw Error("E_GENERIC_UNSUPPORTED: private root identity profile required");
+                    string generic = Name();
+                    if (generic == name || generic == "_" || generic == "void")
+                        throw Error("E_GENERIC_BINDER: invalid type binder");
+                    Expect(">");
+                    Expect("(");
+                    string parameter;
+                    if (Current.Text == generic &&
+                        index + 1 < tokens.Count && tokens[index + 1].Text != ":")
+                    {
+                        Expect(generic);
+                        parameter = Name();
+                    }
+                    else
+                    {
+                        parameter = Name();
+                        Expect(":");
+                        Expect(generic);
+                    }
+                    if (parameter == generic || parameter == name || parameter == "_")
+                        throw Error("E_GENERIC_BINDER: invalid value binder");
+                    Expect(")");
+                    if (!Take("->")) Expect(":");
+                    Expect(generic);
+                    Expect("{");
+                    Expect("return");
+                    Expect(parameter);
+                    Expect(";");
+                    Expect("}");
+                    var read = new StructuredRead(at, parameter, IrValueType.I64);
+                    var identity = new StructuredFunction(name,
+                        Array.AsReadOnly(new[] { new StructuredParameter(parameter, IrValueType.I64) }),
+                        IrValueType.I64, read,
+                        Array.AsReadOnly<StructuredStmt>(new StructuredStmt[] { new StructuredReturn(at, read) }));
+                    scalarGenericParameters.Add(name, generic);
+                    functions.Add(name, identity);
+                    visible.Add(name, identity);
+                    functionOrder.Add(name);
+                    continue;
+                }
                 Expect("(");
                 if (Current.Text == "(")
                     throw Error("Tuple-v2 shorthand parameter requires typed tuple ownership/ABI lowering");
@@ -2508,6 +2560,9 @@ public static partial class OresStructuredParser
                     throw Error("E_CONDITIONAL_STATEMENT: use 'do if' (or do ifnot/unless) with then/fi, or a brace statement");
                 if (explicitDo && !delimited)
                     throw Error("do if/ifnot/unless requires 'then'");
+                // Legacy production entry only; strict conditionals retain their canonical grammar.
+                if (!strictConditionals && !explicitDo && !delimited && !semicolon)
+                    delimited = Take("do");
                 // Preserve modern-main legacy if/ifnot/unless ... then ...
                 // imperative acceptance; a separate spec migration must not
                 // silently break older compiled source.
@@ -3557,7 +3612,23 @@ public static partial class OresStructuredParser
                     if (localBinding) throw Error("Qualified access on local values requires nominal type lowering");
                     name += "." + Name();
                 }
-            if (Take("("))
+            bool explicitGeneric = false;
+            bool scalarGeneric = scalarGenericParameters.TryGetValue(name, out string? genericParameter);
+            if (scalarGeneric && !localBinding && Take("<"))
+            {
+                explicitGeneric = true;
+                if (index + 1 < tokens.Count && tokens[index + 1].Text == "=")
+                {
+                    string label = Name();
+                    Expect("=");
+                    if (label != genericParameter)
+                        throw Error("E_GENERIC_BINDER: unknown named generic parameter");
+                }
+                Expect("int");
+                Expect(">");
+                Expect("(");
+            }
+            if (explicitGeneric || Take("("))
             {
                 if (localBinding) throw Error("Local value is not a statically bound callable");
                 var target=frozenTarget;
@@ -3618,6 +3689,13 @@ public static partial class OresStructuredParser
                     {
                         if (args.Count >= MaxParameters)
                             throw Error("Typed helper call argument budget exceeded");
+                        if (scalarGeneric && index + 1 < tokens.Count && tokens[index + 1].Text == ":")
+                        {
+                            string label = Name();
+                            Expect(":");
+                            if (args.Count != 0 || label != target.Parameters[0].Name)
+                                throw Error("E_GENERIC_BINDER: invalid named runtime argument");
+                        }
                         args.Add(args.Count < target.Parameters.Count
                             ? ExpectedExpr(depth + 1, target.Parameters[args.Count].Type)
                             : Expr(depth + 1));

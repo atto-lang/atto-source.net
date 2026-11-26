@@ -147,16 +147,20 @@ static class Check
         using (var pool = new SharedReactorPool(io, 2, 2))
         {
             io.Pool = pool;
-            int accepted = 0, finished = 0, entered = 0;
+            int accepted = 0, entered = 0;
+            int[] executions = new int[4001];
+            bool[] admitted = new bool[4000];
             var producers = new Thread[4];
             for (int i = 0; i < producers.Length; ++i)
             {
+                int producer = i;
                 producers[i] = new Thread(() => {
                     Interlocked.Increment(ref entered);
                     for (int j = 0; j < 1000; ++j)
                     {
-                        if (pool.TrySubmit(() => Interlocked.Increment(ref finished)))
-                            Interlocked.Increment(ref accepted);
+                        int id = producer * 1000 + j;
+                        admitted[id] = pool.TrySubmit(() => Interlocked.Increment(ref executions[id]));
+                        if (admitted[id]) Interlocked.Increment(ref accepted);
                         else Thread.Yield();
                     }
                 });
@@ -165,8 +169,12 @@ static class Check
             Until(() => Volatile.Read(ref entered) == 4 && Volatile.Read(ref accepted) > 0);
             pool.Dispose();
             foreach (var producer in producers) producer.Join();
-            Require(Volatile.Read(ref accepted) == Volatile.Read(ref finished));
-            Require(!pool.TrySubmit(() => {}));
+            Require(pool.Completed == Volatile.Read(ref accepted));
+            for (int id = 0; id < admitted.Length; ++id)
+                Require(Volatile.Read(ref executions[id]) == (admitted[id] ? 1 : 0));
+            Require(!pool.TrySubmit(() => Interlocked.Increment(ref executions[4000])));
+            pool.Dispose();
+            Require(Volatile.Read(ref executions[4000]) == 0);
             Require(Volatile.Read(ref io.Active) == 0);
         }
         // A failed poll seals admission and drains accepted work without repoll.
