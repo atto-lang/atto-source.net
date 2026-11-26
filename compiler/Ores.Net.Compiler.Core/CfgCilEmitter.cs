@@ -56,7 +56,13 @@ internal static class CfgCilEmitter
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
-        CilEmitter.EmitLibraryModuleCore(outputFile, module,
+        CilEmitter.PublishLibraryBytes(outputFile,BuildLibrary(module));
+    }
+
+    internal static byte[] BuildLibrary(VerifiedCfgModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        return CilEmitter.BuildLibraryModuleCore(module,
             (graph, metadata, bodies, handles, guest) =>
                 WriteMethod(graph, metadata, bodies, handles, guest));
     }

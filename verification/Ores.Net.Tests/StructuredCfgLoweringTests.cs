@@ -284,6 +284,37 @@ internal static class StructuredCfgLoweringTests
     public static void Run()
     {
         NegatedDoIfAotControlFlow();
+        Check("""
+            fnc main(): int {
+                val bool a = Xor(true, false);
+                val bool b = And(true, false);
+                val bool c = Or(true, false);
+                val bool d = Xor([true, false]);
+                val bool e = And([true, false, true, true, true]);
+                val bool f = Or([true, false, true, false]);
+                return (a && !b && c && d && !e && f &&
+                    And([]) && !Or([]) && !Xor([]) &&
+                    And([true]) && !Or([false]) && Xor([true]) &&
+                    Xor(true,true,true) && !Xor(true,true)) ? 42 : 7;
+            }
+            """, 42, "six named gate declarations and pack identities");
+        Check("fnc main():int{let int x=9223372036854775807;" +
+            "return (!And(false,x+1>0) && Or(true,x+1>0)) ? 42 : 7;}",
+            42, "named scalar short circuit");
+        CheckOverflow("fnc main():int{let int x=9223372036854775807;" +
+            "return Xor(false,x+1>0,true) ? 42 : 7;}", "named XOR eager RHS");
+        foreach (string gate in new[]{"And","Or","Xor"})
+        foreach (string args in new[]{"","true","1,2","false,1","true,1","[true,1]",
+            "[[true]]","[true],[false]","[1 eq 1,false]"})
+        {
+            bool rejected = false;
+            try { _ = OresStructuredCfgLowering.Lower(
+                $"fnc main():int{{return {gate}({args}) ? 42 : 7;}}"); }
+            catch (FormatException) { rejected = true; }
+            if (!rejected) throw new Exception("Invalid named gate accepted: " + gate + "(" + args + ")");
+        }
+
+
         // These cases pass the real structured typed CFG + generated CIL
         // reference interpreter. They do not claim native host execution.
         CheckModule("""
@@ -529,6 +560,38 @@ internal static class StructuredCfgLoweringTests
             "compile-time aggregate cannot escape as scalar");
         Reject("fnc main():int{const a=record{foo:2};const b=record{...a,foo:true};return b.foo;}",
             "record bool cannot return as int");
+        Check("fnc main():int{const Record<infer R> r=(a=1,b=true);const Record<R> r2=(b=false,a=10);const Tuple<infer T> t=(true,1);const Tuple<T> t2=(false,12);const struct<infer S> s={a:1};const struct<S> s2={a:20};return r2.a+t2[1]+s2.a;}",
+            42, "named scalar aggregate types through real structured CFG and CIL");
+        Check("fnc main():int{const Record r=(a=10);const Tuple t=(true,12);const struct s={a:20};return r.a+t[1]+s.a;}",
+            42, "bare aggregate annotations create no named type");
+        Check("fnc main():int{const Tuple t=(true,42);return t[1];}", 42, "checked constant tuple projection");
+        foreach (string tail in new[] { "return t[2];", "return t[-1];", "return t[0+1];", "let int i=1;return t[i];", "return values[0];", "return [1,2][0];", "return t[1][0];", "return t[1]; } ]" })
+            Reject("fnc main():int{const Tuple t=(true,42);" + tail + "}", "no unchecked collection or dynamic tuple projection: " + tail);
+        Reject("fnc main():int{const Record<infer> r=(a=1);return 0;}", "bare infer invalid");
+        foreach (string name in new[] { "select", "await", "Pointer", "ActorMail",
+            "ReadLoan", "AtomicInt", "RwLock", "boolean", "String", "while" })
+            Reject("fnc main():int{const Record<infer " + name + "> r=(a=1);return 0;}",
+                "reserved aggregate type cannot disappear during lowering: " + name);
+        Reject("fnc main():int{const Record<infer R> select=(a=1);return 0;}",
+            "reserved aggregate local");
+        Reject("fnc main():int{const struct<infer S> s={await:1};return 0;}",
+            "reserved aggregate field");
+        Check("fnc main():int{const Record<infer If> r=(a=1);const Record<If> s=(a=42);return s.a;}",
+            42, "case-sensitive type alias remains legal");
+        Check("fnc main():int{const Record<infer R> r=(a=1,b=true);const Record<R> r2=(b=false,a=11);const Tuple<infer T> t=(true,1);const Tuple<T> t2=(false,14);const struct<infer S> s={a:1};const struct<S> s2={a:23};return r2.a+t2[1]+s2.a;}",
+            48, "named shape reuse observes the second values");
+
+        Reject("fnc main():int{const Record<Missing> r=(a=1);return 0;}", "unknown aggregate alias");
+        Reject("fnc main():int{const Record<infer R> r=(a=1);const Tuple<infer R> t=(1,2);return 0;}", "duplicate alias");
+        Reject("fnc main():int{const Record<infer R> r=(a=1);const Record<R> r2=(a=true);return 0;}", "record field type mismatch");
+        Reject("fnc main():int{const Record<infer R> r=(a=1);const Record<R> r2=(a=1,b=2);return 0;}", "closed record extra field");
+        Reject("fnc main():int{const Record<infer R> r=(a=1,b=2);const Record<R> r2=(a=1);return 0;}", "closed record missing field");
+        Reject("fnc main():int{const Record<infer R> r=(a=1,a=2);return 0;}", "duplicate named field");
+        Reject("fnc main():int{const Tuple<infer T> t=(1,true);const Tuple<T> t2=(true,1);return 0;}", "tuple slot mismatch");
+        Reject("fnc main():int{const Tuple<infer T> t=(1,true);const Tuple<T> t2=(1);return 0;}", "tuple arity mismatch");
+        Reject("fnc main():int{const struct<infer S> s={a:1};const Record<S> r=(a=1);return 0;}", "aggregate kind mismatch");
+        Reject("fnc main():int{const Tuple<infer T> t=(1,true);const r=infer record{...t,x:1};return r.x;}", "tuple cannot spread as record");
+        Reject("fnc main():int{const Record r=(a=1);const Record<R> r2=(a=2);return 0;}", "anonymous record does not bind type");
         // Runtime-valued immutable rows snapshot scalars into private verified
         // SSA places: later mutation of the original local cannot change them.
         Check("fnc main():int{let int source=20;val row=infer struct{x:source,y:28};source=99;return row.x+row.y;}",
