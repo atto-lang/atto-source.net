@@ -16,7 +16,7 @@ public static partial class OresParser
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576 || !HasVerifiedRefinementPrefix(source)) return null;
-        var tokens = Tokenize(source);
+        var tokens = Tokenize(source, strictGuards: strict);
         RejectUnsupportedInvertedClasses(tokens);
         var reader = new Reader(tokens, DotnetHostImportPolicy.DenyAll, source, null) { StrictVerifiedI64 = strict };
         var prelude = reader.ParseVerifiedPrelude();
