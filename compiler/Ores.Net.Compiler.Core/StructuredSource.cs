@@ -3321,6 +3321,46 @@ public static partial class OresStructuredParser
             {
                 if (localBinding) throw Error("Local value is not a statically bound callable");
                 var target=frozenTarget;
+                // Only the unqualified, unshadowed core gates are admitted.
+                // Frozen/linking profiles keep ordinary resolved dispatch.
+                if (target is null && linking is null && !frozenProvider &&
+                    (name is "And" or "Or" or "Xor") && !visible.ContainsKey(name))
+                {
+                    bool pack = Take("[");
+                    var operands = new List<StructuredExpr>();
+                    if (Current.Text != (pack ? "]" : ")"))
+                    {
+                        do
+                        {
+                            if (operands.Count >= 32)
+                                throw Error("Boolean reduction operand budget exceeded");
+                            var operand = Expr(depth + 1);
+                            Require(operand, IrValueType.Bool, name + " requires bool operands");
+                            // Only literal packs in this profile. No premature
+                            // lazy evaluation of effectful array construction.
+                            if (pack && operand is not StructuredBool)
+                                throw Error("Boolean array pack requires bool literals");
+                            operands.Add(operand);
+                        }
+                        while (Take(","));
+                    }
+                    if (pack) Expect("]");
+                    Expect(")");
+                    if (!pack && operands.Count < 2)
+                        throw Error(name + " requires at least two scalar operands");
+                    if (operands.Count == 0)
+                        return new StructuredBool(offset, name == "And");
+                    var op = name switch
+                    {
+                        "And" => StructuredOperator.LogicalAnd,
+                        "Or" => StructuredOperator.LogicalOr,
+                        _ => StructuredOperator.LogicalXor
+                    };
+                    var result = operands[0];
+                    for (int i = 1; i < operands.Count; i++)
+                        result = CheckedBinary(offset, op, result, operands[i], IrValueType.Bool);
+                    return result;
+                }
                 if (target is null&&!visible.TryGetValue(name, out target))
                     throw new FormatException(
                         $"Undefined, recursive or forward typed helper call at offset {offset}");
