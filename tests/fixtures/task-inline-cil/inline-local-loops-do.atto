@@ -1,0 +1,16 @@
+pub fnc main(): int {
+    let int count = 0;
+
+    val int result = sync task<int> {
+        loop {
+            count = count + 1;
+
+            do if count eq 2 then continue; fi
+            do if count eq 5 then break; fi
+        }
+
+        return 37;
+    };
+
+    return result + count;
+}

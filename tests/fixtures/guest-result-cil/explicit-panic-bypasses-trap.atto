@@ -1,0 +1,5 @@
+fnc fail(): int { panic! new Error("explicit terminal panic"); }
+pub fnc main(): int {
+  val result = trap! fail();
+  return result.unwrap_or(42);
+}

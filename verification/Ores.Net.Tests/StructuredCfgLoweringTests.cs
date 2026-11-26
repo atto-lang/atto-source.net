@@ -180,7 +180,18 @@ internal static class StructuredCfgLoweringTests
         int offset = source.LastIndexOf(spelling, StringComparison.Ordinal);
         if (offset < 0 || source[offset] != '!')
             throw new Exception("Missing operator boundary in fixture: " + label);
-        RejectWithDiagnostic(source, "Invalid character at offset " + offset, label);
+        // Standalone ! now lexes as unary Boolean negation. In these
+        // infix fixtures the preceding integer remains the condition and
+        // must be rejected, never interpreted as != or !eq.
+        int conditionEnd = offset;
+        while (conditionEnd > 0 && char.IsWhiteSpace(source[conditionEnd - 1]))
+            conditionEnd--;
+        int conditionStart = conditionEnd;
+        while (conditionStart > 0 && char.IsAsciiDigit(source[conditionStart - 1]))
+            conditionStart--;
+        if (conditionStart == conditionEnd)
+            throw new Exception("Missing integer condition: " + label);
+        RejectWithDiagnostic(source, "If condition must be bool at offset " + conditionStart, label);
     }
 
     private static void NegatedDoIfAotControlFlow()
@@ -239,8 +250,23 @@ internal static class StructuredCfgLoweringTests
             7, "ifnot-value");
         Check("fnc main():int{return unless true then 7 else 9 fi;}",
             9, "unless-value");
-        Reject("fnc main():int{loop{if true then break; fi}return 0;}",
-            "keyword value-if cannot contain break");
+        const string legacy = "fnc main():int{loop{if true then break; fi}return 0;}";
+        Check(legacy, 0, "migration-only keyword statement");
+        try
+        {
+            _ = OresStructuredCfgLowering.LowerStrictConditionals(legacy);
+            throw new Exception("Strict conditional CFG incorrectly admitted a bare keyword statement");
+        }
+        catch (FormatException ex) when (ex.Message.Contains("E_CONDITIONAL_STATEMENT", StringComparison.Ordinal)) { }
+        foreach (string head in new[] { "if", "ifnot", "unless" })
+        {
+            var strict = OresStructuredCfgLowering.LowerStrictConditionals(
+                "fnc main():int{do " + head + " true then return 42; else return 42; fi}");
+            if (CfgReferenceEvaluator.Evaluate(strict) != 42)
+                throw new Exception("Strict conditional CFG mismatch: " + head);
+        }
+        Reject("fnc main():int{return if true then break; else 0 fi;}",
+            "value-if cannot contain break");
         Reject("fnc main():int{do ifnot false then break; fi return 0;}",
             "break outside loop");
     }
@@ -503,6 +529,35 @@ internal static class StructuredCfgLoweringTests
             "compile-time aggregate cannot escape as scalar");
         Reject("fnc main():int{const a=record{foo:2};const b=record{...a,foo:true};return b.foo;}",
             "record bool cannot return as int");
+        Check("fnc main():int{const Record<infer R> r=(a=1,b=true);const Record<R> r2=(b=false,a=10);const Tuple<infer T> t=(true,1);const Tuple<T> t2=(false,12);const struct<infer S> s={a:1};const struct<S> s2={a:20};return r2.a+t2[1]+s2.a;}",
+            42, "named scalar aggregate types through real structured CFG and CIL");
+        Check("fnc main():int{const Record r=(a=10);const Tuple t=(true,12);const struct s={a:20};return r.a+t[1]+s.a;}",
+            42, "bare aggregate annotations create no named type");
+        Reject("fnc main():int{const Record<infer> r=(a=1);return 0;}", "bare infer invalid");
+        foreach (string name in new[] { "select", "await", "Pointer", "ActorMail",
+            "ReadLoan", "AtomicInt", "RwLock", "boolean", "String", "while" })
+            Reject("fnc main():int{const Record<infer " + name + "> r=(a=1);return 0;}",
+                "reserved aggregate type cannot disappear during lowering: " + name);
+        Reject("fnc main():int{const Record<infer R> select=(a=1);return 0;}",
+            "reserved aggregate local");
+        Reject("fnc main():int{const struct<infer S> s={await:1};return 0;}",
+            "reserved aggregate field");
+        Check("fnc main():int{const Record<infer If> r=(a=1);const Record<If> s=(a=42);return s.a;}",
+            42, "case-sensitive type alias remains legal");
+        Check("fnc main():int{const Record<infer R> r=(a=1,b=true);const Record<R> r2=(b=false,a=11);const Tuple<infer T> t=(true,1);const Tuple<T> t2=(false,14);const struct<infer S> s={a:1};const struct<S> s2={a:23};return r2.a+t2[1]+s2.a;}",
+            48, "named shape reuse observes the second values");
+
+        Reject("fnc main():int{const Record<Missing> r=(a=1);return 0;}", "unknown aggregate alias");
+        Reject("fnc main():int{const Record<infer R> r=(a=1);const Tuple<infer R> t=(1,2);return 0;}", "duplicate alias");
+        Reject("fnc main():int{const Record<infer R> r=(a=1);const Record<R> r2=(a=true);return 0;}", "record field type mismatch");
+        Reject("fnc main():int{const Record<infer R> r=(a=1);const Record<R> r2=(a=1,b=2);return 0;}", "closed record extra field");
+        Reject("fnc main():int{const Record<infer R> r=(a=1,b=2);const Record<R> r2=(a=1);return 0;}", "closed record missing field");
+        Reject("fnc main():int{const Record<infer R> r=(a=1,a=2);return 0;}", "duplicate named field");
+        Reject("fnc main():int{const Tuple<infer T> t=(1,true);const Tuple<T> t2=(true,1);return 0;}", "tuple slot mismatch");
+        Reject("fnc main():int{const Tuple<infer T> t=(1,true);const Tuple<T> t2=(1);return 0;}", "tuple arity mismatch");
+        Reject("fnc main():int{const struct<infer S> s={a:1};const Record<S> r=(a=1);return 0;}", "aggregate kind mismatch");
+        Reject("fnc main():int{const Tuple<infer T> t=(1,true);const r=infer record{...t,x:1};return r.x;}", "tuple cannot spread as record");
+        Reject("fnc main():int{const Record r=(a=1);const Record<R> r2=(a=2);return 0;}", "anonymous record does not bind type");
         // Runtime-valued immutable rows snapshot scalars into private verified
         // SSA places: later mutation of the original local cannot change them.
         Check("fnc main():int{let int source=20;val row=infer struct{x:source,y:28};source=99;return row.x+row.y;}",
