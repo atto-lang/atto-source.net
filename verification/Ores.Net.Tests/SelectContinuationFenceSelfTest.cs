@@ -246,6 +246,38 @@ internal static class SelectContinuationFenceSelfTest
             "old ticket cannot claim successor generation");
         Require(successor.Close(), "successor cleanup");
 
+        // Same bounded mixed-lease churn as the JavaScript profile.
+        var mixed = new SelectContinuationFence(maxTickets: 64);
+        var prior = Array.Empty<SelectContinuationFence.Ticket>();
+        for (var round = 0; round < 256; round++)
+        {
+            var tickets = Enumerable.Range(0, 64)
+                .Select(_ => mixed.Register(mixed.Generation)).ToArray();
+            var leases = tickets.Take(32)
+                .Select(t => mixed.TryClaim(t) ?? throw new Exception("claim failed")).ToArray();
+            Require(mixed.Executing == 32 && mixed.PendingTickets == 32,
+                "mixed physical and pending credit");
+            Reject<InvalidOperationException>(() => _ = mixed.Register(mixed.Generation),
+                "mixed over-capacity");
+            Require(!mixed.Advance(mixed.Generation), "live execution fences rollover");
+            foreach (var stale in prior)
+                Require(mixed.TryClaim(stale) is null && !stale.Close(), "stale ticket cannot retire new slot");
+            foreach (var pending in tickets.Skip(32))
+                Require(pending.Close(), "pending slot retirement");
+            var fresh = Enumerable.Range(0, 32)
+                .Select(_ => mixed.Register(mixed.Generation)).ToArray();
+            Parallel.ForEach(leases, lease =>
+            {
+                Require(lease.Close() && !lease.Close(), "exactly-once lease release");
+            });
+            Require(mixed.Executing == 0 && mixed.PendingTickets == 32,
+                "mixed credit after physical release");
+            Require(mixed.Advance(mixed.Generation) && mixed.PendingTickets == 0,
+                "rollover clears only pending slots");
+            prior = tickets.Concat(fresh).ToArray();
+        }
+        Require(mixed.Close() && mixed.RetirementReady, "final mixed retirement");
+
         Console.WriteLine("Select continuation fence lifecycle checks passed");
     }
 }
