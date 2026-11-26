@@ -51,7 +51,7 @@ public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64,
     EqualBool, NotEqualBool, LogicalAnd, LogicalOr, LogicalXor,
     // atto-spec bitwise-and-stream-operators-v1: <<<, >>> and infix ashr.
     ShiftLeft, ShiftRightLogical, ShiftRightArithmetic,
-    Divide, EqualGuestError, NotEqualGuestError, EqualGuestText, NotEqualGuestText, Remainder, Modulo }
+    Divide, EqualGuestError, NotEqualGuestError, EqualGuestText, NotEqualGuestText, Remainder, Modulo, BitXor }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
@@ -1118,7 +1118,9 @@ public static partial class OresStructuredParser
             else if (ch == '^')
             {
                 // The reader admits single caret only in return position.
-                index += index + 1 < source.Length && source[index + 1] == '^' ? 2 : 1;
+                // Longest contiguous caret operator first; trivia cannot synthesize ^^=.
+                index += index + 2 < source.Length && source[index + 1] == '^' && source[index + 2] == '=' ? 3 :
+                    index + 1 < source.Length && source[index + 1] == '^' ? 2 : 1;
             }
             else if (ch == '!' && index + 2 < source.Length &&
                      source[index + 1] == 'e' && source[index + 2] == 'q' &&
@@ -2617,9 +2619,18 @@ public static partial class OresStructuredParser
                     $"E_IMMUTABLE_REBIND: Cannot reassign {binding.Kind.ToString().ToLowerInvariant()} binding '{variable}' at offset {variableAt}");
             if (inlineValueBindingFloor is int floor && scopes.Take(floor).Any(scope => scope.ContainsKey(variable)))
                 throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: value-context sync task cannot yet assign a surrounding local");
-            Expect("=");
-            var assigned = ReadStatementValue(depth + 1, binding.Type, allowWriteback: true);
+            bool compoundXor = Take("^^=");
+            if (!compoundXor) Expect("=");
+            if (compoundXor && binding.Type != IrValueType.I64)
+                throw Error("Compound XOR requires a mutable int local");
+            // A compound RHS must not acquire the special complete-statement
+            // writeback permission of an ordinary assignment. Preserve the
+            // existing lexical task, suspension and ownership gates.
+            var assigned = ReadStatementValue(depth + 1, binding.Type, allowWriteback: !compoundXor);
             Require(assigned, binding.Type, "Assignment has wrong type");
+            if (compoundXor)
+                assigned = CheckedBinary(variableAt, StructuredOperator.BitXor,
+                    new StructuredRead(variableAt, variable, IrValueType.I64), assigned, IrValueType.I64);
             Expect(";");
             return (new StructuredSet(at, variable, assigned), false);
         }
@@ -2805,6 +2816,7 @@ public static partial class OresStructuredParser
                         StructuredOperator.Divide => checked(left / right),
                         StructuredOperator.Remainder => Ores.Net.Runtime.StrictSigned64Arithmetic.Rem(left, right),
                         StructuredOperator.Modulo => Ores.Net.Runtime.StrictSigned64Arithmetic.Mod(left, right),
+                        StructuredOperator.BitXor => left ^ right,
                         StructuredOperator.ShiftLeft => left << ConstantShiftDistance(right),
                         StructuredOperator.ShiftRightLogical => (long)((ulong)left >> ConstantShiftDistance(right)),
                         StructuredOperator.ShiftRightArithmetic => left >> ConstantShiftDistance(right),
@@ -3094,7 +3106,7 @@ public static partial class OresStructuredParser
         {
             Budget(depth);
             var left = LogicalAnd(depth + 1);
-            while (Current.Text is "xor" or "^^")
+            while (Current.Text == "xor")
             {
                 int at = Current.Offset;
                 index++;
@@ -3109,12 +3121,12 @@ public static partial class OresStructuredParser
         private StructuredExpr LogicalAnd(int depth)
         {
             Budget(depth);
-            var left = Equal(depth + 1);
+            var left = IntegerXor(depth + 1);
             while (Current.Text is "and" or "&&")
             {
                 int at = Current.Offset;
                 index++;
-                var right = Equal(depth + 1);
+                var right = IntegerXor(depth + 1);
                 Require(left, IrValueType.Bool, "Logical operator requires bool operands");
                 Require(right, IrValueType.Bool, "Logical operator requires bool operands");
                 left = CheckedBinary(at, StructuredOperator.LogicalAnd,
@@ -3149,6 +3161,23 @@ public static partial class OresStructuredParser
                 $"Array<int>.{operation} index must be int");
             Expect(")");
             return OptionPostfix(new StructuredArrayGet(at, array, atIndex), depth);
+        }
+        // Equality binds more tightly than integer XOR, which binds more
+        // tightly than logical conjunction. Boolean punctuation XOR is invalid.
+        private StructuredExpr IntegerXor(int depth)
+        {
+            Budget(depth);
+            var left = Equal(depth + 1);
+            while (Current.Text == "^^")
+            {
+                int at = Current.Offset;
+                index++;
+                var right = Equal(depth + 1);
+                Require(left, IrValueType.I64, "Integer XOR requires int operands");
+                Require(right, IrValueType.I64, "Integer XOR requires int operands");
+                left = CheckedBinary(at, StructuredOperator.BitXor, left, right, IrValueType.I64);
+            }
+            return left;
         }
         private StructuredExpr Equal(int depth)
         {
@@ -3350,9 +3379,14 @@ public static partial class OresStructuredParser
                 return TaggedPostfix(new StructuredGuestError(offset, message), depth);
             }
             if (Current.Text == "Integer" && index + 2 < tokens.Count &&
-                tokens[index + 1].Text == "." && tokens[index + 2].Text is "rem" or "mod")
+                tokens[index + 1].Text == "." && tokens[index + 2].Text is "rem" or "mod" or "bitXor")
             {
-                var operation = tokens[index + 2].Text == "rem" ? StructuredOperator.Remainder : StructuredOperator.Modulo;
+                var operation = tokens[index + 2].Text switch
+                {
+                    "rem" => StructuredOperator.Remainder,
+                    "mod" => StructuredOperator.Modulo,
+                    _ => StructuredOperator.BitXor
+                };
                 index += 3;
                 Expect("(");
                 var left = Expr(depth + 1);
