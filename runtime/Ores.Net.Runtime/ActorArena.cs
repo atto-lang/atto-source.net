@@ -249,14 +249,7 @@ public sealed unsafe class ActorArena : IDisposable
     {
         ArgumentNullException.ThrowIfNull(task);
         var lease = AcquireExternalLease(turn);
-        return AwaitExternalCompletion(task, lease);
-
-        static async System.Threading.Tasks.Task AwaitExternalCompletion(
-            System.Threading.Tasks.Task pending, ExternalLease lifetime)
-        {
-            using (lifetime)
-                await pending.ConfigureAwait(false);
-        }
+        return ActorArenaExternalCompletion.Await(task, lease);
     }
 
     public System.Threading.Tasks.Task<T> TrackExternalCompletion<T>(
@@ -264,14 +257,7 @@ public sealed unsafe class ActorArena : IDisposable
     {
         ArgumentNullException.ThrowIfNull(task);
         var lease = AcquireExternalLease(turn);
-        return AwaitExternalCompletion(task, lease);
-
-        static async System.Threading.Tasks.Task<T> AwaitExternalCompletion(
-            System.Threading.Tasks.Task<T> pending, ExternalLease lifetime)
-        {
-            using (lifetime)
-                return await pending.ConfigureAwait(false);
-        }
+        return ActorArenaExternalCompletion.Await(task, lease);
     }
 
     private void ReleaseExternalLease()
@@ -393,5 +379,23 @@ public sealed unsafe class ActorArena : IDisposable
         {
             System.Threading.Monitor.Exit(_gate);
         }
+    }
+}
+
+/** Safe async boundary: no native pointer or turn authority crosses await. */
+internal static class ActorArenaExternalCompletion
+{
+    internal static async System.Threading.Tasks.Task Await(
+        System.Threading.Tasks.Task pending, ActorArena.ExternalLease lifetime)
+    {
+        using (lifetime)
+            await pending.ConfigureAwait(false);
+    }
+
+    internal static async System.Threading.Tasks.Task<T> Await<T>(
+        System.Threading.Tasks.Task<T> pending, ActorArena.ExternalLease lifetime)
+    {
+        using (lifetime)
+            return await pending.ConfigureAwait(false);
     }
 }
