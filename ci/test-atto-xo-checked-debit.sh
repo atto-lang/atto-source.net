@@ -30,9 +30,9 @@ while IFS='|' read -r id expected price shares fee op adjustment guest_source; d
   printf '%s\n' "$guest_source" >"$input"
   status=0
   if [[ "$mode" == coreclr ]]; then
-    dotnet run --project "$compiler" -c Release --no-build -- check "$input" |
+    dotnet run --project "$compiler" -c Release --no-build -- check-structured "$input" |
       grep -F 'verified CFG'
-    dotnet run --project "$compiler" -c Release --no-build -- compile "$input" \
+    dotnet run --project "$compiler" -c Release --no-build -- compile-structured "$input" \
       --out "$output/OresGenerated.dll"
     [[ -s "$output/OresGenerated.dll" ]]
     dotnet build "$host" -c Release --no-incremental -o "$output/app" \
@@ -41,7 +41,7 @@ while IFS='|' read -r id expected price shares fee op adjustment guest_source; d
     dotnet "$output/app/oreslang-app.dll" >"$output/stdout" 2>"$output/stderr" || status=$?
   else
     destination="artifacts/atto-xo-debit-$suffix-$id"
-    bash scripts/publish-macos.sh "$input" "$destination"
+    bash scripts/publish-macos.sh "$input" "$destination" --structured
     app="$destination/osx-arm64/oreslang-app"
     bash verification/assert-macos-native-release.sh "$app"
     env -i PATH=/usr/bin:/bin "$app" >"$output/stdout" 2>"$output/stderr" || status=$?
