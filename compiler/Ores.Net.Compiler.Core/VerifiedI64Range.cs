@@ -6,18 +6,45 @@ namespace Ores.Net.Compiler;
 internal readonly record struct VerifiedI64Range
 {
     private readonly long low, high;
+    private readonly byte holes;
 
-    public VerifiedI64Range(long low, long high)
+    public VerifiedI64Range(long low, long high) : this(low,high,0) { }
+
+    private VerifiedI64Range(long low, long high, byte holes)
     {
+        if (low > high) throw Empty();
+        while ((holes & Bit(low)) != 0) low++;
+        while ((holes & Bit(high)) != 0) high--;
         if (low > high) throw Empty();
         this.low = low;
         this.high = high;
+        this.holes = holes;
     }
 
     internal static VerifiedI64Range Full => new(long.MinValue, long.MaxValue);
     internal static VerifiedI64Range Point(long value) => new(value, value);
 
-    internal bool Includes(VerifiedI64Range actual) => low <= actual.low && high >= actual.high;
+    private static byte Bit(long n) => n == 0 ? (byte)1 : n == -1 ? (byte)2 : (byte)0;
+    internal bool Has(long n) => n >= low && n <= high && (holes & Bit(n)) == 0;
+    internal bool Includes(VerifiedI64Range actual) => low <= actual.low && high >= actual.high
+        && (!actual.Has(0) || Has(0)) && (!actual.Has(-1) || Has(-1));
+    internal VerifiedI64Range Join(VerifiedI64Range b) => new(Math.Min(low,b.low),Math.Max(high,b.high),
+        (byte)((!Has(0)&&!b.Has(0)?1:0)|(!Has(-1)&&!b.Has(-1)?2:0)));
+    internal VerifiedI64Range Restrict(string op,long n)
+    {
+        // Contradictory branches remain conservatively checked, never
+        // certified unreachable by an empty interval.
+        try {
+            if(op=="!=") {
+                if(!Has(n)) return this;
+                if(n==low) return n==long.MaxValue?this:new(low+1,high,holes);
+                if(n==high) return n==long.MinValue?this:new(low,high-1,holes);
+                return new(low,high,(byte)(holes|Bit(n)));
+            }
+            var r=Constrain(op=="=="?"eq":op,n);
+            return new(r.low,r.high,holes);
+        } catch(FormatException) { return this; }
+    }
 
     internal long Minimum => low;
     internal long Maximum => high;
@@ -60,8 +87,7 @@ internal readonly record struct VerifiedI64Range
                     c = (BigInteger)high * right.low, d = (BigInteger)high * right.high;
                 return Fits(BigInteger.Min(BigInteger.Min(a,b),BigInteger.Min(c,d)),
                     BigInteger.Max(BigInteger.Max(a,b),BigInteger.Max(c,d)));
-            case "/": return (right.low > 0 || right.high < 0)
-                && !(low == long.MinValue && right.low <= -1 && right.high >= -1);
+            case "/": return !right.Has(0) && !(Has(long.MinValue) && right.Has(-1));
             default: return false;
         }
     }
