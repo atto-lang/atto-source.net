@@ -1201,6 +1201,7 @@ public static partial class OresParser
             Literal => true,
             Unary unary => VersionedPureScalar(unary.Value),
             Binary binary => VersionedPureScalar(binary.Left) && VersionedPureScalar(binary.Right),
+            NamedBitXor xor => VersionedPureScalar(xor.Left) && VersionedPureScalar(xor.Right),
             _ => false
         };
 
@@ -1208,8 +1209,15 @@ public static partial class OresParser
         {
             CheckDepth(depth);
             Expression left = ParseAdd(depth);
-            while (Take("^^"))
+            while (Current.Text == "^^")
+            {
+                // The historical portable scalar-v1 contract rejects this spelling.
+                // Canonical unversioned and explicit v2 source use integer XOR.
+                if (languageVersion == 1)
+                    throw new FormatException($"Integer XOR requires canonical scalar syntax (language version 2) at offset {Current.Offset}");
+                Expect("^^");
                 left = new NamedBitXor(left, ParseAdd(depth));
+            }
             return left;
         }
 
