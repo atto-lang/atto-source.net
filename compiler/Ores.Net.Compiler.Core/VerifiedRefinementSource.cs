@@ -143,6 +143,7 @@ public static partial class OresParser
         private readonly Dictionary<string, RefinedQuantity> refinementAliases = new(StringComparer.Ordinal);
         private readonly Dictionary<string, RefinedQuantity> verifiedLocals = new(StringComparer.Ordinal);
         private readonly Dictionary<string, IReadOnlyCollection<string>> verifiedUpperBounds = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, RefinedQuantity> strictMutable = new(StringComparer.Ordinal);
         private readonly Dictionary<string, VerifiedFunction> verifiedFunctions = new(StringComparer.Ordinal);
 
         internal static bool IsVerifiedIdentifier(string name) => IsSourceIdentifier(name);
@@ -278,6 +279,7 @@ public static partial class OresParser
                     throw new FormatException("E_REFINEMENT_DUPLICATE: duplicate verified function");
                 verifiedLocals.Clear();
                 verifiedUpperBounds.Clear();
+                strictMutable.Clear();
                 Expect("(");
                 var parameters = new List<StructuredParameter>();
                 if (Current.Text != ")")
@@ -474,12 +476,71 @@ public static partial class OresParser
         {
             if(depth>16)throw new FormatException("E_VERIFY_UNSUPPORTED: strict return depth");
             int at=Current.Offset;
+            if(Take("let"))
+            {
+                var type=ReadRefinedType();
+                string local=ReadVerifiedName();
+                Expect("=");var value=VerifiedExpression(0);Expect(";");
+                type.Require(value.Type,"E_REFINEMENT_BINDING","mutable binding "+local);
+                if(!verifiedLocals.TryAdd(local,type with {Range=value.Type.Range}))
+                    throw new FormatException("E_REFINEMENT_DUPLICATE: duplicate mutable binding");
+                strictMutable.Add(local,type);
+                verifiedUpperBounds.Add(local,value.UpperBounds);
+                var tail=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
+                tail.Insert(0,new StructuredLet(at,local,IrValueType.I64,value.Expression,StructuredBindingKind.Let));
+                return tail;
+            }
+            if(IsSourceIdentifier(Current.Text)&&_index+1<tokens.Count&&tokens[_index+1].Text=="=")
+            {
+                string local=ReadVerifiedName();Expect("=");
+                if(!strictMutable.TryGetValue(local,out var type))
+                    throw new FormatException("E_VERIFY_UNSUPPORTED: assignment requires mutable binding");
+                var value=VerifiedExpression(0);Expect(";");
+                type.Require(value.Type,"E_REFINEMENT_BINDING","assignment "+local);
+                verifiedLocals[local]=type with {Range=value.Type.Range};
+                verifiedUpperBounds[local]=value.UpperBounds;
+                var tail=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
+                tail.Insert(0,new StructuredSet(at,local,value.Expression));
+                return tail;
+            }
+            if(Take("while"))
+            {
+                // Only one direct scalar update is admitted on each backedge.
+                // Scan the target then independently parse the entire guard/body.
+                int brace=_index;
+                while(brace<tokens.Count&&tokens[brace].Text!=""&&tokens[brace].Text!="{")brace++;
+                if(brace+2>=tokens.Count||tokens[brace+2].Text!="="||
+                   !strictMutable.TryGetValue(tokens[brace+1].Text,out var invariant))
+                    throw new FormatException("E_VERIFY_UNSUPPORTED: strict while requires one mutable update");
+                string local=tokens[brace+1].Text;
+                invariant.Require(verifiedLocals[local],"E_REFINEMENT_BINDING","loop entry "+local);
+                var header=SnapshotStrict();
+                header[local]=invariant;
+                // Relational facts about prior values cannot survive the backedge.
+                verifiedUpperBounds[local]=Array.Empty<string>();
+                var p=StrictCondition(header,0);
+                Expect("{");RestoreStrict(p.Yes);
+                if(ReadVerifiedName()!=local)throw new FormatException("E_VERIFY_UNSUPPORTED: wrong loop target");
+                Expect("=");var update=VerifiedExpression(0);Expect(";");
+                invariant.Require(update.Type,"E_REFINEMENT_BINDING","loop backedge "+local);
+                if(!Take("}"))throw new FormatException("E_VERIFY_UNSUPPORTED: one direct loop update only");
+                RestoreStrict(p.No);
+                var tail=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
+                tail.Insert(0,new StructuredWhile(at,p.Test,new StructuredStmt[]{new StructuredSet(at,local,update.Expression)}));
+                return tail;
+            }
             if(Take("if"))
             {
                 var p=StrictCondition(SnapshotStrict(),0);
+                var savedBounds=new Dictionary<string,IReadOnlyCollection<string>>(verifiedUpperBounds,StringComparer.Ordinal);
+                var savedMutable=new Dictionary<string,RefinedQuantity>(strictMutable,StringComparer.Ordinal);
                 Expect("{");RestoreStrict(p.Yes);
                 var yes=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
                 Expect("}");RestoreStrict(p.No);
+                verifiedUpperBounds.Clear();
+                foreach(var pair in savedBounds)verifiedUpperBounds.Add(pair.Key,pair.Value);
+                strictMutable.Clear();
+                foreach(var pair in savedMutable)strictMutable.Add(pair.Key,pair.Value);
                 bool hasElse=Take("else");if(hasElse)Expect("{");
                 var no=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
                 if(hasElse)Expect("}");
