@@ -143,12 +143,31 @@ internal static class CoreTypeRegistryTests
             "E_CORE_TYPE_ARITY", "Option requires an explicit type argument");
         Reject("fnc main():int{val Option<Box> value=None;return 42;}",
             "E_OPTION_I64_ONLY", "affine payload Option is fail-closed until typed drop/borrow lowering");
+        // Registry-wide lowering is still ContractOnly. The structured frontend
+        // separately admits a closed Result ABI; do not confuse these two gates.
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{val Result<int, Error> value=Ok(42);return value.unwrap();}") is not null,
+            "closed int/Error Result is admitted");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{val Result<int, String> value=Err(\"bad\");return value.unwrap_or(42);}") is not null,
+            "closed int/String Result is admitted");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{val Result<Option<int>, Error> value=Ok(Some(42));return value.unwrap().unwrap_or(0);}") is not null,
+            "closed Option<int>/Error Result is admitted");
         Reject("fnc main():int{val Result<int, int> value=Ok(42);return 42;}",
-            "E_CORE_TYPE_LOWERING_UNSUPPORTED", "Result is catalogued but not lowered");
+            "E_RESULT_ERROR_ABI_UNSUPPORTED", "unsupported integer error remains denied");
+        Reject("fnc main():int{val Result<bool, Error> value=Ok(true);return 42;}",
+            "E_RESULT_PAYLOAD_ABI_UNSUPPORTED", "unsupported bool success payload remains denied");
+        Reject("fnc main():int{val Result<Option<int>, String> value=Ok(Some(42));return 42;}",
+            "E_RESULT_ERROR_ABI_UNSUPPORTED", "unsupported Option/String ABI remains denied");
         Reject("fnc main():int{return Ok(42);}",
-            "E_CORE_TYPE_LOWERING_UNSUPPORTED", "Ok constructor is not lowered");
+            "Return value does not match function result type", "Ok cannot be coerced to int");
         Reject("fnc main():int{return Err(42);}",
-            "E_CORE_TYPE_LOWERING_UNSUPPORTED", "Err constructor is not lowered");
+            "Err requires a contextual Result success type", "Err cannot be inferred as int");
+        Reject("fnc main():int{val Result<int, String> value=Err(42);return 42;}",
+            "Err payload does not match", "typed Err cannot accept integer error");
+        Reject("fnc main():int{val Result<int, Error> value=Ok(true);return 42;}",
+            "Ok requires int or Option<int>", "typed Ok cannot accept boolean payload");
         Reject("fnc Option():int{return 42;}",
             "E_PRELUDE_SPOOF", "compiler-owned core identity cannot be forged");
         Reject("fnc main():int{val List<int> values=List();return 42;}",
