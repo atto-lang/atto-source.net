@@ -1029,8 +1029,18 @@ public static partial class OresStructuredParser
                       (index + 3 == source.Length ||
                        !(char.IsLetterOrDigit(source[index + 3]) ||
                          source[index + 3] == '_'))))
-                    throw new FormatException(
-                        $"OWNERSHIP_BANG_BACKEND_UNSUPPORTED: '{word}!' requires typed ownership and actor-arena Native AOT lowering at offset {offset}");
+                {
+                    // Only the checked structured scalar profile admits copy.
+                    // Borrow, move, share and linked-module ownership still fail closed.
+                    if (word != "copy" || moduleMode)
+                        throw new FormatException(
+                            $"OWNERSHIP_BANG_BACKEND_UNSUPPORTED: '{word}!' requires typed ownership and actor-arena Native AOT lowering at offset {offset}");
+                    index++;
+                    if (index < source.Length && source[index] == '!')
+                        index++;
+                    if (index < source.Length && source[index] == '!')
+                        throw new FormatException($"E_COPY_SYNTAX: at most two adjacent copy bangs at offset {offset}");
+                }
                 // The linked-module lexer also enforces the unsafe keyword
                 // reservation before typed module binding and CIL emission.
                 if (word == "unsafe")
@@ -3059,6 +3069,16 @@ public static partial class OresStructuredParser
 
                 throw new FormatException(
                     $"Runtime ownership operation requires typed lowering; unsupported in the .NET structured backend at offset {at}");
+            }
+            if (Take("copy!") || Take("copy!!"))
+            {
+                // I64 and Bool are identity-free values. Lower their copy to
+                // the existing typed expression exactly once; no reference
+                // or ownership capability is manufactured.
+                var operand = Unary(depth + 1);
+                if (operand.Type is not (IrValueType.I64 or IrValueType.Bool))
+                    throw new FormatException($"E_COPY_UNSUPPORTED_TYPE: non-scalar copy needs checked ownership lowering at offset {offset}");
+                return operand;
             }
             if (Take("+"))
             {

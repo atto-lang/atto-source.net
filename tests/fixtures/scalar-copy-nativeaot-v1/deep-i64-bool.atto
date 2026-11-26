@@ -1,0 +1,1 @@
+pub fnc main(): int { let bool yes = copy!! true; let int n = copy!! (19 + 23); if yes { return n; } return 0; }
