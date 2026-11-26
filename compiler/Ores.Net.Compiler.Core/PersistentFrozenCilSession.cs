@@ -13,6 +13,7 @@ namespace Ores.Net.Compiler;
 /// digests. Managed path APIs are NOT a hostile-filesystem sandbox. All
 /// cooperating builds use the same exclusive lock. No native binary caching,
 /// durable external rollback provider, or arbitrary artifact signing API.
+[System.Runtime.Versioning.SupportedOSPlatform("linux")]
 public sealed class PersistentFrozenCilSession
 {
     private readonly string root,scope,compiler,toolchain;
