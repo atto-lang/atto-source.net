@@ -20,7 +20,7 @@ internal static class StructuredCfgLoweringTests
         {
             try { _ = OresStructuredCfgLowering.Lower(invalid); }
             catch (FormatException) { continue; }
-            throw new Exception("Expected Unicode source rejection");
+            throw new Exception("Expected Unicode source rejection: " + Convert.ToHexString(Encoding.UTF8.GetBytes(invalid)));
         }
     }
 
