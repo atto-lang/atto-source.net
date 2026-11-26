@@ -10,7 +10,7 @@ host=host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj
 task_host=host/Ores.Net.TaskI64NativeHost/Ores.Net.TaskI64NativeHost.csproj
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
-fixtures=(inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal inline-writeback inline-suspends-marker inline-local-loops inline-assignment-writeback inline-shortcircuit-writeback inline-conditional-writeback inline-match-writeback inline-ternary-writeback inline-prefix-not inline-parenthesized-not)
+fixtures=(inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal inline-writeback inline-suspends-marker inline-immediate-await inline-local-loops inline-local-loops-do inline-early-conditional inline-multi-conditional inline-assignment-writeback inline-shortcircuit-writeback inline-conditional-writeback inline-match-writeback inline-ternary-writeback inline-prefix-not inline-parenthesized-not)
 failures=0
 
 # One exact compiler per lane, in a fresh private temporary directory.
@@ -82,6 +82,8 @@ for case in reject-inline-suspend:E_SYNC_TASK_SUSPEND reject-do-value:E_TASK_RET
     reject-long-marker-async:E_CALLABLE_MODIFIERS \
     reject-nested-task-loop-transfer:E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED \
     reject-task-loop-continue:E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED \
+    reject-task-loop-transfer-do:E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED \
+    reject-task-loop-continue-do:E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED \
     reject-assignment-nested-writeback:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
     reject-assignment-shortcircuit-writeback:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
     reject-assignment-inherited-floor:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
@@ -100,7 +102,8 @@ for case in reject-inline-suspend:E_SYNC_TASK_SUSPEND reject-do-value:E_TASK_RET
     reject-ternary-predicate-writeback:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
     'reject-inline-not-int:Logical not requires bool' \
     reject-inline-macro:NET_STRUCTURED_MACRO_EXPANDER_REQUIRED \
-    reject-inline-ownership-bang:OWNERSHIP_BANG_BACKEND_UNSUPPORTED \
+    reject-inline-ownership-bang:E_BANG_KEYWORD_WHITESPACE \
+    reject-inline-ownership-bang-spaced:OWNERSHIP_BANG_BACKEND_UNSUPPORTED \
     'reject-parenthesized-not-int:Logical not requires bool' \
     reject-spaced-macro:NET_STRUCTURED_MACRO_EXPANDER_REQUIRED \
     reject-adjacent-keyword-bang:NET_STRUCTURED_MACRO_EXPANDER_REQUIRED; do
