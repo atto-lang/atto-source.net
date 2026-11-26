@@ -230,8 +230,11 @@ public sealed unsafe class ActorArena : IDisposable
             RequireTurn(turn);
             if (_externalLeases == int.MaxValue)
                 throw new InvalidOperationException("actor arena external lease quota exhausted");
+            // Allocate the managed host lease before publishing its charge.
+            // Allocation failure must leave the arena's ownership ledger unchanged.
+            var lease = new ExternalLease(this);
             ++_externalLeases;
-            return new ExternalLease(this);
+            return lease;
         }
         finally
         {
@@ -249,7 +252,13 @@ public sealed unsafe class ActorArena : IDisposable
     {
         ArgumentNullException.ThrowIfNull(task);
         var lease = AcquireExternalLease(turn);
-        return ActorArenaExternalCompletion.Await(task, lease);
+        try { return ActorArenaExternalCompletion.Await(task, lease); }
+        catch
+        {
+            // A synchronous failure while constructing the host bridge must not pin the arena forever.
+            lease.Dispose();
+            throw;
+        }
     }
 
     public System.Threading.Tasks.Task<T> TrackExternalCompletion<T>(
@@ -257,7 +266,13 @@ public sealed unsafe class ActorArena : IDisposable
     {
         ArgumentNullException.ThrowIfNull(task);
         var lease = AcquireExternalLease(turn);
-        return ActorArenaExternalCompletion.Await(task, lease);
+        try { return ActorArenaExternalCompletion.Await(task, lease); }
+        catch
+        {
+            // A synchronous failure while constructing the host bridge must not pin the arena forever.
+            lease.Dispose();
+            throw;
+        }
     }
 
     private void ReleaseExternalLease()
