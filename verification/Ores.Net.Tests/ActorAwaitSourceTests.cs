@@ -37,6 +37,7 @@ internal static class ActorAwaitSourceTests
         Reject(source.Replace("mtd (AwaitCounter counter) add", "mtd (AwaitCounter counter) receive", StringComparison.Ordinal));
         Reject(source + "\nfnc extra(): int { return 0; }\n");
         foreach (bool serial in new[] { false, true }) RunProfile(serial);
+        RunExternalTcpCausalFrames();
         RunSourceProducer();
         CheckProducerLifecycle();
         RunTwoAwaits(fault: false);
@@ -52,6 +53,106 @@ internal static class ActorAwaitSourceTests
         Console.WriteLine("NET_TWO_AWAIT_ACTOR_FRAMES_TESTS_PASS");
         Console.WriteLine("NET_SOURCE_OWNED_ACTOR_TASK_TESTS_PASS");
         Console.WriteLine("NET_VERIFIED_ACTOR_AWAIT_FRAME_TESTS_PASS");
+    }
+
+    // Actual socket completion is supplied by the trusted host as Future<int>.
+    // This executes generated Atto frames, not source-level socket lowering.
+    private static async Task<long> ReadSocketByte(
+        System.Net.Sockets.TcpClient client, CancellationToken token)
+    {
+        var buffer = new byte[1];
+        await client.GetStream().ReadExactlyAsync(buffer.AsMemory(), token).ConfigureAwait(false);
+        return buffer[0];
+    }
+
+    private static void RunExternalTcpCausalFrames()
+    {
+        var timeout = TimeSpan.FromSeconds(10);
+        using var stop = new CancellationTokenSource();
+        using var ioDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+            using var peerA = new System.Net.Sockets.TcpClient();
+            peerA.ConnectAsync(System.Net.IPAddress.Loopback, port, ioDeadline.Token)
+                .AsTask().GetAwaiter().GetResult();
+            using var socketA = listener.AcceptTcpClientAsync(ioDeadline.Token)
+                .AsTask().GetAwaiter().GetResult();
+            using var peerB = new System.Net.Sockets.TcpClient();
+            peerB.ConnectAsync(System.Net.IPAddress.Loopback, port, ioDeadline.Token)
+                .AsTask().GetAwaiter().GetResult();
+            using var socketB = listener.AcceptTcpClientAsync(ioDeadline.Token)
+                .AsTask().GetAwaiter().GetResult();
+
+            var pendingA = ReadSocketByte(socketA, ioDeadline.Token);
+            var pendingB = ReadSocketByte(socketB, ioDeadline.Token);
+            Require(!pendingA.IsCompleted && !pendingB.IsCompleted, "both TCP reads pending");
+            var host = new OresVmHost(maxTenants: 1);
+            var tenant = host.CreateIsolate("tcp-causal", maxActors: 2, maxActorWorkers: 1);
+            host.Start(tenant);
+            var actorA = AwaitActor_AwaitCounter.Create(host, tenant, 1, true);
+            var actorB = AwaitActor_AwaitCounter.Create(host, tenant, 2, true);
+            var scheduler = host.CreateTrustedScheduler();
+            var frameA = new AwaitActor_AwaitCounter(0, pendingA);
+            var frameB = new AwaitActor_AwaitCounter(0, pendingB);
+            var startedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var startedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var resumedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var resumedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            OresVmHost.ActorPumpStep Start(AwaitActor_AwaitCounter frame,
+                OresVmHost.ActorDispatchScope scope, TaskCompletionSource started,
+                TaskCompletionSource resumed)
+            {
+                var step = frame.Start_add(scope);
+                Require(!step.Ready.IsCompleted, "frame started on pending TCP input");
+                started.TrySetResult();
+                return new OresVmHost.ActorPumpStep(step.Ready, next => {
+                    var result = step.Next(next);
+                    resumed.TrySetResult();
+                    return result;
+                });
+            }
+            var pumpA = scheduler.RunPumpAsync(tenant, actorA, AwaitActor_AwaitCounter.Layout,
+                (_, _) => throw new Exception("unexpected A DATA"),
+                scope => Start(frameA, scope, startedA, resumedA),
+                (_, _) => throw new Exception("unexpected A terminal"), stop.Token);
+            var pumpB = scheduler.RunPumpAsync(tenant, actorB, AwaitActor_AwaitCounter.Layout,
+                (_, _) => throw new Exception("unexpected B DATA"),
+                scope => Start(frameB, scope, startedB, resumedB),
+                (_, _) => throw new Exception("unexpected B terminal"), stop.Token);
+            try
+            {
+                scheduler.Enqueue(tenant, actorA);
+                startedA.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+                scheduler.Enqueue(tenant, actorB);
+                startedB.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+                Require(!pendingA.IsCompleted && !resumedA.Task.IsCompleted,
+                    "A must remain suspended while B runs");
+                peerB.GetStream().WriteByte(7);
+                resumedB.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+                Require(frameB.Result == 7 && !pendingA.IsCompleted && !resumedA.Task.IsCompleted,
+                    "B completed from external TCP before A was released");
+                peerA.GetStream().WriteByte(42);
+                resumedA.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+                Require(frameA.Result == 42, "A resumed from external TCP");
+            }
+            finally
+            {
+                stop.Cancel();
+                ioDeadline.Cancel();
+                try { Task.WhenAll(pumpA, pumpB).WaitAsync(timeout).GetAwaiter().GetResult(); }
+                catch (OperationCanceledException) { }
+            }
+            Require(host.ActorReceiveSnapshot(tenant, actorA).Live == 0 &&
+                host.ActorReceiveSnapshot(tenant, actorB).Live == 0, "both frame quotas retired");
+            host.RetireActor(tenant, actorA);
+            host.RetireActor(tenant, actorB);
+            host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+            Console.WriteLine("NET_EXTERNAL_TCP_CAUSAL_GENERATED_FRAMES_PASS");
+        }
+        finally { listener.Stop(); }
     }
 
     private static void RunSourceProducer()
