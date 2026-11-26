@@ -1,9 +1,9 @@
 fnc optional(bool present): Option<int> {
-  if present { return Some(42); } fi
+  if present { return Some(42); }
   return None;
 }
 fnc result_value(bool present): Result<int, String> {
-  if present { return Ok(42); } fi
+  if present { return Ok(42); }
   return Err("original");
 }
 pub fnc main(): int {
