@@ -1004,6 +1004,14 @@ public static partial class OresParser
             return Visit(expression, 0);
         }
         private string? _dotnetMathAlias;
+        private bool VerifiedHeaderHasNewline()
+        {
+            if (_index <= 0) return false;
+            int start = tokens[_index - 1].Offset + tokens[_index - 1].Text.Length;
+            int end = Current.Offset;
+            return start <= end && end <= source.Length &&
+                source.AsSpan(start, end - start).IndexOf('\n') >= 0;
+        }
         private Token Current => tokens[_index];
 
         private bool Take(string value)
