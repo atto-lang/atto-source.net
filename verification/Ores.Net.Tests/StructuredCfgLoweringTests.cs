@@ -284,6 +284,36 @@ internal static class StructuredCfgLoweringTests
     public static void Run()
     {
         NegatedDoIfAotControlFlow();
+        Check("""
+            fnc main(): int {
+                val bool a = Xor(true, false);
+                val bool b = And(true, false);
+                val bool c = Or(true, false);
+                val bool d = Xor([true, false]);
+                val bool e = And([true, false, true, true, true]);
+                val bool f = Or([true, false, true, false]);
+                return (a && !b && c && d && !e && f &&
+                    And([]) && !Or([]) && !Xor([]) &&
+                    And([true]) && !Or([false]) && Xor([true]) &&
+                    Xor(true,true,true) && !Xor(true,true)) ? 42 : 7;
+            }
+            """, 42, "six named gate declarations and pack identities");
+        Check("fnc main():int{let int x=9223372036854775807;" +
+            "return (!And(false,x+1>0) && Or(true,x+1>0)) ? 42 : 7;}",
+            42, "named scalar short circuit");
+        CheckOverflow("fnc main():int{let int x=9223372036854775807;" +
+            "return Xor(false,x+1>0,true) ? 42 : 7;}", "named XOR eager RHS");
+        foreach (string gate in new[]{"And","Or","Xor"})
+        foreach (string args in new[]{"","true","1,2","false,1","true,1","[true,1]",
+            "[[true]]","[true],[false]","[1 eq 1,false]"})
+        {
+            bool rejected = false;
+            try { _ = OresStructuredCfgLowering.Lower(
+                $"fnc main():int{{return {gate}({args}) ? 42 : 7;}}"); }
+            catch (FormatException) { rejected = true; }
+            if (!rejected) throw new Exception("Invalid named gate accepted: " + gate + "(" + args + ")");
+        }
+
         // These cases pass the real structured typed CFG + generated CIL
         // reference interpreter. They do not claim native host execution.
         CheckModule("""
