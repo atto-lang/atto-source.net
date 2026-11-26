@@ -33,6 +33,13 @@ if (args.Length == 1 && args[0] == "--static-select-admission")
     return;
 }
 
+if (args.Length == 1 && args[0] == "--attached-struct-target")
+{
+    AttachedStructTargetTests.Run();
+    return;
+}
+
+AttachedStructTargetTests.Run();
 DisjointFieldPlaceAdmissionTests.Run(); // reject-only; never guest parity
 ReadonlyShapeProjectionV1Tests.Run();
 NativeSourceIdentityV1SelfTest.Run();
