@@ -1002,15 +1002,7 @@ public unsafe sealed class ActorArena : IDisposable
                     if (found) throw new InvalidOperationException("Duplicate native reference proof during growth");
                     replacement[bucket] = entry;
                 }
-                Zero((byte*)_managedRef32Edges, _ref32ProofBytes);
-                NativeMemory.Free(_managedRef32Edges);
-                _budget.Refund(_ref32ProofBytes);
-                if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
-                    ActorArenaBudget.Process.Refund(_ref32ProofBytes);
             }
-            _managedRef32Edges = replacement;
-            _ref32ProofCapacity = capacity;
-            _ref32ProofBytes = bytes;
         }
         catch
         {
@@ -1022,6 +1014,22 @@ public unsafe sealed class ActorArena : IDisposable
             if (processReserved) ActorArenaBudget.Process.Refund(bytes);
             _budget.Refund(bytes);
             throw;
+        }
+
+        // Commit only after the replacement is complete. The rollback above
+        // never runs after publishing the new pointer or freeing the old one.
+        Ref32Proof* previous = _managedRef32Edges;
+        int previousBytes = _ref32ProofBytes;
+        _managedRef32Edges = replacement;
+        _ref32ProofCapacity = capacity;
+        _ref32ProofBytes = bytes;
+        if (previous != null)
+        {
+            Zero((byte*)previous, previousBytes);
+            NativeMemory.Free(previous);
+            _budget.Refund(previousBytes);
+            if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
+                ActorArenaBudget.Process.Refund(previousBytes);
         }
     }
 
