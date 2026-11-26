@@ -9,10 +9,11 @@ namespace Atto.Cil.Compiler;
 internal sealed class CountedReadyCompiler
 {
     private sealed record Value(string Type, string Code);
-    private sealed record Slot(string Type, string Code) { internal bool Moved; }
+    private sealed record Slot(string Type, string Code) { internal bool Moved; internal bool Mutable; }
     private readonly IReadOnlyList<string> tokens;
     private readonly Dictionary<string, Slot> slots = new(StringComparer.Ordinal);
     private int pos, budget = 4096, depth, countSites;
+    private string? outstanding;
     private static readonly HashSet<string> Reserved = new("pub suspends fnc main int bool val let const Channel Future Array new writech readch select nb await when fair first random default over end return if then fi true false".Split(' '), StringComparer.Ordinal);
     private string Peek => tokens[pos];
     private CountedReadyCompiler(string source) { tokens = new Parser(source, countedReady: true).CountedTokens; }
@@ -43,7 +44,7 @@ internal sealed class CountedReadyCompiler
     {
         if (Eat("int")) return "int";
         if (Eat("Channel")) { Need("<"); Need("int"); Need(">"); return "channel"; }
-        if (Eat("Future")) { Need("<"); Need("int"); Need(">"); return "future"; }
+        if (Eat("Future")) { Need("<"); if (Eat("Array")) { Need("<"); Need("int"); Need(">"); Need(">"); return "futureArray"; } Need("int"); Need(">"); return "future"; }
         if (Eat("Array")) { bool bracket = Eat("["); if (!bracket) Need("<"); Need("int"); Need(bracket ? "]" : ">"); return "array"; }
         throw Bad("unsupported lexical type");
     }
@@ -58,7 +59,7 @@ internal sealed class CountedReadyCompiler
             {
                 string op = Peek; pos++;
                 var right = Expr(Prec(op) + 1, binding);
-                if (op is "+" or "-" or "*") left = new("int", "checked((" + Check(left,"int") + ")" + op + "(" + Check(right,"int") + "))");
+                if (op is "+" or "-" or "*") left = new("int", (op == "+" ? "Add" : op == "-" ? "Sub" : "Mul") + "(" + Check(left,"int") + "," + Check(right,"int") + ")");
                 else if (op is "&&" or "||") left = new("bool", "((" + Check(left,"bool") + ")" + op + "(" + Check(right,"bool") + "))");
                 else left = new("bool", "((" + Check(left,"int") + ")" + op + "(" + Check(right,"int") + "))");
             }
@@ -69,19 +70,34 @@ internal sealed class CountedReadyCompiler
     private Value Primary(string? binding)
     {
         if (Eat("(")) { var v = Expr(0,binding); Need(")"); return v; }
-        if (Eat("-")) return new("int","checked(-(" + Check(Expr(7,binding),"int") + "))");
+        if (Eat("-")) return new("int","Neg(" + Check(Expr(7,binding),"int") + ")");
         if (Peek.Length > 0 && char.IsAsciiDigit(Peek[0])) return new("int", Literal().ToString(CultureInfo.InvariantCulture) + "L");
         if (binding is not null)
         {
-            if (Name() != binding) throw Bad("projection may reference only its binder");
+            string n = Name();
+            if (binding == "@count") return new("int",Get(n,"int").Code);
+            if (n != binding) throw Bad("projection may reference only its binder");
             return new("int","x");
         }
         if (Eat("await"))
         {
-            if (Eat("select")) return Counted();
-            var future = Get(Name(),"future"); future.Moved = true; return new("int","Observe(" + future.Code + ")");
+            bool legacy = Eat("nb");
+            if (Eat("select")) return Counted(true);
+            if (legacy) throw Bad("nb requires select");
+            string name = Name();
+            if (slots.TryGetValue(name,out var pending) && pending.Type == "futureArray" && !pending.Moved && outstanding == pending.Code)
+            {
+                pending.Moved = true; outstanding = null;
+                return new("array","Finish(" + pending.Code + ",owned)");
+            }
+            if (outstanding is not null) throw Bad("await outstanding counted batch first");
+            var future = Get(name,"future"); future.Moved = true; return new("int","Observe(" + future.Code + ")");
         }
-        if (Eat("readch")) return new("int","Read(" + Get(Name(),"channel").Code + ")");
+        if (Eat("readch"))
+        {
+            if (outstanding is not null) throw Bad("await outstanding counted batch before channel access");
+            return new("int","Read(" + Get(Name(),"channel").Code + ")");
+        }
         var n = Name();
         if (!slots.TryGetValue(n,out var s) || s.Moved) throw Bad("unknown or moved lexical binding");
         if (s.Type == "int") return new("int",s.Code);
@@ -92,10 +108,15 @@ internal sealed class CountedReadyCompiler
         }
         throw Bad("capability cannot escape scalar expression");
     }
-    private Value Counted()
+    private Value Counted(bool direct)
     {
+        if (outstanding is not null) throw Bad("await outstanding counted batch first");
         if (Eat("<")) { Need("int"); Need(">"); }
-        Need("("); int count = Small(16); Need(")");
+        Need("("); string count = Check(Expr(0,"@count"),"int"); Need(")");
+        bool literal = count.EndsWith("L",StringComparison.Ordinal) && long.TryParse(count[..^1],out _);
+        long constant = literal ? long.Parse(count[..^1],CultureInfo.InvariantCulture) : -1;
+        if (literal && constant > 16) throw Bad("SelectCountInvalid");
+        if (count.StartsWith("Neg(",StringComparison.Ordinal) && count.EndsWith("L)",StringComparison.Ordinal) && long.TryParse(count[4..^2],out var neg) && neg > 0) throw Bad("SelectCountInvalid");
         bool fair = Eat("fair"); if (!fair) Eat("first");
         bool over = Eat("over"); if (!over) Need("{");
         List<string> sources = [], projections = []; HashSet<Slot> futures = [];
@@ -109,29 +130,36 @@ internal sealed class CountedReadyCompiler
         }
         if (sources.Count == 0) throw Bad("at least one arm required");
         Need(over ? "end" : "}"); countSites++;
-        if (count == 0) return new("array","Batch(0, [], [], " + (fair ? "true" : "false") + ")");
-        foreach (var f in futures) f.Moved = true;
-        return new("array","Batch(" + count + ", [" + string.Join(",",sources) + "], [" + string.Join(",",projections) + "], " + (fair ? "true" : "false") + ")");
+        if (!literal || constant != 0) foreach (var f in futures) f.Moved = true;
+        string plan = literal && constant == 0 ? "static () => ([], [])" :
+            "() => ([" + string.Join(",",sources) + "], [" + string.Join(",",projections) + "])";
+        string start = "Start(" + count + "," + plan + "," + (fair ? "true" : "false") + ",owned)";
+        return direct ? new("array","Finish(" + start + ",owned)") : new("futureArray",start);
     }
-    private string Bind()
+    private string Bind(bool mutable = false)
     {
         string type = Type(), n = Name();
         if (slots.ContainsKey(n) || slots.Count >= 128) throw Bad("duplicate or excessive lexical binding");
+        if (mutable && type != "int") throw Bad("only scalar mutation admitted");
         Need("="); string code;
         if (type == "channel")
         {
+            if (outstanding is not null) throw Bad("await outstanding counted batch first");
             Need("Channel"); Need("."); Need("new"); Need("<"); Need("int"); Need(">"); Need("(");
             int cap = Small(64); if (cap == 0) throw Bad("zero capacity"); Need(")"); code = "new SelectableI64Channel(" + cap + ")";
         }
         else if (type == "future")
         {
+            if (outstanding is not null) throw Bad("await outstanding counted batch first");
             Need("select"); Need("<"); Need("int"); Need(">"); bool over = Eat("over"); if (!over) Need("{");
             Need("default"); Need(":"); Need("->"); Need("{"); Need("return");
             code = "Ready(static () => " + Check(Expr(0,"$no_binding"),"int") + ")";
             Need(";"); Need("}"); Need(over ? "end" : "}");
         }
+        else if (type == "futureArray") { Eat("nb"); Need("select"); code = Check(Counted(false),type); }
         else code = Check(Expr(),type);
-        Need(";"); string slot = "v" + slots.Count; slots.Add(n,new Slot(type,slot));
+        Need(";"); string slot = "v" + slots.Count; slots.Add(n,new Slot(type,slot){ Mutable=mutable });
+        if (type == "futureArray") outstanding = slot;
         return "var " + slot + "=" + code + ";";
     }
     private string Parse()
@@ -142,18 +170,22 @@ internal sealed class CountedReadyCompiler
         {
             if (statements.Count >= 256) throw Bad("statement quota");
             if (Eat("val")) statements.Add(Bind());
-            else if (Eat("writech")) { var s = Get(Name(),"channel"); Need(","); var v = Check(Expr(),"int"); Need(";"); statements.Add("Write(" + s.Code + "," + v + ");"); }
+            else if (Eat("let")) statements.Add(Bind(true));
+            else if (Eat("writech")) { if (outstanding is not null) throw Bad("await outstanding counted batch first"); var s = Get(Name(),"channel"); Need(","); var v = Check(Expr(),"int"); Need(";"); statements.Add("Write(" + s.Code + "," + v + ");"); }
             else if (Eat("if"))
             {
+                if (outstanding is not null) throw Bad("await outstanding counted batch before branching");
                 string cond = Check(Expr(),"bool"); Need("then"); Need("return");
                 var before = slots.Values.ToDictionary(s => s.Code,s => s.Moved);
                 string value = Check(Expr(),"int"); Need(";"); Need("fi");
                 foreach (var s in slots.Values) s.Moved = before[s.Code];
                 statements.Add("if(" + cond + ")return " + value + ";");
             }
+            else if (pos + 1 < tokens.Count && tokens[pos+1] == "=") { var s = Get(Name(),"int"); if (!s.Mutable) throw Bad("immutable binding"); Need("="); string v = Check(Expr(),"int"); Need(";"); statements.Add(s.Code+"="+v+";"); }
             else throw Bad("unsupported statement");
         }
         Need("return"); statements.Add("return " + Check(Expr(),"int") + ";"); Need(";"); Need("}");
+        if (outstanding is not null) throw Bad("outstanding batch must be awaited");
         if (Peek != "<eof>" || countSites == 0) throw Bad("one closed-world counted main required");
         return string.Join("\n", statements);
     }
@@ -163,15 +195,28 @@ internal sealed class CountedReadyCompiler
     private static long At(IReadOnlyList<long> a,int i) { if(i<0||i>=a.Count) throw new IndexOutOfRangeException("E_ARRAY_BOUNDS"); return a[i]; }
     private static SelectableI64Future Ready(Func<long> p) { var f=new SelectableI64Future(); try{f.Resolve(p());}catch(Exception e){f.Fail(e);} return f; }
     private static long Observe(SelectableI64Future f) { var s=f.SubscribeReady(static _=>{}); try{if(!f.TryCommit(s,out var r))throw new InvalidOperationException("E_READY_ONLY: Future would suspend"); if(r.Status!=SelectableI64Future.FutureStatus.Value)throw r.Error??new InvalidOperationException("Future failed"); return r.Value;}finally{s.Close();} }
-    private static IReadOnlyList<long> Batch(int n,object[] s,Func<long,long>[] p,bool fair) {
-      var b=new CountedSelectI64Batch(n,s,fair,p);
+    private static long Add(long a,long b)=>checked(a+b);
+    private static long Sub(long a,long b)=>checked(a-b);
+    private static long Mul(long a,long b)=>checked(a*b);
+    private static long Neg(long a)=>checked(-a);
+    private sealed record Pending(CountedSelectI64Batch Batch,int Count,int Arms);
+    private static Pending Start(long count,Func<(object[],Func<long,long>[])> plan,bool fair,HashSet<Pending> owned) {
+      if(count<0||count>16)throw new ArgumentOutOfRangeException(nameof(count),"SelectCountInvalid");
+      var (s,p)=count==0?(Array.Empty<object>(),Array.Empty<Func<long,long>>()):plan();
+      var record=new Pending(new CountedSelectI64Batch((int)count,s,fair,p),(int)count,s.Length);
+      owned.Add(record); return record;
+    }
+    private static IReadOnlyList<long> Finish(Pending record,HashSet<Pending> owned) {
+      var b=record.Batch;
       try {
-        for(int i=0;!b.Completion.IsCompleted&&i<2*(n+s.Length)+2;i++)
+        for(int i=0;!b.Completion.IsCompleted&&i<2*(record.Count+record.Arms)+2;i++)
           if(!b.Pump())throw new InvalidOperationException("E_READY_ONLY: selection would suspend");
         if(!b.Completion.IsCompleted)throw new InvalidOperationException("E_READY_ONLY: owner pump budget");
         return b.Completion.GetAwaiter().GetResult();
-      } finally { if(!b.Completion.IsCompleted)b.Cancel(); if(b.Completion.IsFaulted)_=b.Completion.Exception; }
+      } finally { Retire(record); owned.Remove(record); }
     }
+    private static void Retire(Pending record) { var b=record.Batch; if(!b.Completion.IsCompleted)b.Cancel(); if(b.Completion.IsFaulted)_=b.Completion.Exception; }
+    private static void Drain(HashSet<Pending> owned) { foreach(var record in owned)Retire(record); owned.Clear(); }
     """;
     internal static int Run(string input,string output)
     {
@@ -183,7 +228,7 @@ internal sealed class CountedReadyCompiler
             string source=File.ReadAllText(input,new UTF8Encoding(false,true));
             string body=new CountedReadyCompiler(source).Parse();
             string name="Guest_"+Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source))).ToLowerInvariant();
-            string text="using System;\nusing System.Collections.Generic;\nusing Ores.Net.Runtime;\npublic static class "+name+" {\n"+Helpers+"\npublic static long Run(){\n"+body+"\n}}\n";
+            string text="using System;\nusing System.Collections.Generic;\nusing Ores.Net.Runtime;\npublic static class "+name+" {\n"+Helpers+"\npublic static long Run(){\nvar owned=new HashSet<Pending>();\ntry{\n"+body+"\n}finally{Drain(owned);}\n}}\n";
             string final=Path.GetFullPath(output);temp=Path.Combine(Path.GetDirectoryName(final)!,"."+Guid.NewGuid().ToString("N")+".tmp");
             using (var stream=new FileStream(temp,FileMode.CreateNew,FileAccess.Write,FileShare.None))
             using (var writer=new StreamWriter(stream,new UTF8Encoding(false))) writer.Write(text);
