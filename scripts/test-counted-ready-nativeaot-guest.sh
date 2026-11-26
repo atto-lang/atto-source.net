@@ -60,8 +60,27 @@ for cond in '(1 == 2) && ((await f) == 20)' '(1 == 1) || ((readch a) == 42)'; do
   test ! -e "$work/guest/bad.cs"
   grep -F 'effect in condition' "$work/err"
 done
+# Canonical raw Future bindings infer the actual checked scalar/array slot.
+prefix='suspends fnc main(): int { const Channel<int> a = Channel.new<int>(1); writech a, 20; '
+body='const Future f = select { default: -> { return 20; } }; const Future batch = select(1) { when readch a: int n -> { return n; } }; const Array[int] values = await batch; const int extra = await select<int> { default: -> { return 2; } }; return (await f) + values[0] + extra; }'
+printf '%s%s\n' "$prefix" "$body" > "$work/raw-future.atto"
+class="$(dotnet "$work/compiler/Atto.Cil.Compiler.dll" --counted-ready-v1 "$work/raw-future.atto" "$work/guest/raw-future.cs")"
+[[ "$class" =~ ^Guest_[a-f0-9]{64}$ ]]
+echo "if ($class.Run() != 42L) throw new Exception(\"raw-future failed\"); Console.WriteLine(\"GUEST_PASS raw-future\");" >> "$work/guest/Program.cs"
+for body in \
+  'const Future f = 42; return 42; }' \
+  'const Future<int> f = select(1) { when readch a: int n -> { return n; } }; return 42; }' \
+  'const Future f = select { default: -> { return a; } }; return 42; }' \
+  'const Future b = select(1) { when readch a: int n -> { return n; } }; return 42; }' \
+  'const Future b = select(1) { when readch a: int n -> { return n; } }; const int wrong = await b; return wrong; }' \
+  'const Future b = select(1) { when readch a: int n -> { return n; } }; const Array[int] first = await b; const Array[int] second = await b; return first[0]; }'; do
+  printf '%s%s\n' "$prefix" "$body" > "$work/raw-negative.atto"
+  if dotnet "$work/compiler/Atto.Cil.Compiler.dll" --counted-ready-v1 "$work/raw-negative.atto" "$work/guest/bad.cs" > "$work/out" 2> "$work/err"; then exit 1; fi
+  test ! -e "$work/guest/bad.cs"
+  grep -F E_COUNTED_READY_PROFILE "$work/err"
+done
 dotnet publish "$work/guest/Guest.csproj" -c Release -r linux-x64 -o "$work/native" -warnaserror
 file "$work/native/Guest" | grep -F ELF
 "$work/native/Guest" | tee "$work/results"
-test "$(grep -c '^GUEST_PASS ' "$work/results")" = 10
+test "$(grep -c '^GUEST_PASS ' "$work/results")" = 11
 echo COUNTED_READY_NATIVEAOT_GUEST_PASS
