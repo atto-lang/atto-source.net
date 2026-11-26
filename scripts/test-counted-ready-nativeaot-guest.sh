@@ -30,7 +30,8 @@ test "$(git hash-object tests/fixtures/counted-ready-v1/reject-counted-dynamic-u
 test "$(git hash-object tests/fixtures/counted-ready-v1/counted-alias.atto)" = 324837078af3e7eeb9b619d0fb07142f0a0d6291
 test "$(git hash-object tests/fixtures/counted-ready-v1/counted-dynamic.atto)" = 7c9ea9270d766612de0d502147e0df31b0dc3454
 test "$(git hash-object tests/fixtures/counted-ready-v1/counted-dynamic-zero.atto)" = 4707b13d3daebe05ced967418ba120cf801e2d8c
-for name in counted-mixed-future-alias counted-multi-channel-fair counted-mixed-zero counted-three counted-zero counted-one counted-alias counted-dynamic counted-dynamic-zero; do
+test "$(git hash-object tests/fixtures/counted-ready-v1/counted-distinct-alias-projection.atto)" = 5baca9bb9eb4b98500cab770888a45fb60bbf10d
+for name in counted-distinct-alias-projection counted-mixed-future-alias counted-multi-channel-fair counted-mixed-zero counted-three counted-zero counted-one counted-alias counted-dynamic counted-dynamic-zero; do
   class="$(dotnet "$work/compiler/Atto.Cil.Compiler.dll" --counted-ready-v1 "tests/fixtures/counted-ready-v1/$name.atto" "$work/guest/$name.cs")"
   [[ "$class" =~ ^Guest_[a-f0-9]{64}$ ]]
   echo "if ($class.Run() != 42L) throw new Exception(\"$name failed\"); Console.WriteLine(\"GUEST_PASS $name\");" >> "$work/guest/Program.cs"
@@ -62,5 +63,5 @@ done
 dotnet publish "$work/guest/Guest.csproj" -c Release -r linux-x64 -o "$work/native" -warnaserror
 file "$work/native/Guest" | grep -F ELF
 "$work/native/Guest" | tee "$work/results"
-test "$(grep -c '^GUEST_PASS ' "$work/results")" = 9
+test "$(grep -c '^GUEST_PASS ' "$work/results")" = 10
 echo COUNTED_READY_NATIVEAOT_GUEST_PASS

@@ -178,7 +178,11 @@ internal sealed class CountedReadyCompiler
             else if (Eat("if"))
             {
                 if (outstanding is not null) throw Bad("await outstanding counted batch before branching");
-                pureCondition = true; string cond = Check(Expr(),"bool"); pureCondition = false; Need("then"); Need("return");
+                string cond;
+                pureCondition = true;
+                try { cond = Check(Expr(),"bool"); }
+                finally { pureCondition = false; }
+                Need("then"); Need("return");
                 var before = slots.Values.ToDictionary(s => s.Code,s => s.Moved);
                 string value = Check(Expr(),"int"); Need(";"); Need("fi");
                 foreach (var s in slots.Values) s.Moved = before[s.Code];
