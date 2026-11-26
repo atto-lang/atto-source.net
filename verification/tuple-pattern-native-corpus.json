@@ -1,0 +1,115 @@
+{
+  "schema": "atto.net.scalar-tuple-guest.v1",
+  "sourceBlob": "193249523cf18ef725f4900c30f3925c5bf8ce4b",
+  "positive": [
+    {
+      "id": "flat-three",
+      "source": "pub fnc main(): int { return (5, 3, 5) |> |(a, b, c)| -> a + b + c; }\n",
+      "expected": 13
+    },
+    {
+      "id": "order-weighted",
+      "source": "pub fnc main(): int { return (2, 7, 11) |> |(a, b, c)| -> 2*a + 3*b + 4*c; }\n",
+      "expected": 69
+    },
+    {
+      "id": "discard-middle",
+      "source": "pub fnc main(): int { return (5, 99, 8) |> |(a, _, c)| -> a + c; }\n",
+      "expected": 13
+    },
+    {
+      "id": "discard-first",
+      "source": "pub fnc main(): int { return (99, 8) |> |(_, b)| -> b + 3; }\n",
+      "expected": 11
+    },
+    {
+      "id": "discard-last",
+      "source": "pub fnc main(): int { return (6, 99) |> |(a, _)| -> a + 5; }\n",
+      "expected": 11
+    },
+    {
+      "id": "discard-all",
+      "source": "pub fnc main(): int { return (5, 8) |> |(_, _)| -> 19; }\n",
+      "expected": 19
+    },
+    {
+      "id": "singleton",
+      "source": "pub fnc main(): int { return (9,) |> |(a,)| -> a; }\n",
+      "expected": 9
+    },
+    {
+      "id": "empty",
+      "source": "pub fnc main(): int { return () |> |()| -> 7; }\n",
+      "expected": 7
+    },
+    {
+      "id": "typed-leaves",
+      "source": "pub fnc main(): int { return (5, 8) |> |(a: int, b: int)| -> a + b; }\n",
+      "expected": 13
+    },
+    {
+      "id": "parenthesized-stage",
+      "source": "pub fnc main(): int { return ((5, 8) |> |(a, b)| -> a + b) + 1; }\n",
+      "expected": 14
+    },
+    {
+      "id": "nested-scalar-stage",
+      "source": "pub fnc main(): int { return (5, 8) |> |(a, b)| -> ((a, 2) |> |(x, y)| -> x*y) + b; }\n",
+      "expected": 18
+    },
+    {
+      "id": "signed-values",
+      "source": "pub fnc main(): int { return (-5, 8, 12) |> |(a, b, c)| -> a + b + c; }\n",
+      "expected": 15
+    },
+    {
+      "id": "maximum-arity",
+      "source": "pub fnc main(): int { return (1, 2, 3, 4, 5, 6, 7, 8) |> |(a,b,c,d,e,f,g,h)| -> a+b+c+d+e+f+g+h; }\n",
+      "expected": 36
+    }
+  ],
+  "negative": [
+    {
+      "id": "reject-0",
+      "source": "pub fnc main(): int { return (1,2) |> |(a,a)| -> a; }\n"
+    },
+    {
+      "id": "reject-1",
+      "source": "pub fnc main(): int { return (1,2) |> |(a,b,c)| -> a; }\n"
+    },
+    {
+      "id": "reject-2",
+      "source": "pub fnc main(): int { return (1,) |> |(a)| -> a; }\n"
+    },
+    {
+      "id": "reject-3",
+      "source": "pub fnc main(): int { return (1,2) |> |(a,_)| -> _; }\n"
+    },
+    {
+      "id": "reject-4",
+      "source": "pub fnc main(): int { return (true,2) |> |(a,b)| -> a; }\n"
+    },
+    {
+      "id": "reject-5",
+      "source": "pub fnc main(): int { return (1,2) |> |(a,b)| -> missing; }\n"
+    },
+    {
+      "id": "reject-6",
+      "source": "pub fnc main(): int { return (1,2) |> |(_:int,b)| -> b; }\n"
+    },
+    {
+      "id": "reject-7",
+      "source": "pub fnc main(): int { return ((1,2),3) |> |(a,b)| -> b; }\n"
+    }
+  ],
+  "overflow": [
+    {
+      "id": "overflow-0",
+      "source": "pub fnc main(): int { return (9223372036854775807+1,8) |> |(_,b)| -> b; }\n"
+    },
+    {
+      "id": "overflow-1",
+      "source": "pub fnc main(): int { return (5,9223372036854775807+1) |> |(a,_)| -> a; }\n"
+    }
+  ]
+}
