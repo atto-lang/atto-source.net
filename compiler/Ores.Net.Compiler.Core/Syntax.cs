@@ -148,6 +148,9 @@ public static partial class OresParser
             // Original UTF-16 source must reject raw terminal controls in comments/literals.
             if (c == (char)0x001b || c == (char)0x007f)
                 throw new FormatException($"Source contains terminal control at offset {i}");
+            if (source[i] is '\u061c' or '\u200e' or '\u200f' or
+                >= '\u202a' and <= '\u202e' or >= '\u2066' and <= '\u2069')
+                throw new FormatException($"Source contains bidirectional Unicode control at offset {i}");
             if (char.IsHighSurrogate(c))
             {
                 if (i + 1 >= source.Length || !char.IsLowSurrogate(source[i + 1]))
