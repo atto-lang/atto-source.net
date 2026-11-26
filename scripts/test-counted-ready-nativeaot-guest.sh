@@ -27,7 +27,11 @@ test "$(git hash-object tests/fixtures/counted-ready-v1/reject-counted-default.a
 test "$(git hash-object tests/fixtures/counted-ready-v1/reject-counted-write.atto)" = 63fa3c9add56f3793e6d755f006cd3568acf1f04
 test "$(git hash-object tests/fixtures/counted-ready-v1/reject-counted-dynamic-bool.atto)" = 36cd372a5385e34f2e3bd8dd936e4e0491052633
 test "$(git hash-object tests/fixtures/counted-ready-v1/reject-counted-dynamic-unknown.atto)" = 0e61da7a98987ed5a182148538b35b8a890abf26
-for name in counted-mixed-future-alias counted-multi-channel-fair counted-mixed-zero counted-three counted-zero counted-one; do
+test "$(git hash-object tests/fixtures/counted-ready-v1/counted-alias.atto)" = 324837078af3e7eeb9b619d0fb07142f0a0d6291
+test "$(git hash-object tests/fixtures/counted-ready-v1/counted-dynamic.atto)" = 7c9ea9270d766612de0d502147e0df31b0dc3454
+test "$(git hash-object tests/fixtures/counted-ready-v1/counted-dynamic-zero.atto)" = 4707b13d3daebe05ced967418ba120cf801e2d8c
+test "$(git hash-object tests/fixtures/counted-ready-v1/counted-distinct-alias-projection.atto)" = 5baca9bb9eb4b98500cab770888a45fb60bbf10d
+for name in counted-distinct-alias-projection counted-mixed-future-alias counted-multi-channel-fair counted-mixed-zero counted-three counted-zero counted-one counted-alias counted-dynamic counted-dynamic-zero; do
   class="$(dotnet "$work/compiler/Atto.Cil.Compiler.dll" --counted-ready-v1 "tests/fixtures/counted-ready-v1/$name.atto" "$work/guest/$name.cs")"
   [[ "$class" =~ ^Guest_[a-f0-9]{64}$ ]]
   echo "if ($class.Run() != 42L) throw new Exception(\"$name failed\"); Console.WriteLine(\"GUEST_PASS $name\");" >> "$work/guest/Program.cs"
@@ -39,8 +43,19 @@ for name in reject-counted-negative reject-counted-bool reject-counted-scalar re
   test ! -e "$work/guest/bad.cs"
   grep -F E_COUNTED_READY_PROFILE "$work/err"
 done
+# Dynamic invalid count and exceptional exit must terminate with the right error.
+for case in invalid-count overflow-before-await empty-read; do
+  case "$case" in
+    invalid-count) body='val int count = 17; val Array[int] b = await select<int>(count) { when readch a: int n -> { return n; } }; return b[0];'; expected='ArgumentOutOfRangeException';;
+    overflow-before-await) body='writech a, 42; val Future<Array<int>> pending = select<int>(1) { when readch a: int n -> { return n; } }; val int x = 9223372036854775807 + 1; val Array[int] b = await pending; return b[0];'; expected='OverflowException';;
+    empty-read) body='val Array[int] b = await select<int>(0) { when readch a: int n -> { return n; } }; return readch a;'; expected='InvalidOperationException';;
+  esac
+  printf 'suspends fnc main(): int { val Channel<int> a = Channel.new<int>(1); %s }\n' "$body" > "$work/$case.atto"
+  class="$(dotnet "$work/compiler/Atto.Cil.Compiler.dll" --counted-ready-v1 "$work/$case.atto" "$work/guest/$case.cs")"
+  echo "try { $class.Run(); throw new Exception(\"$case unexpectedly succeeded\"); } catch ($expected) { Console.WriteLine(\"NEGATIVE_RUNTIME_PASS $case\"); }" >> "$work/guest/Program.cs"
+done
 dotnet publish "$work/guest/Guest.csproj" -c Release -r linux-x64 -o "$work/native" -warnaserror
 file "$work/native/Guest" | grep -F ELF
 "$work/native/Guest" | tee "$work/results"
-test "$(grep -c '^GUEST_PASS ' "$work/results")" = 6
+test "$(grep -c '^GUEST_PASS ' "$work/results")" = 10
 echo COUNTED_READY_NATIVEAOT_GUEST_PASS
