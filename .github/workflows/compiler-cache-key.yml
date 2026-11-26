@@ -53,7 +53,7 @@ jobs:
           cmp verification/Ores.Net.Tests/CompilerCacheLedgerSelfTest.cs "$work/CompilerCacheLedgerSelfTest.cs"
           cp verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs "$work/"
           cmp verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs "$work/FrozenDependencyGraphSelfTest.cs"
-          printf '%s\n' 'CompilerCacheKeySelfTest.Run();' 'CompilerArtifactReceiptSelfTest.Run();' 'CompilerCacheLedgerSelfTest.Run();' 'if(args.Length==1) FrozenDependencyGraphSelfTest.EmitCilCacheGuests(args[0]); else FrozenDependencyGraphSelfTest.EmitPersistentCilGuests(args[0],args[1]);' > "$work/Program.cs"
+          printf '%s\n' 'CompilerCacheKeySelfTest.Run();' 'CompilerArtifactReceiptSelfTest.Run();' 'CompilerCacheLedgerSelfTest.Run();' 'if(args.Length==1) FrozenDependencyGraphSelfTest.EmitCilCacheGuests(args[0]); else if(System.OperatingSystem.IsLinux()) FrozenDependencyGraphSelfTest.EmitPersistentCilGuests(args[0],args[1]); else throw new System.PlatformNotSupportedException();' > "$work/Program.cs"
           dotnet run --project "$work" --configuration Release -- "$work/artifacts"
           for lane in cold warm edit; do
             dotnet run --project "$work" --configuration Release --no-build -- "$work/persistent" "$lane"
