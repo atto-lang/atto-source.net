@@ -191,54 +191,80 @@ public static class OresIrVerifier
 }
 
 /// <summary>
-/// Translates the existing arithmetic parser AST into immutable verified SSA.
-/// This is deliberately an independent stage, not yet connected to CIL emission:
-/// current release bootstrap behavior must not silently change.
+/// Checks the arithmetic parser AST and translates it into immutable verified SSA.
+/// Quantity metadata is checked here before CIL emission erases it.
 /// </summary>
 public static class OresIrLowering
 {
     private const int MaxAstNodes = 100_000;
     private const int MaxPendingValues = 256;
     private readonly record struct Pending(Expression Node, bool Finish);
+    private readonly record struct Operand(int Id, QuantityUnit Unit)
+    {
+        public void RequireScalar()
+        {
+            if (!Unit.IsScalar)
+                throw new FormatException("E_UNIT_ERASURE: an unannotated int requires dimensionless scale one");
+        }
+    }
 
     public static VerifiedIrFunction Lower(Expression root, string name = "main",
         DotnetHostImportPolicy? policy = null)
     {
         ArgumentNullException.ThrowIfNull(root);
         var pending = new Stack<Pending>();
-        var results = new Stack<int>();
+        var results = new Stack<Operand>();
         var instructions = new List<IrInstruction>();
         pending.Push(new Pending(root, false));
         int visited = 0;
 
-        int Constant(long value)
+        Operand Constant(long value, QuantityUnit? unit = null)
         {
             if (instructions.Count >= OresIrVerifier.MaxInstructions)
                 throw new FormatException("IR instruction budget exceeded");
             int id = instructions.Count;
             instructions.Add(new IrInstruction(id, IrOpcode.ConstantI64,
                 IrValueType.I64, Constant: value));
-            return id;
+            return new Operand(id, unit ?? QuantityUnit.Scalar);
         }
 
-        int EmitBinary(IrOpcode opcode, int left, int right)
+        Operand EmitBinary(IrOpcode opcode, Operand left, Operand right)
         {
+            QuantityUnit unit;
+            switch (opcode)
+            {
+                case IrOpcode.CheckedAdd:
+                case IrOpcode.CheckedSubtract:
+                    left.Unit.RequireCompatible(right.Unit);
+                    unit = left.Unit;
+                    break;
+                case IrOpcode.CheckedMultiply:
+                case IrOpcode.CheckedDivide:
+                    unit = left.Unit.Combine(right.Unit, opcode == IrOpcode.CheckedDivide);
+                    break;
+                default:
+                    left.RequireScalar();
+                    right.RequireScalar();
+                    unit = QuantityUnit.Scalar;
+                    break;
+            }
             if (instructions.Count >= OresIrVerifier.MaxInstructions)
                 throw new FormatException("IR instruction budget exceeded");
             int id = instructions.Count;
             instructions.Add(new IrInstruction(id, opcode,
-                IrValueType.I64, Left: left, Right: right));
-            return id;
+                IrValueType.I64, Left: left.Id, Right: right.Id));
+            return new Operand(id, unit);
         }
 
-        int EmitDotnetAbs(int value)
+        Operand EmitDotnetAbs(Operand value)
         {
+            value.RequireScalar();
             if (instructions.Count >= OresIrVerifier.MaxInstructions)
                 throw new FormatException("IR instruction budget exceeded");
             int id = instructions.Count;
             instructions.Add(new IrInstruction(id, IrOpcode.DotnetMathAbsI64,
-                IrValueType.I64, Left: value));
-            return id;
+                IrValueType.I64, Left: value.Id));
+            return new Operand(id, QuantityUnit.Scalar);
         }
 
         while (pending.Count > 0)
@@ -256,9 +282,9 @@ public static class OresIrLowering
                     {
                         if (results.Count < 1)
                             throw new FormatException("IR lowering operand underflow");
-                        int operand = results.Pop();
+                        var operand = results.Pop();
                         results.Push(EmitBinary(IrOpcode.CheckedSubtract,
-                            Constant(0), operand));
+                            Constant(0, operand.Unit), operand));
                         break;
                     }
                     case DotnetMathAbsI64:
@@ -272,8 +298,8 @@ public static class OresIrLowering
                     {
                         if (results.Count < 2)
                             throw new FormatException("CLR Max intrinsic operand underflow");
-                        int right = results.Pop();
-                        int left = results.Pop();
+                        var right = results.Pop();
+                        var left = results.Pop();
                         results.Push(EmitBinary(IrOpcode.DotnetMathMaxI64, left, right));
                         break;
                     }
@@ -281,8 +307,8 @@ public static class OresIrLowering
                     {
                         if (results.Count < 2)
                             throw new FormatException("IR lowering bitXor operand underflow");
-                        int right = results.Pop();
-                        int left = results.Pop();
+                        var right = results.Pop();
+                        var left = results.Pop();
                         results.Push(EmitBinary(IrOpcode.BitXor, left, right));
                         break;
                     }
@@ -290,8 +316,8 @@ public static class OresIrLowering
                     {
                         if (results.Count < 2)
                             throw new FormatException("IR lowering operand underflow");
-                        int right = results.Pop();
-                        int left = results.Pop();
+                        var right = results.Pop();
+                        var left = results.Pop();
                         var opcode = binary.Operator switch
                         {
                             '+' => IrOpcode.CheckedAdd,
@@ -303,14 +329,35 @@ public static class OresIrLowering
                         results.Push(EmitBinary(opcode, left, right));
                         break;
                     }
+                    case QuantityAttachment attachment:
+                    {
+                        var value = results.Pop();
+                        if (!value.Unit.IsScalar)
+                            throw new FormatException("E_UNIT_ATTACHMENT: unit attachment requires dimensionless scale one");
+                        results.Push(new Operand(value.Id, attachment.Unit));
+                        break;
+                    }
+                    case QuantityScalarCast:
+                        results.Peek().RequireScalar();
+                        break;
+                    case QuantityDivision:
+                    {
+                        var right = results.Pop();
+                        var left = results.Pop();
+                        if (left.Unit.IsScalar && right.Unit.IsScalar)
+                            throw new FormatException(
+                                "Division requires float result lowering; unsupported in the i64 source subset");
+                        results.Push(EmitBinary(IrOpcode.CheckedDivide, left, right));
+                        break;
+                    }
                     case NamedIntegerRem:
                     case NamedIntegerMod:
                     case NamedIntegerPow:
                     {
                         if (results.Count < 2)
                             throw new FormatException("IR intrinsic operand underflow");
-                        int right = results.Pop();
-                        int left = results.Pop();
+                        var right = results.Pop();
+                        var left = results.Pop();
                         var op = node switch
                         {
                             NamedIntegerRem => IrOpcode.StrictRem,
@@ -333,6 +380,22 @@ public static class OresIrLowering
                 {
                     case Literal literal:
                         results.Push(Constant(literal.Value));
+                        break;
+                    case QuantityLiteral literal:
+                        results.Push(Constant(literal.Value, literal.Unit));
+                        break;
+                    case QuantityAttachment attachment:
+                        pending.Push(new Pending(node, true));
+                        pending.Push(new Pending(attachment.Value, false));
+                        break;
+                    case QuantityScalarCast cast:
+                        pending.Push(new Pending(node, true));
+                        pending.Push(new Pending(cast.Value, false));
+                        break;
+                    case QuantityDivision quotient:
+                        pending.Push(new Pending(node, true));
+                        pending.Push(new Pending(quotient.Right, false));
+                        pending.Push(new Pending(quotient.Left, false));
                         break;
                     case DotnetMathAbsI64 host:
                         pending.Push(new Pending(node, true));
@@ -381,7 +444,9 @@ public static class OresIrLowering
         }
         if (results.Count != 1)
             throw new FormatException("IR lowering must yield exactly one result");
+        var result = results.Pop();
+        result.RequireScalar();
         return OresIrVerifier.Verify(new IrFunction(name, IrValueType.I64,
-            instructions, results.Pop()), policy);
+            instructions, result.Id), policy);
     }
 }
