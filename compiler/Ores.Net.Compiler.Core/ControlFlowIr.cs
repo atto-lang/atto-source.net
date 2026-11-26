@@ -67,7 +67,10 @@ public enum CfgOpcode
     ResultUnwrapTextErr,
     CheckedRemainder,
     CheckedModulo,
-    InlineCooperate
+    InlineCooperate,
+    // Checked signed i32 conversion and inclusive signed refinement bounds.
+    CheckedI32,
+    CheckRefinement
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -132,13 +135,18 @@ public sealed class VerifiedCfgFunction
 public sealed class VerifiedCfgModule
 {
     internal VerifiedCfgModule(VerifiedCfgFunction main,
-        IReadOnlyList<VerifiedCfgFunction> helpers)
+        IReadOnlyList<VerifiedCfgFunction> helpers, IReadOnlyList<VerifiedProtocol> protocols,
+        IReadOnlyList<VerifiedProtocolActor> protocolActors)
     {
         Main = main;
         Helpers = helpers;
+        Protocols = protocols;
+        ProtocolActors = protocolActors;
     }
     public VerifiedCfgFunction Main { get; }
     public IReadOnlyList<VerifiedCfgFunction> Helpers { get; }
+    internal IReadOnlyList<VerifiedProtocol> Protocols { get; }
+    internal IReadOnlyList<VerifiedProtocolActor> ProtocolActors { get; }
 }
 
 public sealed record CfgCallSignature(IrValueType ResultType,
@@ -341,6 +349,7 @@ public static class OresCfgVerifier
                     op.Opcode is CfgOpcode.CheckedAdd or
                         CfgOpcode.CheckedSubtract or
                         CfgOpcode.CheckedMultiply or
+                        CfgOpcode.CheckedI32 or
                         CfgOpcode.ShiftLeftI64 or
                         CfgOpcode.ShiftRightLogicalI64 or
                         CfgOpcode.ShiftRightArithmeticI64 or
@@ -622,6 +631,22 @@ public static class OresCfgVerifier
                             op.Left is not null || op.Right is not null ||
                             op.Target is not null || op.Arguments is not null)
                             throw new FormatException("Malformed CFG bool constant");
+                        break;
+                    case CfgOpcode.CheckedI32:
+                        RequireType(op.Type, IrValueType.I64);
+                        if (op.Left is null || op.Right is not null || op.I64Constant is not null ||
+                            op.BoolConstant is not null || op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG checked i32 boundary");
+                        Use(i, opIndex, op.Left.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.CheckRefinement:
+                        RequireType(op.Type, IrValueType.I64);
+                        if (op.Left is null || op.Right is not null || op.I64Constant is not null ||
+                            op.BoolConstant is not null || op.Target is not null || op.Arguments is not { Count: 2 })
+                            throw new FormatException("Malformed CFG checked refinement");
+                        Use(i, opIndex, op.Left.Value, IrValueType.I64);
+                        Use(i, opIndex, op.Arguments[0], IrValueType.I64);
+                        Use(i, opIndex, op.Arguments[1], IrValueType.I64);
                         break;
                     case CfgOpcode.CheckedAdd:
                     case CfgOpcode.CheckedSubtract:

@@ -34,6 +34,10 @@ public sealed record StructuredRead(int At, string Name, IrValueType ValueType)
     : StructuredExpr(At, ValueType);
 public sealed record StructuredNegate(int At, StructuredExpr Value)
     : StructuredExpr(At, IrValueType.I64);
+internal sealed record StructuredCheckedI32(int At, StructuredExpr Value)
+    : StructuredExpr(At, IrValueType.I64);
+internal sealed record StructuredCheckRefinement(int At, StructuredExpr Value, long Minimum, long Maximum)
+    : StructuredExpr(At, IrValueType.I64);
 public sealed record StructuredConditional(int At, StructuredExpr Test,
     StructuredExpr WhenTrue, StructuredExpr WhenFalse, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
@@ -51,7 +55,7 @@ public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64,
     EqualBool, NotEqualBool, LogicalAnd, LogicalOr, LogicalXor,
     // atto-spec bitwise-and-stream-operators-v1: <<<, >>> and infix ashr.
     ShiftLeft, ShiftRightLogical, ShiftRightArithmetic,
-    Divide, EqualGuestError, NotEqualGuestError, EqualGuestText, NotEqualGuestText, Remainder, Modulo }
+    Divide, EqualGuestError, NotEqualGuestError, EqualGuestText, NotEqualGuestText, Remainder, Modulo, DivideQuantity }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
@@ -96,7 +100,11 @@ public sealed record StructuredBreak(int At) : StructuredStmt(At);
 public sealed record StructuredContinue(int At) : StructuredStmt(At);
 public sealed record StructuredProgram(string Name, IReadOnlyList<StructuredStmt> Body,
     IReadOnlyDictionary<string, StructuredFunction>? Functions = null,
-    IReadOnlyList<string>? FunctionOrder = null);
+    IReadOnlyList<string>? FunctionOrder = null)
+{
+    internal IReadOnlyList<VerifiedProtocol> Protocols { get; init; } = Array.Empty<VerifiedProtocol>();
+    internal IReadOnlyList<VerifiedProtocolActor> ProtocolActors { get; init; } = Array.Empty<VerifiedProtocolActor>();
+}
 
 /// <summary>
 /// Narrow checked parser for a single int-returning main, initialized locals,

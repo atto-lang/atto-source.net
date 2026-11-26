@@ -117,7 +117,7 @@ public static partial class OresParser
         return stripped;
     }
 
-    private static List<Token> Tokenize(string source, bool allowCaretReturn = false)
+    private static List<Token> Tokenize(string source, bool allowCaretReturn = false, bool strictBoolean = false, bool strictFixedArrays = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
@@ -149,7 +149,7 @@ public static partial class OresParser
         ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
-        var lexer = new Lexer(source, allowCaretReturn);
+        var lexer = new Lexer(source, allowCaretReturn, strictBoolean, strictFixedArrays);
         var tokens = new List<Token>();
         for (;;)
         {
@@ -222,7 +222,8 @@ public static partial class OresParser
         return tokens;
     }
 
-    private static void RejectUnsupportedScalarTokens(List<Token> tokens)
+    private static void RejectUnsupportedScalarTokens(List<Token> tokens,
+        IReadOnlySet<int>? protocolActorOffsets = null)
     {
         // The scalar i64 parser is an independent public compiler entrypoint.
         // A Kestrel host HTTP provider does not authorize guest HTTP actors.
@@ -255,7 +256,7 @@ public static partial class OresParser
         // keep them: 'define virtual actor' and 'define supervisor ...'.
         for (int i = 0; i < tokens.Count; i++)
         {
-            if (tokens[i].Text != "define")
+            if (tokens[i].Text != "define" || protocolActorOffsets?.Contains(tokens[i].Offset) == true)
                 continue;
             int limit = Math.Min(tokens.Count, i + 5);
             for (int j = i + 1; j < limit; j++)
@@ -359,16 +360,18 @@ public static partial class OresParser
         }
     }
 
-    private static void RejectUnsupportedSourceActors(List<Token> tokens)
+    private static void RejectUnsupportedSourceActors(List<Token> tokens,
+        IReadOnlySet<int>? protocolActorOffsets = null)
     {
-        var schema = FindActorStateSchema(tokens);
+        var schema = FindActorStateSchema(tokens, protocolActorOffsets);
         if (schema is not null)
             throw new FormatException(
                 $"Source actor state schema parsed; sealed handle_state and " +
                 $"generation-fenced logical-turn lowering is unavailable at offset {schema.StateOffset}");
     }
 
-    private static ActorStateSchemaMetadata? FindActorStateSchema(List<Token> tokens)
+    private static ActorStateSchemaMetadata? FindActorStateSchema(List<Token> tokens,
+        IReadOnlySet<int>? protocolActorOffsets = null)
     {
         static bool IsIdentifier(Token token)
         {
@@ -392,7 +395,7 @@ public static partial class OresParser
         ActorStateSchemaMetadata? discovered = null;
         for (int i = 0; i < tokens.Count; i++)
         {
-            if (tokens[i].Text != "define")
+            if (tokens[i].Text != "define" || protocolActorOffsets?.Contains(tokens[i].Offset) == true)
                 continue;
 
             int j = i + 1;
@@ -516,7 +519,7 @@ public static partial class OresParser
     }
     private readonly record struct Token(string Text, int Offset);
 
-    private sealed class Lexer(string text, bool allowCaretReturn)
+    private sealed class Lexer(string text, bool allowCaretReturn, bool strictBoolean = false, bool strictFixedArrays = false)
     {
         private int _i;
         private bool previousWasWith;
@@ -604,7 +607,7 @@ public static partial class OresParser
             bool exportScopeBracket =
                 (ch == '[' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*$")) ||
                 (ch == ']' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*$"));
-            if (!exportScopeBracket)
+            if (!exportScopeBracket && !strictFixedArrays)
                 SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
             // Scalar and structured CIL frontends must agree: state-changing
             // annotations are compiler effects, never inert metadata. Check
@@ -760,6 +763,14 @@ public static partial class OresParser
                 _i++;
                 return new Token(text[start.._i], start);
             }
+            // Only the strict verified frontend consumes typed lazy Boolean
+            // pairs. Never admit separated '& &' or '| |' as a pair.
+            if (strictBoolean && _i + 1 < text.Length &&
+                ((ch == '&' && text[_i+1] == '&') || (ch == '|' && text[_i+1] == '|')))
+            {
+                _i += 2;
+                return new Token(text[start.._i], start);
+            }
             // Recognize the contiguous operator as one token, but never
             // attempt a scalar-only approximation of named-call lowering.
             if (_i + 1 < text.Length &&
@@ -815,13 +826,16 @@ public static partial class OresParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy, string source, int? languageVersion)
+    private sealed partial class Reader(List<Token> tokens, DotnetHostImportPolicy policy, string source, int? languageVersion)
     {
         // Macro definitions are compiler-only. Neither these declarations nor
         // their arguments appear in OresIR/CIL, and no runtime expansion exists.
         private enum MacroKind { ConstIntQuote, SyntaxExprIdentity, SyntaxExprLiteralTwice }
         private sealed record ScalarMacro(string Name, string Parameter, MacroKind Kind);
         private readonly Dictionary<string, ScalarMacro> _macros = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, QuantityUnit> _dimensions = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, QuantityUnit> _units = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _canonicalUnitDimensions = new(StringComparer.Ordinal);
         private int _index;
         private int _macroExpansions;
 
@@ -829,17 +843,20 @@ public static partial class OresParser
             new($"NET_MACRO_EXPANDER_REQUIRED: {reason} at offset {at}; " +
                 "macro expansion must finish before OresIR/CIL; runtime fallback is forbidden");
 
-        private static bool IsMacroName(string word)
+        private static bool IsSourceIdentifier(string word)
         {
             if (word.Length is 0 or > 128 || !(word[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_'))
                 return false;
             foreach (char ch in word)
                 if (!(ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     return false;
-            return word is not ("define" or "pub" or "macro" or "return" or "fnc" or "main" or
+            return true;
+        }
+
+        private static bool IsMacroName(string word) =>
+            IsSourceIdentifier(word) && word is not ("define" or "pub" or "macro" or "return" or "fnc" or "main" or
                 "quote" or "unquote" or "eval" or "const" or "syntax" or "expr" or
                 "Const" or "Syntax" or "Expr" or "int" or "rt");
-        }
 
         // Closed scalar stage-0 subset also accepted by LLVM #1026:
         //   define macro literal(Const<int> x) -> Syntax<Expr> { return quote(x); }
@@ -1002,6 +1019,105 @@ public static partial class OresParser
                 throw new FormatException($"Expected '{value}' at offset {Current.Offset}");
         }
 
+        private string ReadQuantityName()
+        {
+            var token = Current;
+            if (!IsSourceIdentifier(token.Text))
+                throw new FormatException($"E_UNIT_NAME: expected a quantity name at offset {token.Offset}");
+            _index++;
+            return token.Text;
+        }
+
+        private QuantityUnit ReadUnit()
+        {
+            int offset = Current.Offset;
+            string name = ReadQuantityName();
+            if (!_units.TryGetValue(name, out var unit))
+                throw new FormatException($"E_UNIT_NAME: unknown unit '{name}' at offset {offset}");
+            return unit;
+        }
+
+        private long ReadQuantityFactor()
+        {
+            var token = Current;
+            if (!long.TryParse(token.Text.Replace("_", "", StringComparison.Ordinal),
+                    NumberStyles.None, CultureInfo.InvariantCulture, out long factor) || factor <= 0)
+                throw new FormatException($"E_UNIT_SCALE: expected a positive signed i64 factor at offset {token.Offset}");
+            _index++;
+            return factor;
+        }
+
+        private void ParseQuantityDeclarations()
+        {
+            while (Current.Text == "define" && tokens[_index + 1].Text is ("dimension" or "unit"))
+            {
+                _index++;
+                if (_dimensions.Count + _units.Count >= 128)
+                    throw new FormatException("E_UNIT_LIMIT: more than 128 quantity declarations");
+                bool dimension = Take("dimension");
+                if (!dimension) Expect("unit");
+                string name = ReadQuantityName();
+                if (_dimensions.ContainsKey(name) || _units.ContainsKey(name))
+                    throw new FormatException($"E_UNIT_DUPLICATE: quantity name '{name}' is already declared");
+                if (dimension)
+                {
+                    Expect(";");
+                    _dimensions.Add(name, QuantityUnit.Base(name));
+                    continue;
+                }
+
+                Expect(":");
+                string dimensionName = ReadQuantityName();
+                if (!_dimensions.TryGetValue(dimensionName, out var declared))
+                    throw new FormatException($"E_UNIT_NAME: unknown dimension '{dimensionName}'");
+                var unit = declared;
+                if (Take("="))
+                {
+                    if (Current.Text.Length != 0 && char.IsAsciiDigit(Current.Text[0]))
+                    {
+                        long factor = ReadQuantityFactor();
+                        Expect("*");
+                        unit = ReadUnit().Scale(factor, divide: false);
+                    }
+                    else
+                    {
+                        unit = ReadUnit();
+                        if (Take("/")) unit = unit.Scale(ReadQuantityFactor(), divide: true);
+                        else if (Take("*")) unit = unit.Scale(ReadQuantityFactor(), divide: false);
+                    }
+                    if (!unit.HasDimension(declared))
+                        throw new FormatException($"E_UNIT_DIMENSION: unit '{name}' has the wrong declared dimension");
+                }
+                else if (!_canonicalUnitDimensions.Add(dimensionName))
+                    throw new FormatException($"E_UNIT_DUPLICATE: dimension '{dimensionName}' already has a canonical unit");
+                Expect(";");
+                _units.Add(name, unit);
+            }
+        }
+
+        private Expression ParseNumericSuffix(Token token, long value)
+        {
+            if (_dimensions.Count == 0 || Current.Text != "<"
+                    || Current.Offset != token.Offset + token.Text.Length)
+                return new Literal(value);
+            Expect("<");
+            var unit = ReadUnit();
+            Expect(">");
+            if (Current.Text == "." && tokens[_index + 1].Text != "<")
+            {
+                _index++;
+                Expect("to_unit");
+                Expect("<");
+                var target = ReadUnit();
+                Expect(">");
+                Expect("(");
+                Expect(")");
+                value = unit.ConvertExact(value, target);
+                unit = target;
+            }
+            return new QuantityLiteral(value, unit);
+        }
+
         public Expression ParseProgram()
         {
             if (Take("import"))
@@ -1025,6 +1141,7 @@ public static partial class OresParser
                 _dotnetMathAlias = alias;
                 Expect(";");
             }
+            ParseQuantityDeclarations();
             ParseMacroPrelude();
             bool defined = false, exposed = false;
             while (Current.Text is "define" or "pub")
@@ -1150,6 +1267,12 @@ public static partial class OresParser
                 _index++;
                 left = new Binary(op, left, ParseMul(depth + 1));
             }
+            int casts = 0;
+            while (Take("as"))
+            {
+                CheckDepth(depth + ++casts);
+                left = ApplyScalarCastOrUnit(left, ReadQuantityName(), unitOnly: false, legacyUnit: true);
+            }
             if (Current.Text is "|>" or "<|")
                 throw new FormatException(
                     $"Value pipeline requires named callable lowering; unsupported in .NET i64 bootstrap at offset {Current.Offset}");
@@ -1166,21 +1289,68 @@ public static partial class OresParser
             while (Current.Text is "*" or "/")
             {
                 char op = Current.Text[0];
-                // Checked int/int division remains unsupported in this
-                // i64-only bootstrap; % and ^ are removed at lexical admission.
-                if (op == '/')
+                // A quantity slash has an exact signed-i64 profile. Plain
+                // checked int/int still requires typed guest error lowering.
+                if (op == '/' && _units.Count == 0)
                     throw new FormatException(
                         "Checked integer division requires typed guest error lowering; unsupported in the i64 source subset");
                 _index++;
                 var rhs = ParseUnary(depth + 1);
-                left = new Binary(op, left, rhs);
+                left = op == '/' ? new QuantityDivision(left, rhs) : new Binary(op, left, rhs);
             }
             return left;
         }
 
+        private Expression ApplyScalarCastOrUnit(Expression value, string target, bool unitOnly, bool legacyUnit)
+        {
+            if (unitOnly || (legacyUnit && _units.ContainsKey(target)))
+            {
+                if (!_units.TryGetValue(target, out var unit) || target is "int" or "i64" or "i32")
+                    throw new FormatException("E_UNIT_NAME: unknown or ambiguous unit");
+                // Literal attachment can use the existing exact literal conversion path.
+                if (value is Literal number) return new QuantityLiteral(number.Value, unit);
+                return new QuantityAttachment(value, unit);
+            }
+            if (target is not ("int" or "i64"))
+                throw new FormatException("E_UNSUPPORTED_CAST: only signed-i64 identity casts are admitted in the scalar profile");
+            return new QuantityScalarCast(value);
+        }
+
         private Expression ParseUnary(int depth)
         {
+            var value = ParseUnaryBase(depth);
+            int links = 0;
+            while ((Current.Text == "::" || Current.Text == ".") &&
+                   _index + 1 < tokens.Count && tokens[_index + 1].Text == "<")
+            {
+                CheckDepth(depth + ++links);
+                bool unitOnly = Take(".");
+                if (!unitOnly) Expect("::");
+                Expect("<");
+                string target = ReadQuantityName();
+                Expect(">");
+                value = ApplyScalarCastOrUnit(value, target, unitOnly, legacyUnit: true);
+            }
+            if (value is QuantityLiteral quantity && Current.Text == "." &&
+                    _index + 1 < tokens.Count && tokens[_index + 1].Text == "to_unit")
+            {
+                Expect("."); Expect("to_unit"); Expect("<");
+                var target = ReadUnit();
+                Expect(">"); Expect("("); Expect(")");
+                value = new QuantityLiteral(quantity.Unit.ConvertExact(quantity.Value, target), target);
+            }
+            return value;
+        }
+
+        private Expression ParseUnaryBase(int depth)
+        {
             CheckDepth(depth);
+            if (Take("<"))
+            {
+                string target = ReadQuantityName();
+                Expect(">");
+                return ApplyScalarCastOrUnit(ParseUnary(depth + 1), target, unitOnly: false, legacyUnit: false);
+            }
             if (Current.Text.Length > 0 && Current.Text[0] is '\'' or '"' or '\u0060')
                 throw new FormatException(
                     $"STRING_BACKEND_UNSUPPORTED: quoted strings and template interpolation require typed String CIL/NativeAOT lowering at offset {Current.Offset}");
@@ -1368,8 +1538,9 @@ public static partial class OresParser
                 // Signed minimum needs special treatment: its magnitude is > long.MaxValue.
                 if (Current.Text.Replace("_", "", StringComparison.Ordinal).TrimStart('0') == "9223372036854775808")
                 {
+                    Token magnitude = Current;
                     _index++;
-                    return new Literal(long.MinValue);
+                    return ParseNumericSuffix(magnitude, long.MinValue);
                 }
                 return new Unary('-', ParseUnary(depth + 1));
             }
@@ -1381,12 +1552,12 @@ public static partial class OresParser
             }
             if (Current.Text.Length == 0 || Current.Text[0] is < '0' or > '9')
                 throw new FormatException($"Expected integer at offset {Current.Offset}");
-            var raw = Current.Text;
+            Token numericToken = Current;
             _index++;
-            if (!long.TryParse(raw.Replace("_", "", StringComparison.Ordinal),
+            if (!long.TryParse(numericToken.Text.Replace("_", "", StringComparison.Ordinal),
                 NumberStyles.None, CultureInfo.InvariantCulture, out long result))
-                throw new FormatException($"Invalid i64 at offset {tokens[_index - 1].Offset}");
-            return new Literal(result);
+                throw new FormatException($"Invalid i64 at offset {numericToken.Offset}");
+            return ParseNumericSuffix(numericToken, result);
         }
 
         // A nominal Entry<K,V> and a Pair<A,B> remain different source
