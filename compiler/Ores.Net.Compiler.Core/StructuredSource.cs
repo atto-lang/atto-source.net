@@ -174,6 +174,48 @@ public static partial class OresStructuredParser
         }
     }
 
+    // Capability-neutral default route for the canonical standalone braced
+    // initialization slice. This is a positive lexical selector, not a
+    // structured parser exception fallback. All selected source still goes
+    // through the full structured source admission and verified CFG.
+    public static bool HasOrdinaryInitializationPrefix(string source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if(source.Length>MaxChars)return false;
+        var lexer=new Lexer(source,false);
+        try
+        {
+            if(lexer.Read().Text!="pub" || lexer.Read().Text!="fnc")return false;
+            string name=lexer.Read().Text;
+            if(name.Length==0 || !(Alpha(name[0]) || name[0]=='_') ||
+               !name.Skip(1).All(c=>Alpha(c)||Digit(c)||c=='_'))return false;
+            if(lexer.Read().Text!="(" || lexer.Read().Text!=")" ||
+               lexer.Read().Text!=":" || lexer.Read().Text!="int" ||
+               lexer.Read().Text!="{")return false;
+            // A canonical no-arg public helper preceding main belongs to
+            // the structured linked-method lane. No imports or policy grants.
+            if(name!="main")return true;
+            string first=lexer.Read().Text;
+            if(first is "int" or "bool" or "string")
+            {
+                string local=lexer.Read().Text;
+                return local.Length>0 && (Alpha(local[0]) || local[0]=='_');
+            }
+            if(first is not ("let" or "val" or "const"))return false;
+            string second=lexer.Read().Text;
+            if(second is "int" or "bool" or "string")return true;
+            if(second.Length==0 || !(Alpha(second[0]) || second[0]=='_') ||
+               lexer.Read().Text!=":")return false;
+            return lexer.Read().Text is "int" or "bool" or "string";
+        }
+        catch(FormatException)
+        {
+            // Probe only: unrelated lexical errors belong to the original
+            // default frontend. No selected full parse is ever retried.
+            return false;
+        }
+    }
+
     public static StructuredProgram Parse(string source)
         => ParseCore(source, null).Program;
 
