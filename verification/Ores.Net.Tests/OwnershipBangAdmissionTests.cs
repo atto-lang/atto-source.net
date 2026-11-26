@@ -8,7 +8,6 @@ internal static class OwnershipBangAdmissionTests
     internal static void Run()
     {
         foreach (var operand in new[] {
-            "copy!42", "copy! 42", "copy!(40 + 2)", "copy!eqfoo",
             "take!42", "take! 42",
             "borrow!value", "borrow! value",
             "borrow! mut value", "borrow!mut value",
@@ -22,6 +21,18 @@ internal static class OwnershipBangAdmissionTests
             RequireUnsupported(() => OresParser.Parse(source), "scalar", operand);
             RequireUnsupported(() => OresStructuredParser.Parse(source), "structured", operand);
         }
+
+        foreach (string operand in new[] { "copy!42", "copy! 42", "copy!(40 + 2)", "copy!!42", "copy!! (40 + 2)" })
+        {
+            string source = "pub fnc main(): int { return " + operand + "; }";
+            // Legacy scalar frontend is not the structured CFG/CIL frontend.
+            RequireUnsupported(() => OresParser.Parse(source), "scalar", operand);
+            if (OresStructuredParser.Parse(source).Body.Count == 0)
+                throw new Exception("Missing structured scalar copy");
+        }
+        RequireUnsupported(() => OresParser.Parse("pub fnc main(): int { return copy!eqfoo; }"), "scalar", "copy!eqfoo");
+        RequireRejected(() => OresStructuredParser.Parse("pub fnc main(): int { return copy!eqfoo; }"));
+        RequireRejected(() => OresStructuredParser.Parse("pub fnc main(): int { return copy!!!42; }"));
 
         foreach (string inert in new[] {
             "pub fnc main(): int { /* copy! 7 */ return 42; }",
@@ -57,6 +68,13 @@ internal static class OwnershipBangAdmissionTests
         RequireLegacyTypedDenial(() => OresParser.Parse(legacy), "scalar");
         RequireLegacyTypedDenial(() => OresStructuredParser.Parse(legacy), "structured");
         Console.WriteLine("NET_OWNERSHIP_BANG_FAIL_CLOSED_PASS frontend checks; NATIVE_AOT_NOT_EXECUTED");
+    }
+
+    private static void RequireRejected(Action action)
+    {
+        try { action(); }
+        catch (FormatException) { return; }
+        throw new Exception("Invalid scalar copy admitted");
     }
 
     private static void RequireCommentLimit(Action action, string frontend)

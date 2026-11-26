@@ -1,0 +1,1 @@
+pub fnc main(): int { val Option<int> value = Some(42); val copied = copy! value; return 42; }

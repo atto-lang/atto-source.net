@@ -9,7 +9,18 @@ var outputPath = Path.GetFullPath(args[1]);
 if (!sourcePath.EndsWith(".atto", StringComparison.Ordinal))
     throw new ArgumentException("NativeAOT fixture must be .atto");
 var code = File.ReadAllText(sourcePath);
-var checkedCfg = OresStructuredCfgLowering.Lower(code);
-Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-CilEmitter.EmitLibrary(checkedCfg, outputPath);
-Console.WriteLine("ATTO_IFNOT_NATIVEAOT_EMITTED_VERIFIED_CIL");
+try
+{
+    var checkedCfg = OresStructuredCfgLowering.Lower(code);
+    Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+    CilEmitter.EmitLibrary(checkedCfg, outputPath);
+    Console.WriteLine("ATTO_IFNOT_NATIVEAOT_EMITTED_VERIFIED_CIL");
+    return 0;
+}
+catch (FormatException ex)
+{
+    // Source rejection is an expected compiler result, not a process abort.
+    // Do not catch implementation faults, or publish a fallback artifact.
+    Console.Error.WriteLine(ex.Message);
+    return 1;
+}
