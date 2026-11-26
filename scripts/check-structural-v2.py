@@ -45,9 +45,11 @@ def unique_pairs(pairs):
 
 def decode(raw):
     try:
-        return json.loads(raw, object_pairs_hook=unique_pairs,
+        document = json.loads(raw, object_pairs_hook=unique_pairs,
                           parse_constant=lambda v: (_ for _ in ()).throw(
                               Failure("nonfinite JSON: " + v)))
+        require(type(document) is dict, "manifest JSON must be an object")
+        return document
     except (ValueError, TypeError) as ex:
         raise Failure("malformed JSON: " + str(ex)) from ex
 
@@ -112,13 +114,16 @@ def self_test(root):
         except Failure:
             continue
         raise Failure("tampering escaped v2 gate: " + str(index))
-    for raw in ('{"id":"x","id":"x"}', 'NaN', '[]', '{"x":Infinity}'):
+    malformed = ('{"id":"x","id":"x"}', 'NaN', '[]', '{"x":Infinity}',
+                 'null', 'true', 'false', '0', '1.5', '"manifest"', '[{}]')
+    require(decode(manifest.decode("utf-8")) == data, "valid manifest round-trip failed")
+    for raw in malformed:
         try:
             decode(raw)
         except Failure:
             continue
         raise Failure("malformed v2 JSON accepted: " + raw)
-    return len(mutations) + 4
+    return len(mutations) + len(malformed)
 
 def main():
     cli = argparse.ArgumentParser()
