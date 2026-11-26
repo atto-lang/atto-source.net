@@ -100,6 +100,24 @@ internal static class DirectionalValuePipeStructuredTests
         RejectStructured("fnc main():int{return 42 |> std.await;}", "E_SUSPENDS_UNSUPPORTED");
         RejectStructured("fnc main():int{return 2 |> match over { on 2 -> 42, };}", "MATCH_NON_EXHAUSTIVE");
 
+        foreach (string expr in new[] {
+            "42 |> if is int then 30 else 20 fi",
+            "42 |> is type int ? 30 : 20",
+            "42 |> > 10 ? 30 : 20",
+            "true |> ? 30 : 20",
+            "true |> if then 30 else 20 fi",
+            "false |> ifnot then 30 else 20 fi",
+            "true |> if then 30 else 1/0 fi"
+        })
+            CheckCil(funcs + "fnc main():int{return " + expr + ";}", 30, expr);
+        CheckCil(funcs + "fnc main():int{return 42 |> await |> if > 10 then 30 else 20 fi |> increment |> > 30 |> ? 100 : 200;}",
+            100, "conditional receiver chain");
+        CheckCil(funcs + "fnc main():int{return true |> ? 30 : 20 |> increment;}",
+            31, "ternary receiver continuation");
+        RejectStructured("fnc main():int{return 42 |> if then 30 else 20 fi;}", "Value if condition requires bool");
+        RejectStructured("fnc main():int{return true |> is int ? 30 : 20;}", "Receiver int type test requires proven int");
+        RejectStructured("fnc main():int{return true |> ? 30 : false;}", "Conditional result types differ");
+
         // The shipping one-main i64 compiler does not support named helper
         // definitions or tagged pipelines and must remain fail-closed.
         foreach (string op in new[] { "|>", "<|" })
