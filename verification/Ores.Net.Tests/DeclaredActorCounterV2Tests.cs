@@ -117,6 +117,23 @@ internal static class DeclaredActorCounterV2Tests
         Require(DeclaredActorCounterV2Emitter.EmitCSharp(
                 OresParser.InspectExternalCounterV2(omittedSelf)) == compiled,
             "omitted-self compiler intrinsic changed native receive authority");
+        foreach (var (write, read) in new[] { ("state_w", "state_ro"), ("handle_state_w", "handle_state_ro") })
+        {
+            foreach (string prefix in new[] { "self.", "" })
+            {
+                var aliases = new Dictionary<string, string>(units, StringComparer.Ordinal);
+                aliases[r] = aliases[r].Replace("self.handle_state(critical-write ", prefix + write + "(", StringComparison.Ordinal)
+                    .Replace("self.handle_state(critical-read ", prefix + read + "(", StringComparison.Ordinal);
+                Require(aliases[r] != units[r], "alias fixture must change source");
+                Require(DeclaredActorCounterV2Emitter.EmitCSharp(OresParser.InspectExternalCounterV2(aliases)) == compiled,
+                    "state alias changed checked native receive lowering");
+            }
+        }
+        Reject(units, r, "self.handle_state(critical-write ", "state_ro(", "read alias cannot acquire write loan");
+        Reject(units, r, "self.handle_state(critical-read ", "state_w(", "write alias cannot acquire read loan");
+        Reject(units, r, "self.handle_state(critical-write ", "state_w(critical-write ", "duplicate mode");
+        Reject(units, r, "val int snapshot", "val int state_ro", "alias shadowing");
+
         var differentStop = new Dictionary<string, string>(units, StringComparer.Ordinal);
         differentStop[r] = differentStop[r].Replace("if mail.value == 4",
             "if mail.value == 9", StringComparison.Ordinal);
