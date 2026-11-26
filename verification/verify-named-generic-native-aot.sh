@@ -13,7 +13,10 @@ count=0
 guest() {
   local name="$1" expr="$2"
   mkdir -p "$work/$name"
+  if [[ $# -eq 3 ]]; then printf '%s\n' "$3" >"$work/$name.atto"
+  else
   printf '%s\npub fnc main(): int { return %s; }\n' "$pre" "$expr" >"$work/$name.atto"
+  fi
   local generated="$work/$name/OresGenerated.dll"
   "$compiler" compile "$work/$name.atto" --out "$generated"
   test -s "$generated"
@@ -45,6 +48,23 @@ reject() {
 for expr in 'identity<U=int>(42)' 'identity<t=int>(42)' 'identity<T=3>(42)' 'identity<T=bool>(true)' 'identity<T=int,T=int>(42)' 'identity[T=int](42)' 'identity<T=int](42)' 'identity<T=int>(true)' 'identity<T=int>(other:42)' 'identity<T=int>(value:42,value:42)'; do
   reject "$expr"
 done
-test "$count" -eq 15
+guest if_do unused 'pub fnc main(): int { if 1 < 2 do return 42; fi return 0; }'
+guest if_runtime unused 'pub fnc main(): int { val int x = 41; if x < 42 do return x+1; else return 0; fi }'
+guest if_lazy unused 'pub fnc main(): int { if false do return 7/0; else return 42; fi }'
+guest if_scope unused 'pub fnc main(): int { val int x=40; if true do val int y=2; return x+y; fi return 0; }'
+for source in \
+ 'pub fnc main(): int { if 1 do return 42; fi return 0; }' \
+ 'pub fnc main(): int { if true do return 42; else return false; fi }' \
+ 'pub fnc main(): int { if true do val int y=42; fi return y; }' \
+ 'pub fnc main(): int { if true do return 42; }'; do
+  printf '%s\n' "$source" >"$work/reject.atto"
+  rm -f "$work/reject.dll"
+  status=0
+  "$compiler" compile "$work/reject.atto" --out "$work/reject.dll" >"$work/stdout" 2>"$work/stderr" || status=$?
+  test "$status" -eq 1 && test ! -e "$work/reject.dll" && test -s "$work/stderr"
+  printf 'NATIVE_AOT_IF_REJECT %s\n' "$source"
+  count=$((count+1))
+done
+test "$count" -eq 23
 git diff --quiet -- . && git diff --cached --quiet -- .
 printf 'NATIVE_AOT_VERIFIED %s cases\n' "$count"

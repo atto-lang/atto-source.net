@@ -202,7 +202,7 @@ public static partial class OresStructuredParser
                 if (token.Text == "guard") return true;
                 if (guardOnly) continue;
                 if (token.Text is "/" or "Option" or "Some" or "None" or "Result" or "trap" or "trap!" or "throw" or "throw!" or
-                    "panic" or "panic!" or "raise" or "raise!" or "match" ||
+                    "panic" or "panic!" or "raise" or "raise!" or "match" or "if" or "ifnot" or "unless" ||
                     (previous == "sync" && token.Text == "task") ||
                     (beforePrevious == "fnc" && token.Text == "<") ||
                     (beforePrevious == "Integer" && previous == "." && token.Text is "rem" or "mod"))
@@ -1792,6 +1792,7 @@ public static partial class OresStructuredParser
             Budget(depth);
             scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
             localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+            aggregateScopes.Add(new Dictionary<string, StaticAggregate>(StringComparer.Ordinal));
             var body = new List<StructuredStmt>();
             bool terminated = false;
             while (Current.Text is not ("else" or "fi"))
@@ -1807,6 +1808,7 @@ public static partial class OresStructuredParser
             }
             scopes.RemoveAt(scopes.Count - 1);
             localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+            aggregateScopes.RemoveAt(aggregateScopes.Count - 1);
             return (Array.AsReadOnly(body.ToArray()), terminated);
         }
 
@@ -2351,6 +2353,10 @@ public static partial class OresStructuredParser
                 bool delimited = Take("then");
                 if (explicitDo && !delimited)
                     throw Error("do if/ifnot/unless requires 'then'");
+                // Canonical imperative syntax is if predicate do ... fi.
+                // Keep the distinct prefix-do form and legacy delimiters.
+                if (!explicitDo && !delimited && !semicolon)
+                    delimited = Take("do");
                 // Preserve modern-main legacy if/ifnot/unless ... then ...
                 // imperative acceptance; a separate spec migration must not
                 // silently break older compiled source.
