@@ -15,6 +15,36 @@ fixture_dir="$root/tests/fixtures/portable-task-v2-pilot"
 [[ ! -L "$fixture_dir/reject-const-taskfuture.atto" && "$(git hash-object --no-filters "$fixture_dir/reject-const-taskfuture.atto")" == "34eb2855945e9196f522fdb7e34ad609cd971d43" ]]
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
+# Require successful process termination, not merely expected stdout before a failure.
+run_guest() {
+  local app="$1" out="$2" status=0
+  timeout 15s "$app" >"$out/guest.out" 2>"$out/guest.err" || status=$?
+  [[ "$status" == 0 && "$(cat "$out/guest.out")" == 42 ]] || return 1
+  grep -Fx 'TASK_I64_RECEIPT; producers=1; observer_distinct=True; producer_body_retired=True' "$out/guest.err"
+}
+# Synthetic gate regression only; never counts as a compiled guest.
+mkdir "$work/gate-control"
+cat >"$work/gate-control/bad" <<'CONTROL'
+#!/usr/bin/env bash
+printf '42\n'
+printf '%s\n' 'TASK_I64_RECEIPT; producers=1; observer_distinct=True; producer_body_retired=True' >&2
+exit 7
+CONTROL
+chmod +x "$work/gate-control/bad"
+if run_guest "$work/gate-control/bad" "$work/gate-control"; then
+  echo "guest gate accepted nonzero exit" >&2
+  exit 1
+fi
+sed 's/exit 7/exit 0/' "$work/gate-control/bad" >"$work/gate-control/good"
+chmod +x "$work/gate-control/good"
+run_guest "$work/gate-control/good" "$work/gate-control" >/dev/null
+sed 's/observer_distinct=True/observer_distinct=False/' "$work/gate-control/good" >"$work/gate-control/bad-receipt"
+chmod +x "$work/gate-control/bad-receipt"
+if run_guest "$work/gate-control/bad-receipt" "$work/gate-control"; then
+  echo "guest gate accepted incorrect physical receipt" >&2
+  exit 1
+fi
+echo CLOSED_TASK_NATIVEAOT_GATE_CONTROL_PASS
 project=compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj
 host=host/Ores.Net.TaskI64NativeHost/Ores.Net.TaskI64NativeHost.csproj
 dotnet publish "$project" -c Release -r linux-x64 --self-contained true -p:PublishAot=true -o "$work/compiler" -warnaserror
@@ -32,8 +62,7 @@ for name in taskfuture-int future-int; do
   dotnet publish "$host" -c Release -r linux-x64 --self-contained true -p:PublishAot=true "-p:GeneratedAssembly=$out/OresGenerated.dll" -o "$out/app" -warnaserror
   app="$out/app/oreslang-task-i64"
   bash verification/assert-linux-native-release.sh "$app"
-  [[ "$(timeout 15s "$app" 2>"$out/guest.err")" == 42 ]]
-  grep -Fx 'TASK_I64_RECEIPT; producers=1; observer_distinct=True; producer_body_retired=True' "$out/guest.err"
+  run_guest "$app" "$out"
   [[ "$(sha256sum "$source" | cut -d' ' -f1)" == "$fixture_sha" ]]
   [[ "$(sha256sum "$compiler" | cut -d' ' -f1)" == "$compiler_sha" ]]
   printf 'CLOSED_TASK_NATIVEAOT_PASS|head=%s|case=%s|value=42|compiler_sha256=%s|fixture_sha256=%s|cil_sha256=%s|artifact_sha256=%s\n' "$EXPECTED_HEAD" "$name" "$compiler_sha" "$fixture_sha" "$(sha256sum "$out/OresGenerated.dll" | cut -d' ' -f1)" "$(sha256sum "$app" | cut -d' ' -f1)"
