@@ -642,6 +642,7 @@ public static partial class OresParser
             var start = _i;
             if (_i == text.Length) return new Token("", start);
             var ch = text[_i];
+            if (ch is '⧖' or '∂') { _i++; return new Token("suspends", start); }
             if (ch is '\'' or '"' or '\u0060')
             {
                 _i = QuotedSourceSyntax.Scan(text, start);
@@ -813,7 +814,7 @@ public static partial class OresParser
                 if (word is "gen" or "generator")
                     throw new FormatException(
                         $"generator declarations require iterator-frame and continuation lowering in .NET Native AOT backend at offset {start}");
-                return new Token(word, start);
+                return new Token(word == "susp" ? "suspends" : word, start);
             }
             if (ch == '"')
             {
