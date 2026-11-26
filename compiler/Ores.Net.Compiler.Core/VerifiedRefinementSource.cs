@@ -328,7 +328,11 @@ public static partial class OresParser
                     string param = ReadVerifiedName();
                     if (!verifiedLocals.TryGetValue(param, out var type))
                         throw new FormatException("E_REFINEMENT_NAME: requires must name a parameter");
-                    verifiedLocals[param] = ReadVerifiedBound(type, ReadQuantityComparison());
+                    string comparison;
+                    if (Take("!=")) comparison = "!=";
+                    else if(Current.Text == "!" && _index+1<tokens.Count && tokens[_index+1].Text=="=" && tokens[_index+1].Offset==Current.Offset+1) { _index+=2; comparison="!="; }
+                    else comparison=ReadQuantityComparison();
+                    verifiedLocals[param] = ReadVerifiedBound(type, comparison);
                     if(annotated){if(_index!=span.End)throw new FormatException("E_REFINEMENT_CONTRACT: trailing annotation tokens");_index=resume;}
                 }
                 var required = parameters.Select(param => verifiedLocals[param.Name]).ToArray();
