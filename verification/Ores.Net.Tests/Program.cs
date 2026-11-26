@@ -98,7 +98,18 @@ foreach (string source in new[] {
     "do select<int> over default: -> { return 42; } end",
     "do select over default: -> { return 42; } end",
     "nb select over default: -> { return 42; } end",
-    "select { default: -> { return 42; } }"
+    "select { default: -> { return 42; } }",
+    "select(3) over when readch incoming: int value -> { return value; } end",
+    "select /* outer /* inner */ trivia */ (3) { default: -> { return 42; } }",
+    "select<int>(3) { default: -> { return 42; } }",
+    "await select(3) over default: -> { return 42; } end",
+    "await select<int>(3) over default: -> { return 42; } end",
+    "nb select(3) { default: -> { return 42; } }",
+    "nb /* comment */ select /* count */ (3) { default: -> { return 42; } }",
+    "try select(0) { default: -> { return 42; } }",
+    "do select(-1) { default: -> { return 42; } }",
+    "select(true) { default: -> { return 42; } }",
+    "select(1 + 2) { default: -> { return 42; } }"
 })
 {
     RejectDiagnostic(() => OresParser.Parse(source),

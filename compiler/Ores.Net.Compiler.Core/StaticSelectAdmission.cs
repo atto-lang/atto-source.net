@@ -6,7 +6,7 @@ internal static class StaticSelectAdmission
         "Static select requires checked Channel/Future arbitration, actor-lane continuation, ownership and cancellation lowering in the .NET backend";
 
     internal static bool IsStaticSelectFollower(string token) =>
-        token is "{" or "over" or "first" or "fair" or "random";
+        token is "{" or "<" or "(" or "over" or "first" or "fair" or "random";
 
     internal static FormatException Unsupported(int offset) =>
         new($"{Diagnostic} at offset {offset}");
@@ -27,9 +27,9 @@ internal static class StaticSelectAdmission
 
         i = end;
         if (!SkipTrivia(source, ref i) || i >= source.Length) return false;
-        // Typed select<T> is deliberately unsupported too; do not misclassify
-        // "nb select<T>" as an unrelated execution region.
-        if (source[i] is '{' or '<') return true;
+        // Counted and typed select are reserved source forms; fail closed at
+        // lexical admission before the generic scalar/call parser can consume them.
+        if (source[i] is '{' or '<' or '(') return true;
         if (!(char.IsLetter(source[i]) || source[i] == '_')) return false;
 
         int start = i++;
