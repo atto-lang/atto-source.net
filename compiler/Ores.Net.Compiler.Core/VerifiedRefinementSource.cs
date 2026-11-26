@@ -517,6 +517,7 @@ public static partial class OresParser
                     local=ReadVerifiedName();Expect(":");type=ReadRefinedType();
                 }else{type=ReadRefinedType();local=ReadVerifiedName();}
                 if(strictArrays.ContainsKey(local))throw new FormatException("E_VERIFY_UNSUPPORTED: reused array binding");
+                if(Current.Text==";")throw new FormatException("E_MISSING_INITIALIZER: explicit initializer required");
                 Expect("=");
                 if(Take("Array")){
                     if(type is not null||verifiedLocals.ContainsKey(local))
@@ -554,6 +555,7 @@ public static partial class OresParser
                 var type=ReadRefinedType();
                 string local=ReadVerifiedName();
                 if(strictArrays.ContainsKey(local))throw new FormatException("E_VERIFY_UNSUPPORTED: reused array binding");
+                if(Current.Text==";")throw new FormatException("E_MISSING_INITIALIZER: explicit initializer required");
                 Expect("=");var value=VerifiedExpression(0);Expect(";");
                 type.Require(value.Type,"E_REFINEMENT_BINDING","mutable binding "+local);
                 if(!verifiedLocals.TryAdd(local,type with {Range=value.Type.Range}))
