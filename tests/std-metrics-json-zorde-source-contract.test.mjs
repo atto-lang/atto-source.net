@@ -197,3 +197,15 @@ test("three identical Atto guest fixtures have pinned nonempty 127-line goldens"
   }
   assert.equal(outputs,127);
 });
+
+test("histogram snapshot has one explicit detachment boundary (source only)", () => {
+  const m = modules.metrics;
+  const start = m.indexOf("pub snapshot(): HistogramSnapshot");
+  assert.ok(start >= 0);
+  const snapshot = m.slice(start, m.indexOf("  pub fnc counter(", start));
+  assert.ok(snapshot.includes("new HistogramSnapshot(self.thresholds, self.counts,"));
+  assert.ok(!snapshot.includes("new Array<int>()"));
+  assert.ok(m.includes("self.finite_bounds = detached_bounds;"));
+  assert.ok(m.includes("self.per_bucket = detached_counts;"));
+  // Compiler ownership and actual allocation counts are separate guest gates.
+});
