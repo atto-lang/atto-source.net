@@ -912,6 +912,8 @@ public static partial class OresStructuredParser
         private bool previousWasWith;
         private bool previousWasString;
         private bool previousWasSync;
+        private string previousToken = "", beforePreviousToken = "";
+        private bool insideBooleanLiteralPack;
         public Token Read()
         {
             while (index < source.Length)
@@ -969,7 +971,23 @@ public static partial class OresStructuredParser
                     + $"owned field layout/drop and Native AOT reconstruction at offset {index}");
             // Keep safe-collection denial from current main in the separate
             // structured/linked parser, including when Option<int> is enabled.
-            SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, offset);
+            // Brackets remain denied everywhere except the tightly scoped
+            // named Boolean literal pack. Reader independently validates
+            // the intrinsic identity, types, arity and literal-only shape.
+            bool booleanPackBracket = false;
+            if (ch == '[' && !insideBooleanLiteralPack && previousToken == "(" &&
+                beforePreviousToken is ("And" or "Or" or "Xor"))
+            {
+                insideBooleanLiteralPack = true;
+                booleanPackBracket = true;
+            }
+            else if (ch == ']' && insideBooleanLiteralPack)
+            {
+                insideBooleanLiteralPack = false;
+                booleanPackBracket = true;
+            }
+            if (!booleanPackBracket)
+                SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, offset);
             // Injection changes ownership and lifetime authority. The scalar
             // CIL bootstrap cannot treat an annotation as harmless metadata.
             // Perform this check after comments have been skipped so comment
@@ -990,7 +1008,9 @@ public static partial class OresStructuredParser
             if (ch is '\'' or '"' or '\u0060')
             {
                 index = QuotedSourceSyntax.Scan(source, offset);
-                return new Token(source[offset..index], offset);
+                beforePreviousToken = previousToken;
+                previousToken = source[offset..index];
+                return new Token(previousToken, offset);
             }
             if (Digit(ch))
             {
@@ -1136,7 +1156,7 @@ public static partial class OresStructuredParser
             // Preserve the earlier != / !eq recognition and the separate
             // fail-closed macro and ownership admission gates.
             else if (ch == '!') index++;
-            else if ("()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
+            else if (booleanPackBracket || "()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
                 (ch == '|' && precededByString) ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
@@ -1157,6 +1177,8 @@ public static partial class OresStructuredParser
                 throw new FormatException($"E_LINKED_GUEST_EFFECT_UNSUPPORTED: linked guest effect ABI is not verified at offset {offset}");
             previousWasString = tokenText is "String" or "string";
             previousWasSync = tokenText == "sync";
+            beforePreviousToken = previousToken;
+            previousToken = tokenText;
             return new Token(tokenText, offset);
         }
     }
