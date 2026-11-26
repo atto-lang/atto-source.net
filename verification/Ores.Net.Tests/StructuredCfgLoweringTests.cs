@@ -180,16 +180,18 @@ internal static class StructuredCfgLoweringTests
         int offset = source.LastIndexOf(spelling, StringComparison.Ordinal);
         if (offset < 0 || source[offset] != '!')
             throw new Exception("Missing operator boundary in fixture: " + label);
-        // Standalone ! is now a typed unary operator. In these infix
-        // fixtures the left integer is not a bool condition, so the reader
-        // rejects before consuming the malformed alias. Require that exact
-        // typed diagnostic (or the original lexical boundary diagnostic).
-        try { _ = OresStructuredCfgLowering.Lower(source); }
-        catch (FormatException e) when (
-            e.Message.Contains("Invalid character at offset " + offset, StringComparison.Ordinal) ||
-            e.Message.Contains("If condition must be bool at offset " + (offset - 2), StringComparison.Ordinal))
-        { return; }
-        throw new Exception("Malformed !eq alias was accepted: " + label);
+        // Standalone ! now lexes as unary Boolean negation. In these
+        // infix fixtures the preceding integer remains the condition and
+        // must be rejected, never interpreted as != or !eq.
+        int conditionEnd = offset;
+        while (conditionEnd > 0 && char.IsWhiteSpace(source[conditionEnd - 1]))
+            conditionEnd--;
+        int conditionStart = conditionEnd;
+        while (conditionStart > 0 && char.IsAsciiDigit(source[conditionStart - 1]))
+            conditionStart--;
+        if (conditionStart == conditionEnd)
+            throw new Exception("Missing integer condition: " + label);
+        RejectWithDiagnostic(source, "If condition must be bool at offset " + conditionStart, label);
     }
 
     private static void NegatedDoIfAotControlFlow()
@@ -263,6 +265,8 @@ internal static class StructuredCfgLoweringTests
             if (CfgReferenceEvaluator.Evaluate(strict) != 42)
                 throw new Exception("Strict conditional CFG mismatch: " + head);
         }
+        Reject("fnc main():int{return if true then break; else 0 fi;}",
+            "value-if cannot contain break");
         Reject("fnc main():int{do ifnot false then break; fi return 0;}",
             "break outside loop");
     }

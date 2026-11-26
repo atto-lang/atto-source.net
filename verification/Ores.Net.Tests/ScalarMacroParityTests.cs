@@ -209,7 +209,7 @@ public static class ScalarMacroParityTests
             "NET_MACRO_EXPANDER_REQUIRED",
             "non-identifier bang invocation cannot bypass compile-time admission");
         Reject(LiteralMacro + MainSource("literal!(const dynamic_name)"),
-            "Expected integer", "dynamic Const<int> must fail before CIL");
+            "Unknown or unsupported scalar identifier", "dynamic Const<int> must fail before CIL");
         Reject(LiteralMacro + MainSource("literal!(const 9223372036854775807 + 1)"),
             "NET_MACRO_CONST_OVERFLOW", "checked constant overflow");
         Reject(LiteralMacro + MainSource("literal!(const -(-9223372036854775808))"),
