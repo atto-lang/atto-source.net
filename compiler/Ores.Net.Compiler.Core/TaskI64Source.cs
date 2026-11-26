@@ -93,21 +93,31 @@ public static class TaskI64Source
         Expect(";"); Expect("}");
         if (!canonical) Expect(")");
         Expect(";");
-        // Only a direct, consuming await is proven for the principal handle.
-        // No full task-control API or alias can escape this closed root.
-        // Recognize a second observation only in this exact closed shape.
+        // The closed profile admits exactly one observation. Parse a local
+        // observation followed by a second observation as a diagnostic-only
+        // form; all other local-result shapes remain explicitly unsupported.
         if (taskFuture && (Current() is "val" or "let"))
         {
-            int remaining = tokens.Count - at;
-            if (remaining == 14 &&
-                tokens[at + 1] == "int" && IdentifierStart(tokens[at + 2][0]) &&
-                tokens[at + 2].All(IdentifierPart) && tokens[at + 2] != name &&
-                tokens[at + 3] == "=" && tokens[at + 4] == "await" &&
-                tokens[at + 5] == name && tokens[at + 6] == ";" &&
-                tokens[at + 7] == "return" && tokens[at + 8] == tokens[at + 2] &&
-                tokens[at + 9] == "+" && tokens[at + 10] == "await" &&
-                tokens[at + 11] == name && tokens[at + 12] == ";" && tokens[at + 13] == "}")
-                throw new FormatException("E_TASK_RESULT_CONSUMED: TaskFuture result cannot be observed twice");
+            at++;
+            Expect("int");
+            string local = Current();
+            if (local.Length == 0 || !IdentifierStart(local[0]) ||
+                !local.All(IdentifierPart) || local == name)
+                throw new FormatException("Task-i64 result needs a distinct ordinary identifier");
+            at++;
+            Expect("="); Expect("await"); Expect(name); Expect(";");
+            Expect("return");
+            if (Current() == local)
+            {
+                at++;
+                Expect("+");
+            }
+            if (Current() != "await")
+                throw new FormatException("E_UNSUPPORTED: local TaskFuture result requires general lowering");
+            Expect("await"); Expect(name); Expect(";"); Expect("}");
+            if (at != tokens.Count)
+                throw new FormatException("Task-i64 root has trailing source");
+            throw new FormatException("E_TASK_RESULT_CONSUMED: TaskFuture result cannot be observed twice");
         }
         Expect("return");
         if (taskFuture && Current() != "await")
