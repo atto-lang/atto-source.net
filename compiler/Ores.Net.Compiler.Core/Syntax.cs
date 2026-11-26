@@ -62,6 +62,13 @@ public static partial class OresParser
         if (languageVersion.HasValue && languageVersion.Value is not (1 or 2))
             throw new FormatException("E_LANGUAGE_VERSION: expected language version 1 or 2");
         var tokens = StripFileExports(Tokenize(source, allowCaretReturn: languageVersion.HasValue, allowScalarTupleProjection: true), source);
+        // Preserve the dedicated removal diagnostic for old tuple factory
+        // syntax even when it contains a bracket projection. Nothing is emitted.
+        for (int i = 0; i + 2 < tokens.Count; i++)
+            if (tokens[i].Text == "~" && tokens[i + 1].Text == "tuple" &&
+                tokens[i + 2].Text == "(")
+                throw new FormatException(
+                    $"E_COLLECTION_FACTORY_REMOVED: '~' denotes structural typing, not a collection constructor; use Tuple.of(...) at offset {tokens[i].Offset}");
         RejectUnverifiedScalarBrackets(tokens);
         RejectUnsupportedSourceActors(tokens);
         RejectUnsupportedInvertedClasses(tokens);
