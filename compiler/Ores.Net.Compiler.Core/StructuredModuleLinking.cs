@@ -65,12 +65,12 @@ public static class OresSourceModuleCompiler
     // Canonical selector "<layer>/<unit>"; "atto.<layer>/" and ".atto" are
     // aliases. Only units this backend lowers today are registered; the rest
     // of the catalog fails closed with an explicit "not implemented" error.
-    private static readonly IReadOnlyDictionary<string, (string Layer, string Resource)> V1Units =
+    private static readonly IReadOnlyDictionary<string, (string Layer, string Resource, string Sha256)> V1Units =
         new Dictionary<string, (string, string)>(StringComparer.Ordinal)
         {
-            ["core/num"] = ("core", "Atto.Lib.Core.Num"),
-            ["core/cmp"] = ("core", "Atto.Lib.Core.Cmp"),
-            ["core/mem"] = ("core", "Atto.Lib.Core.Mem"),
+            ["core/num"] = ("core", "Atto.Lib.Core.Num", "42b0adc66e34c44918538e71b3b6de935ee2c48e0b047ac443191db35614e1e3"),
+            ["core/cmp"] = ("core", "Atto.Lib.Core.Cmp", "bf5c656df7e539e077f6bd7cfbe4f80d0b4980c539b57e11c79414cb05501d3a"),
+            ["core/mem"] = ("core", "Atto.Lib.Core.Mem", "8450235b9d7194f44910423738dfb395ab15753860e78bb7abee36d51b094fe4"),
         };
     private static readonly HashSet<string> V1Catalog = new(StringComparer.Ordinal)
     {
@@ -375,10 +375,20 @@ public static class OresSourceModuleCompiler
             throw new FormatException("unknown compiler-owned library resource");
         using var stream = typeof(OresSourceModuleCompiler).Assembly.GetManifestResourceStream(entry.Resource)
             ?? throw new FormatException("compiler-owned library module source resource is missing");
-        using var buffer = new MemoryStream();
-        stream.CopyTo(buffer);
-        if (buffer.Length > MaxFileBytes) throw new FormatException("compiler-owned library resource exceeds 1 MiB");
-        return buffer.ToArray();
+        var data = new byte[MaxFileBytes + 1];
+        int count = 0;
+        while (count < data.Length)
+        {
+            int n = stream.Read(data, count, data.Length - count);
+            if (n == 0) break;
+            count += n;
+        }
+        if (count > MaxFileBytes)
+            throw new FormatException("compiler-owned library resource exceeds 1 MiB");
+        byte[] bytes = data.AsSpan(0, count).ToArray();
+        if (!string.Equals(Convert.ToHexStringLower(SHA256.HashData(bytes)), entry.Sha256, StringComparison.Ordinal))
+            throw new FormatException("compiler-owned atto library module source digest mismatch");
+        return bytes;
     }
 
     private static void RejectReparse(string path)

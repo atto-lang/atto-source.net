@@ -44,6 +44,31 @@ internal static class AttoLibrariesV1SelfTest
         return string.Equals(error, expected, StringComparison.Ordinal);
     }
 
+    private static readonly Dictionary<string, string> PinnedLayeredCore = new(StringComparer.Ordinal)
+    {
+        ["@atto.core/num.atto"] = "42b0adc66e34c44918538e71b3b6de935ee2c48e0b047ac443191db35614e1e3",
+        ["@atto.core/cmp.atto"] = "bf5c656df7e539e077f6bd7cfbe4f80d0b4980c539b57e11c79414cb05501d3a",
+        ["@atto.core/mem.atto"] = "8450235b9d7194f44910423738dfb395ab15753860e78bb7abee36d51b094fe4"
+    };
+
+    private static void VerifyLayeredCoreWitnesses(string name, SourceModuleCompilation compiled)
+    {
+        // These three required guests exercise all registered layered resources.
+        string[] required = name switch
+        {
+            "aliases.atto" => new[] { "@atto.core/num.atto", "@atto.core/cmp.atto" },
+            "core_cmp.atto" => new[] { "@atto.core/cmp.atto" },
+            "net_core_int_slice.atto" => new[] { "@atto.core/num.atto", "@atto.core/cmp.atto", "@atto.core/mem.atto" },
+            _ => Array.Empty<string>()
+        };
+        foreach (string identity in required)
+        {
+            var witnesses = compiled.Sources.Where(w => w.Path == identity).ToArray();
+            if (witnesses.Length != 1 || witnesses[0].Sha256 != PinnedLayeredCore[identity])
+                throw new Exception($"FAILED: {name}: missing or drifted layered source identity {identity}");
+        }
+    }
+
     private static void CheckEvidencePolicy()
     {
         const string known = "compiler-owned atto.std module 'atto.std/io' is not implemented by the .NET backend yet (unsupported compiler-owned AttoLang library namespace)";
@@ -104,6 +129,7 @@ internal static class AttoLibrariesV1SelfTest
                 // Do not label stdout/target-OS cases as passing without exercising them.
                 if (meta.Stdout is not null || meta.Flags.Count > 0)
                 { failures.Add($"{name}: compiled but target flags/stdout execution not implemented by harness"); continue; }
+                VerifyLayeredCoreWitnesses(name, compiled!);
                 string assembly = Path.Combine(scratch, Path.GetFileNameWithoutExtension(name), "OresGenerated.dll");
                 Directory.CreateDirectory(Path.GetDirectoryName(assembly)!);
                 CilEmitter.EmitLibrary(compiled!.Module, assembly);
