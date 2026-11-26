@@ -135,7 +135,7 @@ internal sealed class CountedReadyCompiler
         if (!literal || constant != 0) foreach (var f in futures) f.Moved = true;
         string plan = literal && constant == 0 ? "static () => ([], [])" :
             "() => ([" + string.Join(",",sources) + "], [" + string.Join(",",projections) + "])";
-        string start = "Start(" + count + "," + plan + "," + (fair ? "true" : "false") + ",owned)";
+        string start = "Start(" + count + "," + plan + "," + (fair ? "true" : "false") + ",owned,fence)";
         return direct ? new("array","Finish(" + start + ",owned)") : new("futureArray",start);
     }
     private Value SelectResult(bool direct)
@@ -213,12 +213,17 @@ internal sealed class CountedReadyCompiler
     private static long Sub(long a,long b)=>checked(a-b);
     private static long Mul(long a,long b)=>checked(a*b);
     private static long Neg(long a)=>checked(-a);
-    private sealed record Pending(CountedSelectI64Batch Batch,int Count,int Arms);
-    private static Pending Start(long count,Func<(object[],Func<long,long>[])> plan,bool fair,HashSet<Pending> owned) {
+    private sealed record Pending(CountedSelectI64Batch Batch,int Count,int Arms,SelectContinuationFence.Execution Lease);
+    private static Pending Start(long count,Func<(object[],Func<long,long>[])> plan,bool fair,HashSet<Pending> owned,SelectContinuationFence fence) {
       if(count<0||count>16)throw new ArgumentOutOfRangeException(nameof(count),"SelectCountInvalid");
       var (s,p)=count==0?(Array.Empty<object>(),Array.Empty<Func<long,long>>()):plan();
-      var record=new Pending(new CountedSelectI64Batch((int)count,s,fair,p),(int)count,s.Length);
-      owned.Add(record); return record;
+      var ticket=fence.Register(fence.Generation);
+      var lease=fence.TryClaim(ticket);
+      if(lease is null){ticket.Close();throw new InvalidOperationException("counted guest execution admission failed");}
+      try{
+        var record=new Pending(new CountedSelectI64Batch((int)count,s,fair,p),(int)count,s.Length,lease);
+        owned.Add(record); return record;
+      }catch{lease.Dispose();throw;}
     }
     private static IReadOnlyList<long> Finish(Pending record,HashSet<Pending> owned) {
       var b=record.Batch;
@@ -227,10 +232,22 @@ internal sealed class CountedReadyCompiler
           if(!b.Pump())throw new InvalidOperationException("E_READY_ONLY: selection would suspend");
         if(!b.Completion.IsCompleted)throw new InvalidOperationException("E_READY_ONLY: owner pump budget");
         return b.Completion.GetAwaiter().GetResult();
-      } finally { Retire(record); owned.Remove(record); }
+      } finally { try{Retire(record);}finally{owned.Remove(record);} }
     }
-    private static void Retire(Pending record) { var b=record.Batch; if(!b.Completion.IsCompleted)b.Cancel(); if(b.Completion.IsFaulted)_=b.Completion.Exception; }
-    private static void Drain(HashSet<Pending> owned) { foreach(var record in owned)Retire(record); owned.Clear(); }
+    private static void Retire(Pending record) {
+      // Pump and Cancel are synchronous, serialized owner calls. No worker
+      // remains physically executing after they return or throw.
+      try{var b=record.Batch; if(!b.Completion.IsCompleted)b.Cancel(); if(b.Completion.IsFaulted)_=b.Completion.Exception;}
+      finally{record.Lease.Dispose();}
+    }
+    private static void Drain(HashSet<Pending> owned,SelectContinuationFence fence) {
+      fence.Close();
+      List<Exception> errors=new();
+      foreach(var record in owned){try{Retire(record);}catch(Exception error){errors.Add(error);}}
+      owned.Clear();
+      if(!fence.RetirementReady)errors.Add(new InvalidOperationException("counted guest physical execution not retired"));
+      if(errors.Count!=0)throw new AggregateException("counted guest retirement failure",errors);
+    }
     """;
     internal static int Run(string input,string output)
     {
@@ -242,7 +259,7 @@ internal sealed class CountedReadyCompiler
             string source=File.ReadAllText(input,new UTF8Encoding(false,true));
             string body=new CountedReadyCompiler(source).Parse();
             string name="Guest_"+Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source))).ToLowerInvariant();
-            string text="using System;\nusing System.Collections.Generic;\nusing Ores.Net.Runtime;\npublic static class "+name+" {\n"+Helpers+"\npublic static long Run(){\nvar owned=new HashSet<Pending>();\ntry{\n"+body+"\n}finally{Drain(owned);}\n}}\n";
+            string text="using System;\nusing System.Collections.Generic;\nusing Ores.Net.Runtime;\npublic static class "+name+" {\n"+Helpers+"\npublic static long Run(){\nvar owned=new HashSet<Pending>();\nvar fence=new SelectContinuationFence(maxTickets:128);\ntry{\n"+body+"\n}finally{Drain(owned,fence);}\n}}\n";
             string final=Path.GetFullPath(output);temp=Path.Combine(Path.GetDirectoryName(final)!,"."+Guid.NewGuid().ToString("N")+".tmp");
             using (var stream=new FileStream(temp,FileMode.CreateNew,FileAccess.Write,FileShare.None))
             using (var writer=new StreamWriter(stream,new UTF8Encoding(false))) writer.Write(text);
