@@ -2710,6 +2710,38 @@ public static partial class OresStructuredParser
                     value = ReadMatchValue(at, depth + 1, value);
                     continue;
                 }
+                if (Current.Text is "if" or "ifnot" or "unless")
+                {
+                    bool inverted = Current.Text != "if";
+                    index++;
+                    var predicate = ReceiverPredicate(value, depth + 1);
+                    Require(predicate, IrValueType.Bool, "Value if condition requires bool");
+                    if (inverted)
+                        predicate = CheckedBinary(at, StructuredOperator.EqualBool,
+                            predicate, new StructuredBool(at, false), IrValueType.Bool);
+                    Expect("then");
+                    var yes = ReadConditionalStatementArm(depth + 1, false, "else");
+                    Expect("else");
+                    var no = ReadConditionalStatementArm(depth + 1, false, "fi");
+                    Expect("fi");
+                    Require(no, yes.Type, "Value if result types differ");
+                    value = CheckedConditional(at, predicate, yes, no);
+                    continue;
+                }
+                if (Current.Text == "?" || ReceiverPredicateStarts())
+                {
+                    value = ReceiverPredicate(value, depth + 1);
+                    if (Take("?"))
+                    {
+                        Require(value, IrValueType.Bool, "Conditional test requires bool");
+                        var yes = ReadTernaryArm(depth + 1, false, ":");
+                        Expect(":");
+                        var no = ReadTernaryArm(depth + 1, false, ";", conditionalOnly: true);
+                        Require(no, yes.Type, "Conditional result types differ");
+                        value = CheckedConditional(at, value, yes, no);
+                    }
+                    continue;
+                }
                 string name = Name();
                 value = ApplyValueStage(name, at, value);
             }
@@ -2718,6 +2750,51 @@ public static partial class OresStructuredParser
             if (Current.Text == "^")
                 throw Error("Reserved AttoLang operator '^' in expressions; use Integer.bitXor(a, b)");
             return value;
+        }
+
+        private bool ReceiverPredicateStarts() =>
+            Current.Text is "is" or "<" or ">" or "<=" or ">=" or "eq" or "==" or "neq" or "!=";
+
+        private StructuredExpr ReceiverPredicate(StructuredExpr input, int depth)
+        {
+            Budget(depth);
+            int at = Current.Offset;
+            if (Take("is"))
+            {
+                Take("type");
+                Expect("int");
+                Require(input, IrValueType.I64, "Receiver int type test requires proven int");
+                // Preserve evaluation of the operand even for an always-true
+                // checked scalar test; never erase a potentially failing call.
+                return CheckedBinary(at, StructuredOperator.GreaterThanOrEqualI64,
+                    input, new StructuredInt(at, long.MinValue), IrValueType.Bool);
+            }
+            if (!ReceiverPredicateStarts()) return input;
+            string op = Current.Text;
+            index++;
+            bool equality = op is "eq" or "==" or "neq" or "!=";
+            var right = equality ? Compare(depth + 1) : Shift(depth + 1);
+            if (equality)
+            {
+                Require(right, input.Type, "Equality requires matching operands");
+                if (input.Type is not (IrValueType.I64 or IrValueType.Bool))
+                    throw Error("Receiver equality requires int or bool");
+                bool neq = op is "neq" or "!=";
+                var comparison = input.Type == IrValueType.Bool
+                    ? (neq ? StructuredOperator.NotEqualBool : StructuredOperator.EqualBool)
+                    : (neq ? StructuredOperator.NotEqualI64 : StructuredOperator.EqualI64);
+                return CheckedBinary(at, comparison, input, right, IrValueType.Bool);
+            }
+            Require(input, IrValueType.I64, "Comparison requires int operands");
+            Require(right, IrValueType.I64, "Comparison requires int operands");
+            return CheckedBinary(at, op switch
+            {
+                "<" => StructuredOperator.LessThanI64,
+                ">" => StructuredOperator.GreaterThanI64,
+                "<=" => StructuredOperator.LessThanOrEqualI64,
+                ">=" => StructuredOperator.GreaterThanOrEqualI64,
+                _ => throw Error("Unrecognized receiver comparison")
+            }, input, right, IrValueType.Bool);
         }
 
         private StructuredExpr ApplyValueStage(string name, int at, StructuredExpr input)
