@@ -9,6 +9,7 @@ on:
       - 'compiler/Ores.Net.Compiler.Core/CompilerCacheLedger.cs'
       - 'compiler/Ores.Net.Compiler.Core/FrozenCilSession.cs'
       - 'compiler/Ores.Net.Compiler.Core/PersistentFrozenCilSession.cs'
+      - 'compiler/Ores.Net.Compiler.Core/LinuxCacheDirectory.cs'
       - 'compiler/Ores.Net.Compiler.Core/CilEmitter.cs'
       - 'compiler/Ores.Net.Compiler.Core/CfgCilEmitter.cs'
       - 'verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs'

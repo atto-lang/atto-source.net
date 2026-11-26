@@ -115,16 +115,17 @@ internal static class FrozenDependencyGraphSelfTest
         if(lane=="edit"){
             Deny("E_UNBOUND",()=>session.Compile(main.Replace("answer(21)","missing(21)"),new[]{c,d},record,pin,master,true));
             if(!session.Compile(main,new[]{c,d},record,pin,master).Reused)throw new InvalidOperationException("rollback lost cache");
+            static void DenyPath(Action operation){try{operation();}catch(System.IO.IOException e) when(e.Message.StartsWith("E_CACHE_PATH:",StringComparison.Ordinal)){return;}throw new InvalidOperationException("expected cache path denial");}
             var slots=System.IO.Directory.GetFiles(root,"slot-*");
             foreach(var file in slots){System.IO.File.Move(file,file+".saved");System.IO.File.CreateSymbolicLink(file,file+".saved");}
-            try{Deny("E_CACHE_PATH",()=>session.Compile(main,new[]{c,d},record,pin,master));}
+            try{DenyPath(()=>session.Compile(main,new[]{c,d},record,pin,master));}
             finally{foreach(var file in slots){System.IO.File.Delete(file);System.IO.File.Move(file+".saved",file);}}
             string alias=root+"-alias";System.IO.Directory.CreateSymbolicLink(alias,root);
-            try{Deny("E_CACHE_PATH",()=>new PersistentFrozenCilSession(alias,"tenant/a",compiler,Sha(Bytes("fixture-net10-compiler"))));}
+            try{DenyPath(()=>new PersistentFrozenCilSession(alias,"tenant/a",compiler,Sha(Bytes("fixture-net10-compiler"))));}
             finally{System.IO.Directory.Delete(alias);}
             string moved=root+"-moved";System.IO.Directory.Move(root,moved);
             System.IO.Directory.CreateDirectory(root,System.IO.UnixFileMode.UserRead|System.IO.UnixFileMode.UserWrite|System.IO.UnixFileMode.UserExecute);
-            try{Deny("E_CACHE_PATH",()=>session.Compile(main,new[]{c,d},record,pin,master));}
+            try{DenyPath(()=>session.Compile(main,new[]{c,d},record,pin,master));}
             finally{System.IO.Directory.Delete(root);System.IO.Directory.Move(moved,root);}
             Console.WriteLine("NET_DESCRIPTOR|symlink|root-swap|ancestor-denied");
             foreach(var file in System.IO.Directory.GetFiles(root,"slot-*")){
