@@ -236,6 +236,21 @@ public static class OresStructuredCfgLowering
                         "E_OPTION_I64_ONLY: unverified Option<int> expression");
             }
         }
+        private static void ValidateStaticString(ReadOnlyMemory<byte> bytes)
+        {
+            if(bytes.Length>256)throw new FormatException("E_STRING_VIEW_LIMIT: invalid static span");
+            try { _=new System.Text.UTF8Encoding(false,true).GetCharCount(bytes.Span); }
+            catch(System.Text.DecoderFallbackException) { throw new FormatException("E_STRING_ESCAPE: invalid UTF-8"); }
+        }
+        private static long StaticWord(ReadOnlyMemory<byte> bytes,int offset)
+        {
+            // Explicit little-endian, zero padded only beyond the authoritative
+            // length. Never compare by sentinel, interned identity or host equality.
+            ulong result=0;
+            for(int i=0;i<8 && offset+i<bytes.Length;i++)
+                result|=(ulong)bytes.Span[offset+i]<<(8*i);
+            return unchecked((long)result);
+        }
         private int Expression(StructuredExpr expression, ref Block block,
             Dictionary<string, Binding> variables)
         {
@@ -247,6 +262,24 @@ public static class OresStructuredCfgLowering
                 case StructuredBool boolean:
                     return Emit(block, CfgOpcode.ConstantBool, IrValueType.Bool,
                         boolean: boolean.Value);
+                case StructuredStaticStringCompare comparison:
+                {
+                    ValidateStaticString(comparison.Left);
+                    ValidateStaticString(comparison.Right);
+                    // Lower explicit lengths and packed UTF-8 bytes to checked
+                    // typed scalar SSA comparisons, not a host-computed bool.
+                    StructuredExpr EqualWord(long a,long b) => new StructuredBinary(
+                        comparison.At,StructuredOperator.EqualI64,
+                        new StructuredInt(comparison.At,a),new StructuredInt(comparison.At,b),
+                        IrValueType.Bool);
+                    StructuredExpr predicate=EqualWord(comparison.Left.Length,comparison.Right.Length);
+                    for(int offset=0;offset<Math.Max(comparison.Left.Length,comparison.Right.Length);offset+=8)
+                        predicate=new StructuredBinary(comparison.At,StructuredOperator.LogicalAnd,
+                            predicate,EqualWord(StaticWord(comparison.Left,offset),StaticWord(comparison.Right,offset)),
+                            IrValueType.Bool);
+                    int equal=Expression(predicate,ref block,variables);
+                    return comparison.Negated?Emit(block,CfgOpcode.BoolNot,IrValueType.Bool,left:equal):equal;
+                }
                 case StructuredRead read:
                     if (!variables.TryGetValue(read.Name, out var variable) ||
                         variable.Type != read.Type || variable.Type == IrValueType.OptionI64)
@@ -481,6 +514,11 @@ public static class OresStructuredCfgLowering
                     throw new FormatException("Unreachable structured CFG statement");
                 switch (stmt)
                 {
+                    case StructuredStaticStringBinding literal:
+                        // Literal binding has no runtime effects or allocation.
+                        // The parser's typed snapshot is consumed at comparisons.
+                        ValidateStaticString(literal.Bytes);
+                        break;
                     case StructuredLocalTypeDecl localType:
                         throw new FormatException(
                             $"Local {localType.Kind.ToString().ToLowerInvariant()} '{localType.Name}' requires verified value layout and CIL lowering at offset {localType.At}");

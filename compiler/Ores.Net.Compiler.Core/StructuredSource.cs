@@ -7,6 +7,10 @@ namespace Ores.Net.Compiler;
 public abstract record StructuredExpr(int Offset, IrValueType Type);
 public sealed record StructuredInt(int At, long Value) : StructuredExpr(At, IrValueType.I64);
 public sealed record StructuredBool(int At, bool Value) : StructuredExpr(At, IrValueType.Bool);
+// Restricted literal-backed string views. Bytes are compiler-owned immutable
+// snapshots, not values of the scalar int type or CLR strings in guest code.
+internal sealed record StructuredStaticStringCompare(int At, ReadOnlyMemory<byte> Left,
+    ReadOnlyMemory<byte> Right, bool Negated) : StructuredExpr(At, IrValueType.Bool);
 // A closed, allocation-free Option<int> source type. Lowering expands it into
 // two independently verified SSA primitives (tag + payload), never a sentinel.
 // No Option<T> ABI, nested Option, type erasure or implicit unwrap is authorized.
@@ -59,6 +63,7 @@ public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
 public abstract record StructuredStmt(int Offset);
+internal sealed record StructuredStaticStringBinding(int At, ReadOnlyMemory<byte> Bytes) : StructuredStmt(At);
 // Compile-time const, single-assignment val, and mutable let are distinct
 // source bindings; the experimental structured AST preserves that distinction.
 public enum StructuredBindingKind { Let, Val, Const, Readonly }
@@ -166,6 +171,48 @@ public static partial class OresStructuredParser
             if (tokens[i].Text == "rt" && tokens[i + 1].Text == "mut" &&
                 tokens[i + 2].Text == "share")
                 throw MutableShareAdmission.Unsupported(tokens[i].Offset);
+        }
+    }
+
+    // Capability-neutral default route for the canonical standalone braced
+    // initialization slice. This is a positive lexical selector, not a
+    // structured parser exception fallback. All selected source still goes
+    // through the full structured source admission and verified CFG.
+    public static bool HasOrdinaryInitializationPrefix(string source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if(source.Length>MaxChars)return false;
+        var lexer=new Lexer(source,false);
+        try
+        {
+            if(lexer.Read().Text!="pub" || lexer.Read().Text!="fnc")return false;
+            string name=lexer.Read().Text;
+            if(name.Length==0 || !(Alpha(name[0]) || name[0]=='_') ||
+               !name.Skip(1).All(c=>Alpha(c)||Digit(c)||c=='_'))return false;
+            if(lexer.Read().Text!="(" || lexer.Read().Text!=")" ||
+               lexer.Read().Text!=":" || lexer.Read().Text!="int" ||
+               lexer.Read().Text!="{")return false;
+            // A canonical no-arg public helper preceding main belongs to
+            // the structured linked-method lane. No imports or policy grants.
+            if(name!="main")return true;
+            string first=lexer.Read().Text;
+            if(first is "int" or "bool" or "string")
+            {
+                string local=lexer.Read().Text;
+                return local.Length>0 && (Alpha(local[0]) || local[0]=='_');
+            }
+            if(first is not ("let" or "val" or "const"))return false;
+            string second=lexer.Read().Text;
+            if(second is "int" or "bool" or "string")return true;
+            if(second.Length==0 || !(Alpha(second[0]) || second[0]=='_') ||
+               lexer.Read().Text!=":")return false;
+            return lexer.Read().Text is "int" or "bool" or "string";
+        }
+        catch(FormatException)
+        {
+            // Probe only: unrelated lexical errors belong to the original
+            // default frontend. No selected full parse is ever retried.
+            return false;
         }
     }
 
@@ -1016,6 +1063,9 @@ public static partial class OresStructuredParser
         private sealed record LocalBinding(IrValueType Type, StructuredBindingKind Kind,
             long? ConstantValue);
         private readonly List<Dictionary<string, LocalBinding>> scopes = new();
+        private readonly Dictionary<string,(ReadOnlyMemory<byte> Bytes,bool Writable)> staticStrings = new(StringComparer.Ordinal);
+        private bool staticStringMain;
+        private int staticStringVersions;
         private readonly List<HashSet<string>> localTypeScopes = new();
         // Constant scalar aggregates are compile-time values only; no hidden
         // managed object, dynamic descriptor or NativeAOT aggregate ABI.
@@ -1304,6 +1354,7 @@ public static partial class OresStructuredParser
                 {
                     if (visible.ContainsKey(name)) throw Error("Entry main conflicts with an imported callable");
                     activeReturnType = IrValueType.I64;
+                    staticStringMain = linking is null && Current.Text == "{";
                     if (parameters.Count != 0 || resultType != IrValueType.I64)
                         throw new FormatException($"main must have signature ():int at offset {at}");
                     var (body, returns) = arrowReturn && Current.Text == "::"
@@ -1476,6 +1527,87 @@ public static partial class OresStructuredParser
             scopes.RemoveAt(scopes.Count - 1);
             localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
             return (Array.AsReadOnly(body.ToArray()), terminated);
+        }
+
+        // QuotedSourceSyntax has already checked delimiters and surrogate
+        // pairing. Decode again into a bounded, strict UTF-8 byte snapshot.
+        private ReadOnlyMemory<byte> StaticStringValue()
+        {
+            string raw=Current.Text;
+            if(staticStrings.TryGetValue(raw,out var existing))
+            {
+                index++;
+                return existing.Bytes;
+            }
+            if(raw.Length<2 || raw[0] is not ('"' or '\'') || raw[^1]!=raw[0])
+                throw Error("E_STRING_TYPE: expected literal or typed static string view");
+            var decoded=new System.Text.StringBuilder();
+            for(int i=1;i<raw.Length-1;i++)
+            {
+                char c=raw[i];
+                if(c=='\\')
+                {
+                    if(++i>=raw.Length-1)throw Error("E_STRING_ESCAPE");
+                    c=raw[i];
+                    if(c=='u')
+                    {
+                        if(i+4>=raw.Length-1 ||
+                           !ushort.TryParse(raw.AsSpan(i+1,4),NumberStyles.AllowHexSpecifier,
+                               CultureInfo.InvariantCulture,out ushort unit))
+                            throw Error("E_STRING_ESCAPE");
+                        decoded.Append((char)unit);
+                        i+=4;
+                        continue;
+                    }
+                    if(c is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029')
+                        throw Error("E_STRING_CONTINUATION_UNSUPPORTED");
+                    c=c switch { 'n'=>'\n','r'=>'\r','t'=>'\t',_=>c };
+                }
+                decoded.Append(c);
+                if(decoded.Length>256)throw Error("E_STRING_VIEW_LIMIT: literal exceeds 256 UTF-8 bytes");
+            }
+            byte[] bytes;
+            try { bytes=new System.Text.UTF8Encoding(false,true).GetBytes(decoded.ToString()); }
+            catch(System.Text.EncoderFallbackException) { throw Error("E_STRING_ESCAPE: invalid Unicode scalar"); }
+            if(bytes.Length>256)throw Error("E_STRING_VIEW_LIMIT: literal exceeds 256 UTF-8 bytes");
+            index++;
+            return bytes;
+        }
+
+        private (StructuredStmt Statement, bool Returns) StaticStringStatement(int at)
+        {
+            // Only straight-line root main declarations/rebinds. Neither a
+            // branch nor a loop may mutate this lexical snapshot table.
+            if(!staticStringMain || scopes.Count!=1 || loopDepth!=0 || commaBindingTerminator)
+                throw Error("E_STRING_VIEW_SCOPE: static string bindings require root main");
+            if(++staticStringVersions>64)throw Error("E_STRING_VIEW_LIMIT: too many versions");
+            if(staticStrings.TryGetValue(Current.Text,out var old))
+            {
+                if(!old.Writable)throw Error("E_IMMUTABLE_REBIND: static string val");
+                string target=Current.Text;
+                index++;
+                Expect("=");
+                var updated=StaticStringValue();
+                Expect(";");
+                staticStrings[target]=(updated,true);
+                return (new StructuredStaticStringBinding(at,updated),false);
+            }
+            bool writable=Take("let");
+            if(!writable)Expect("val");
+            bool typeFirst=Take("string");
+            string name=Name();
+            if(!typeFirst){Expect(":");Expect("string");}
+            if(scopes.Any(scope=>scope.ContainsKey(name)) ||
+               aggregateScopes.Any(scope=>scope.ContainsKey(name)) ||
+               visible.ContainsKey(name) || staticStrings.ContainsKey(name) ||
+               staticStrings.Count>=64)
+                throw Error("E_STRING_VIEW_BINDING: duplicate or reserved binding");
+            if(Current.Text==";")throw Error("E_MISSING_INITIALIZER: explicit initializer required");
+            Expect("=");
+            var value=StaticStringValue();
+            Expect(";");
+            staticStrings.Add(name,(value,writable));
+            return (new StructuredStaticStringBinding(at,value),false);
         }
 
         private (StructuredStmt Statement, bool Returns) Statement(int depth)
@@ -1793,6 +1925,23 @@ public static partial class OresStructuredParser
                 return (new StructuredOverflowCatchReturn(
                     at, protectedValue, typeTest, matchValue, fallbackValue), true);
             }
+            // A recognized primitive declaration missing its initializer is a
+            // declaration error, independent of support for its value lowering.
+            int typeAt = Current.Text is "let" or "val" or "const" ? index+1 : index;
+            if (typeAt+2 < tokens.Count &&
+                tokens[typeAt].Text is ("int" or "bool" or "string") &&
+                tokens[typeAt+1].Text.Length>0 &&
+                (char.IsLetter(tokens[typeAt+1].Text[0]) || tokens[typeAt+1].Text[0]=='_') &&
+                tokens[typeAt+2].Text==";")
+                throw new FormatException($"E_MISSING_INITIALIZER: explicit initializer required at offset {tokens[typeAt+2].Offset}");
+            if (staticStrings.ContainsKey(Current.Text) ||
+                (Current.Text is "let" or "val" &&
+                 (index+1<tokens.Count && tokens[index+1].Text=="string" ||
+                  index+3<tokens.Count && tokens[index+2].Text==":" && tokens[index+3].Text=="string")))
+            {
+                if(staticStringMain) return StaticStringStatement(at);
+                // Preserve the existing unsupported type diagnostic in other profiles.
+            }
             if (Current.Text is "let" or "val" or "const" or "int" or "bool")
             {
                 // In the v1 scalar subset, a type-first local is exactly const:
@@ -1849,6 +1998,7 @@ public static partial class OresStructuredParser
                 if (scopes.Any(scope => scope.ContainsKey(name)) ||
                     aggregateScopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
+                if(Current.Text==";")throw Error("E_MISSING_INITIALIZER: explicit initializer required");
                 Expect("=");
                 var initializer = Expr(depth + 1);
                 if (annotated)
@@ -2040,6 +2190,8 @@ public static partial class OresStructuredParser
                 !unlowered.IsExecutableInStructuredNet)
                 throw new FormatException(
                     $"E_CORE_TYPE_LOWERING_UNSUPPORTED: {unlowered.CanonicalIdentity} has no verified .NET structured/NativeAOT lowering at offset {at}");
+            if (staticStrings.ContainsKey(name))
+                throw Error("E_STRING_TYPE: static string view cannot enter scalar or nominal binding");
             if (CoreTypeRegistry.IsProtectedIdentity(name))
                 throw new FormatException($"E_PRELUDE_SPOOF: {name} is a compiler-owned type/constructor identity at offset {at}");
             if (name.Length is < 1 or > MaxIdentifier ||
@@ -2339,6 +2491,18 @@ public static partial class OresStructuredParser
         }
         private StructuredExpr Equal(int depth)
         {
+            if(staticStringMain && staticStrings.Count>0 &&
+               (staticStrings.ContainsKey(Current.Text) ||
+                Current.Text.Length>0 && Current.Text[0] is ('"' or '\'')))
+            {
+                int at=Current.Offset;
+                var leftBytes=StaticStringValue();
+                bool negated=Current.Text=="neq";
+                if(!negated && Current.Text!="eq")throw Error("E_STRING_TYPE: expected eq or neq");
+                index++;
+                var rightBytes=StaticStringValue();
+                return new StructuredStaticStringCompare(at,leftBytes,rightBytes,negated);
+            }
             var left = Compare(depth + 1);
             while (Current.Text is "==" or "eq" or "!=" or "neq" or "!eq")
             {

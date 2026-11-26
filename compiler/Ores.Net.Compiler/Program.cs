@@ -329,9 +329,15 @@ try
     }
     var verifiedRefinement = validCheck || validCompile || validStructuredCheck || validStructuredCompile
         ? OresParser.TryLowerVerifiedRefinementModule(source) : null;
-    if (validStructuredCheck || validStructuredCompile || verifiedRefinement is not null)
+    bool ordinaryInitialization = (validCheck || validCompile) &&
+        !mathI64Granted && !explicitLanguageVersion.HasValue &&
+        string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.Ordinal) &&
+        OresStructuredParser.HasOrdinaryInitializationPrefix(source);
+    if (validStructuredCheck || validStructuredCompile || verifiedRefinement is not null || ordinaryInitialization)
     {
-        // Both source profiles use the verified CFG and deterministic CIL emitter.
+        // Selected source uses the verified CFG and deterministic CIL emitter.
+        // Explicit language version / CLR host grant cannot enter this new
+        // default ordinary route, and selected parse failure never retries.
         var verifiedCfg = verifiedRefinement ?? OresStructuredCfgLowering.LowerModule(source);
         if (validStructuredCompile || validCompile)
         {
