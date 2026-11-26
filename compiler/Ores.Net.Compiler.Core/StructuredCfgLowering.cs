@@ -14,6 +14,10 @@ public static partial class OresStructuredCfgLowering
         return new Builder().Lower(parsed);
     }
 
+    // Explicit conditional-only strict admission, retaining the same verified CFG builder.
+    public static VerifiedCfgFunction LowerStrictConditionals(string source)
+        => new Builder().Lower(OresStructuredParser.ParseStrictConditionals(source));
+
     // ABI path: helpers become independent verified CFG methods. The old
     // Lower() method keeps the deliberately bounded inlining/reference path.
     public static VerifiedCfgModule LowerModule(string source)

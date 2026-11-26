@@ -103,7 +103,7 @@ internal static class HeapContainerSourceBoundaryTests
         // Retired collection constructors must fail with the dedicated
         // removal diagnostic, not a backend capability failure.
         foreach (string removed in new[] {
-            "~tuple(11,23)[1]", "~record(x:11).x", "~entry(11,23).key",
+            "~tuple(11,23)", "~record(x:11).x", "~entry(11,23).key",
             "~pair(11,23).first", "~map(1 => 2)", "~array(1,2)",
             "~list(1)", "~vector(1)", "~set(1)"
         })
@@ -117,6 +117,16 @@ internal static class HeapContainerSourceBoundaryTests
                 (ex.Message.Contains("E_COLLECTION_FACTORY_REMOVED", StringComparison.Ordinal))
             { }
         }
+        // The scalar lexer checks brackets before the retired factory
+        // parser is reached. Require that independent specific denial too.
+        try
+        {
+            _ = OresParser.Parse("pub fnc main():int{return ~tuple(11,23)[1];}");
+            throw new Exception("Retired indexed tuple factory accepted");
+        }
+        catch (FormatException ex) when
+            (ex.Message.Contains("E_SAFE_COLLECTION_ACCESS_UNSUPPORTED", StringComparison.Ordinal))
+        { }
         // Structured frontend must not reinterpret a nominal product or
         // dynamic collection as a scalar helper call.
         foreach (string factory in new[] {
