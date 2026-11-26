@@ -20,6 +20,15 @@ internal static class CoreTypeRegistryTests
         throw new Exception("Expected " + expected + " for " + label);
     }
 
+    private static void RejectLowered(string source, string expected, string label)
+    {
+        try { _ = OresStructuredCfgLowering.LowerModule(source); }
+        catch (FormatException error) when
+            (error.Message.Contains(expected, StringComparison.Ordinal))
+        { return; }
+        throw new Exception("Expected " + expected + " for " + label);
+    }
+
     public static void Run()
     {
         var all = CoreTypeRegistry.All;
@@ -143,12 +152,17 @@ internal static class CoreTypeRegistryTests
             "E_CORE_TYPE_ARITY", "Option requires an explicit type argument");
         Reject("fnc main():int{val Option<Box> value=None;return 42;}",
             "E_OPTION_I64_ONLY", "affine payload Option is fail-closed until typed drop/borrow lowering");
+        // Registry-wide lowering remains conservative; the structured
+        // compiler now has an explicitly admitted closed Result subset.
+        Require(OresStructuredCfgLowering.LowerModule(
+            "fnc main():int{val Result<int, Error> value=Ok(42);return value.unwrap_or(0);}") is not null,
+            "verified closed Result<int,Error> subset remains admitted");
         Reject("fnc main():int{val Result<int, int> value=Ok(42);return 42;}",
-            "E_CORE_TYPE_LOWERING_UNSUPPORTED", "Result is catalogued but not lowered");
-        Reject("fnc main():int{return Ok(42);}",
-            "E_CORE_TYPE_LOWERING_UNSUPPORTED", "Ok constructor is not lowered");
-        Reject("fnc main():int{return Err(42);}",
-            "E_CORE_TYPE_LOWERING_UNSUPPORTED", "Err constructor is not lowered");
+            "E_RESULT_ERROR_ABI_UNSUPPORTED", "unsupported Result error ABI stays denied");
+        RejectLowered("fnc main():int{return Ok(42);}",
+            "Return value does not match function result type", "Ok cannot escape as an int");
+        RejectLowered("fnc main():int{return Err(42);}",
+            "Err requires a contextual Result success type", "Err requires a typed Result context");
         Reject("fnc Option():int{return 42;}",
             "E_PRELUDE_SPOOF", "compiler-owned core identity cannot be forged");
         Reject("fnc main():int{val List<int> values=List();return 42;}",

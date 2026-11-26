@@ -891,6 +891,7 @@ ActorMailboxRestartAtomicitySelfTest.Run();
 ActorFinalizationV1SelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
+ActorSlabHeapSelfTest.Run(); // 32-bit actor slab heap; golden shared with LLVM and rs/wasm
 ActorArenaSelfTest.Run();
 StateRegionLoanProvenanceSelfTest.Run();
 ActorIsolationAccessV1SelfTest.Run();
