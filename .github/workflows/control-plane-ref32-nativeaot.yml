@@ -1,0 +1,73 @@
+name: Control-plane Ref32 NativeAOT host (not guest)
+on:
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/ControlPlaneArena32.cs'
+      - 'runtime/Ores.Net.Runtime/ActorRuntime.cs'
+      - 'verification/Ores.Net.ControlPlaneArenaProbe/**'
+      - 'verification/Ores.Net.ControlRuntimeProbe/**'
+      - 'verification/Ores.Net.Tests/ActorControlDirectoryIntegrationSelfTest.cs'
+      - '.github/workflows/control-plane-ref32-nativeaot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  net-host-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact immutable head, not synthetic PR merge
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Compile and execute independent CLR probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project verification/Ores.Net.ControlPlaneArenaProbe/ControlPlaneArenaProbe.csproj -c Release | tee "$RUNNER_TEMP/control-clr.log"
+          grep -Fx 'PASS dotnet control i128 coherent concurrent host (NOT compiled Atto)' "$RUNNER_TEMP/control-clr.log"
+          grep -Fx 'PASS dotnet control host warmed i128 pair managed-byte delta=0' "$RUNNER_TEMP/control-clr.log"
+      - name: Execute real actor scheduler native-control lifecycle on CLR
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project verification/Ores.Net.ControlRuntimeProbe/ControlRuntimeProbe.csproj -c Release | tee "$RUNNER_TEMP/control-runtime-clr.log"
+          grep -Fx 'PASS dotnet actor-runtime native control snapshot managed-byte delta=0 (HOST ONLY)' "$RUNNER_TEMP/control-runtime-clr.log"
+          grep -F 'PASS actor-control-directory integration' "$RUNNER_TEMP/control-runtime-clr.log"
+      - name: Compile real Linux native-AOT host executable
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang zlib1g-dev
+          dotnet publish verification/Ores.Net.ControlPlaneArenaProbe/ControlPlaneArenaProbe.csproj -c Release -r linux-x64 -p:PublishAot=true -o /tmp/atto-control-aot
+          test -x /tmp/atto-control-aot/ControlPlaneArenaProbe
+          file /tmp/atto-control-aot/ControlPlaneArenaProbe | grep -q ELF
+      - name: Execute actual NativeAOT host executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          /tmp/atto-control-aot/ControlPlaneArenaProbe | tee "$RUNNER_TEMP/control-aot.log"
+          grep -Fx 'PASS dotnet control i128 coherent concurrent host (NOT compiled Atto)' "$RUNNER_TEMP/control-aot.log"
+          grep -Fx 'PASS dotnet control host warmed i128 pair managed-byte delta=0' "$RUNNER_TEMP/control-aot.log"
+      - name: Build and execute actual actor-runtime Linux NativeAOT host
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet publish verification/Ores.Net.ControlRuntimeProbe/ControlRuntimeProbe.csproj -c Release -r linux-x64 -p:PublishAot=true -o /tmp/atto-control-runtime-aot
+          test -x /tmp/atto-control-runtime-aot/ControlRuntimeProbe
+          file /tmp/atto-control-runtime-aot/ControlRuntimeProbe | grep -q ELF
+          /tmp/atto-control-runtime-aot/ControlRuntimeProbe | tee "$RUNNER_TEMP/control-runtime-aot.log"
+          grep -Fx 'PASS dotnet actor-runtime native control snapshot managed-byte delta=0 (HOST ONLY)' "$RUNNER_TEMP/control-runtime-aot.log"
+          grep -F 'PASS actor-control-directory integration' "$RUNNER_TEMP/control-runtime-aot.log"
+      - name: Scope of test
+        run: echo 'HOST-ONLY actor scheduler native root counters; managed mailboxes and compiled Atto guest not zero-GC certified'

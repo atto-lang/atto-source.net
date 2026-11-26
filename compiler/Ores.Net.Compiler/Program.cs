@@ -86,6 +86,9 @@ bool validStructuredCheck = args.Length == 2 && args[0] == "check-structured";
 bool validStructuredCompile = args.Length == 4 &&
     args[0] == "compile-structured" && args[2] == "--out";
 bool validEmitActorSource = args.Length == 4 && args[0] == "emit-actor-csharp" && args[2] == "--out";
+// Narrow checked actor heap V1 source emitter.
+bool validActorHeapV1 = args.Length == 4 &&
+    args[0] == "emit-actor-heap-v1" && args[2] == "--out";
 bool validEmitHttpActors = args.Length == 4 && args[0] == "emit-http-actors-csharp" && args[2] == "--out";
 // This separate mode only binds the verified external receive slice of the
 // Counter v2 package; it never claims compiled async main or general actors.
@@ -100,10 +103,10 @@ bool validActorPipePlan = args.Length == 2 && args[0] == "plan-actor-pipe";
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
 if ((mathI64Granted && !validCheck && !validCompile) ||
     (!validCheck && !validAsyncRun && !validEnumCheck && !validEnumCompile && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
-     !validStaticFacts && !validTaskCheck && !validTaskCompile && !validActorPipePlan && !validEmitActorSource && !validEmitHttpActors && !validExternalReceive && !validCounterMain && !validEmitSource && !moduleCommand))
+     !validStaticFacts && !validTaskCheck && !validTaskCompile && !validActorPipePlan && !validEmitActorSource && !validActorHeapV1 && !validEmitHttpActors && !validExternalReceive && !validCounterMain && !validEmitSource && !moduleCommand))
 {
     Console.Error.WriteLine("       oresnet emit-http-actors-csharp input.atto --out path/HttpActors.g.cs");
-    Console.Error.WriteLine("usage: oresnet check-enum-v1 FILE.atto | oresnet compile-enum-v1 FILE.atto --out path/OresGenerated.dll | oresnet check input.atto|input.ores | oresnet run-async input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-task-i64 input.ores | oresnet compile-task-i64 input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet plan-actor-pipe input.atto (typed plan only, not executable actors) | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet emit-external-counter-csharp ROOT --out path/DeclaredActor_Counter.g.cs | oresnet emit-counter-main-csharp ROOT --out path/GeneratedCounterMainV2.g.cs | oresnet check-declared-receive-syntax receive.atto (syntax only, NOT guest execution)");
+    Console.Error.WriteLine("usage: oresnet check-enum-v1 FILE.atto | oresnet compile-enum-v1 FILE.atto --out path/OresGenerated.dll | oresnet check input.atto|input.ores | oresnet run-async input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-task-i64 input.ores | oresnet compile-task-i64 input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet plan-actor-pipe input.atto (typed plan only, not executable actors) | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet emit-external-counter-csharp ROOT --out path/DeclaredActor_Counter.g.cs | oresnet emit-counter-main-csharp ROOT --out path/GeneratedCounterMainV2.g.cs | oresnet check-declared-receive-syntax receive.atto (syntax only, NOT guest execution) | oresnet emit-actor-heap-v1 node_graph.atto --out ActorHeapV1.g.cs (narrow checked source, NOT compiled guest)");
     return 2;
 }
 
@@ -194,11 +197,28 @@ try
         Console.WriteLine("VERIFIED_EXTERNAL_RECEIVE_V2 actor_handler_only=true async_main_not_compiled=true");
         return 0;
     }
+    if (validActorHeapV1)
+    {
+        if (!string.Equals(Path.GetExtension(args[1]), ".atto",
+                StringComparison.OrdinalIgnoreCase))
+            throw new FormatException("Actor heap V1 emission requires .atto source");
+        if (!string.Equals(Path.GetFileName(args[3]), "ActorHeapV1.g.cs",
+                StringComparison.Ordinal))
+            throw new ArgumentException("Actor heap V1 output must be named ActorHeapV1.g.cs");
+    }
     if (validStaticFacts &&
         !string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase) &&
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
         throw new FormatException("Static-facts export requires a .atto or .ores source file");
-    var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts);
+    var source = ReadBoundedSource(args[1],
+        rejectBom: validStaticFacts || validActorHeapV1);
+    if (validActorHeapV1)
+    {
+        string generated = ActorHeapV1Compiler.EmitCSharp(source);
+        WriteAtomicSource(args[3], generated);
+        Console.WriteLine("ACTOR_HEAP_V1_SOURCE_GENERATED|NOT_EXECUTED|NOT_CERTIFIED");
+        return 0;
+    }
     if (validEmitHttpActors)
     {
         if (Path.GetExtension(args[1]) != ".atto" || Path.GetExtension(args[3]) != ".cs")

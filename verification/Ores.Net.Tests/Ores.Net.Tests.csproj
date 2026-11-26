@@ -11,6 +11,9 @@
     <None Include="../../contracts/atto-ensemble-v1/canonical-unlowered-try-publish.atto"
           Link="contracts/atto-ensemble-v1/canonical-unlowered-try-publish.atto"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/actor-guest-heap/v1/node_graph.atto"
+          Link="contracts/actor-guest-heap/v1/node_graph.atto"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/annotation-admission-v1.cases"
           Link="annotation-admission-v1.cases"
           CopyToOutputDirectory="PreserveNewest" />
