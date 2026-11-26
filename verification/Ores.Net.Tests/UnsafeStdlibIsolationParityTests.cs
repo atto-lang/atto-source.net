@@ -20,7 +20,10 @@ internal static class UnsafeStdlibIsolationParityTests
             "pkg/../std/unsafe/memory",
             "atto.std/unsafe", "atto.std.unsafe.ffi", "atto.std:unsafe::ffi",
             "atto::std::unsafe::ffi", "ores::std::unsafe::ffi", "std::unsafe::ffi",
-            "atto.std/./unsafe/native", "atto.std/other/../unsafe/ffi"
+            "atto.std/./unsafe/native", "atto.std/other/../unsafe/ffi",
+            "std/unsafe/../safe", "atto.std/unsafe/../safe", "atto::std/unsafe/../safe",
+            "ores:std/unsafe/../safe", "atto::std/../safe", "ores:std/../safe",
+            "atto/std/../safe", "ores/std/../safe"
         };
         foreach (var path in denied)
         {
