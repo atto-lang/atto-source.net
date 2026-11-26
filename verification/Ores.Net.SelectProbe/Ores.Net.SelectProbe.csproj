@@ -11,6 +11,7 @@
     <Compile Include="../Ores.Net.Tests/SelectArbiterSelfTest.cs" Link="SelectArbiterSelfTest.cs" />
     <Compile Include="../Ores.Net.Tests/SelectableI64ChannelSelfTest.cs" Link="SelectableI64ChannelSelfTest.cs" />
     <Compile Include="../Ores.Net.Tests/SelectableI64FutureSelfTest.cs" Link="SelectableI64FutureSelfTest.cs" />
+    <Compile Include="../Ores.Net.Tests/CountedSelectI64CursorSelfTest.cs" Link="CountedSelectI64CursorSelfTest.cs" />
   </ItemGroup>
   <Import Project="../../build/StrictNativeAot.targets" />
 </Project>

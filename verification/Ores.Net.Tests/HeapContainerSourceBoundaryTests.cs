@@ -128,6 +128,16 @@ internal static class HeapContainerSourceBoundaryTests
                 (ex.Message.Contains("E_COLLECTION_FACTORY_REMOVED", StringComparison.Ordinal))
             { }
         }
+        // The scalar parser explicitly rejects retired indexed tuple syntax
+        // before its narrow bracket admission. Require the removal diagnostic.
+        try
+        {
+            _ = OresParser.Parse("pub fnc main():int{return ~tuple(11,23)[1];}");
+            throw new Exception("Retired indexed tuple factory accepted");
+        }
+        catch (FormatException ex) when
+            (ex.Message.Contains("E_COLLECTION_FACTORY_REMOVED", StringComparison.Ordinal))
+        { }
         // Structured frontend must not reinterpret a nominal product or
         // dynamic collection as a scalar helper call.
         foreach (string factory in new[] {

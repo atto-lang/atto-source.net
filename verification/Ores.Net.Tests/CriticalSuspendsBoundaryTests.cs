@@ -52,7 +52,7 @@ internal static class CriticalSuspendsBoundaryTests
             ("pub critical suspends fnc main():int{return sync task<int>{return 1;};}", "E_CALLABLE_MODIFIERS"),
             ("pub critical fnc main():int{return 1;}", "E_CRITICAL_UNSUPPORTED"),
             ("fnc main():int{critical {return 1;}}", "E_CRITICAL_UNSUPPORTED"),
-            ("fnc main():int{return await 1;}", "E_SUSPENDS_UNSUPPORTED")
+            ("fnc main():int{return await true;}", "E_SUSPENDS_UNSUPPORTED")
         })
         {
             try

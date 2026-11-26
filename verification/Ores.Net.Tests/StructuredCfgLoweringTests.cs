@@ -180,7 +180,16 @@ internal static class StructuredCfgLoweringTests
         int offset = source.LastIndexOf(spelling, StringComparison.Ordinal);
         if (offset < 0 || source[offset] != '!')
             throw new Exception("Missing operator boundary in fixture: " + label);
-        RejectWithDiagnostic(source, "Invalid character at offset " + offset, label);
+        // Standalone ! is now a typed unary operator. In these infix
+        // fixtures the left integer is not a bool condition, so the reader
+        // rejects before consuming the malformed alias. Require that exact
+        // typed diagnostic (or the original lexical boundary diagnostic).
+        try { _ = OresStructuredCfgLowering.Lower(source); }
+        catch (FormatException e) when (
+            e.Message.Contains("Invalid character at offset " + offset, StringComparison.Ordinal) ||
+            e.Message.Contains("If condition must be bool at offset " + (offset - 2), StringComparison.Ordinal))
+        { return; }
+        throw new Exception("Malformed !eq alias was accepted: " + label);
     }
 
     private static void NegatedDoIfAotControlFlow()
@@ -239,8 +248,21 @@ internal static class StructuredCfgLoweringTests
             7, "ifnot-value");
         Check("fnc main():int{return unless true then 7 else 9 fi;}",
             9, "unless-value");
-        Reject("fnc main():int{loop{if true then break; fi}return 0;}",
-            "keyword value-if cannot contain break");
+        const string legacy = "fnc main():int{loop{if true then break; fi}return 0;}";
+        Check(legacy, 0, "migration-only keyword statement");
+        try
+        {
+            _ = OresStructuredCfgLowering.LowerStrictConditionals(legacy);
+            throw new Exception("Strict conditional CFG incorrectly admitted a bare keyword statement");
+        }
+        catch (FormatException ex) when (ex.Message.Contains("E_CONDITIONAL_STATEMENT", StringComparison.Ordinal)) { }
+        foreach (string head in new[] { "if", "ifnot", "unless" })
+        {
+            var strict = OresStructuredCfgLowering.LowerStrictConditionals(
+                "fnc main():int{do " + head + " true then return 42; else return 42; fi}");
+            if (CfgReferenceEvaluator.Evaluate(strict) != 42)
+                throw new Exception("Strict conditional CFG mismatch: " + head);
+        }
         Reject("fnc main():int{do ifnot false then break; fi return 0;}",
             "break outside loop");
     }
