@@ -180,7 +180,18 @@ internal static class StructuredCfgLoweringTests
         int offset = source.LastIndexOf(spelling, StringComparison.Ordinal);
         if (offset < 0 || source[offset] != '!')
             throw new Exception("Missing operator boundary in fixture: " + label);
-        RejectWithDiagnostic(source, "Invalid character at offset " + offset, label);
+        // Standalone ! now lexes as unary Boolean negation. In these
+        // infix fixtures the preceding integer remains the condition and
+        // must be rejected, never interpreted as != or !eq.
+        int conditionEnd = offset;
+        while (conditionEnd > 0 && char.IsWhiteSpace(source[conditionEnd - 1]))
+            conditionEnd--;
+        int conditionStart = conditionEnd;
+        while (conditionStart > 0 && char.IsAsciiDigit(source[conditionStart - 1]))
+            conditionStart--;
+        if (conditionStart == conditionEnd)
+            throw new Exception("Missing integer condition: " + label);
+        RejectWithDiagnostic(source, "If condition must be bool at offset " + conditionStart, label);
     }
 
     private static void NegatedDoIfAotControlFlow()
