@@ -120,6 +120,8 @@ public readonly struct OresExecutionCallbackContext
         if (RuntimeDomain == 0 || Execution == 0 || Dispatch == 0 || Generation == 0 ||
             !BoundaryValid(Boundary) ||
             TraceCount == 0 || TraceCount > MaxTraceBoundaries ||
+            (TraceElided != 0 && TraceCount != MaxTraceBoundaries) ||
+            (TraceBoundariesPacked >> (TraceCount * 4)) != 0 ||
             TraceBoundaryAt(TraceCount - 1) != Boundary)
             return false;
 
@@ -218,6 +220,11 @@ public static class OresExecutionContexts
 
         internal ActiveScope(OresExecutionContext current)
         {
+            // default(struct) bypasses the validating public constructor.
+            // Reject before changing the ambient execution authority.
+            if (current.RuntimeDomain == 0 || current.Execution == 0 ||
+                current.Dispatch == 0 || current.Generation == 0)
+                throw new ArgumentOutOfRangeException(nameof(current));
             if (s_activeScopeSequence == ulong.MaxValue)
                 throw new InvalidOperationException("active execution scope token exhausted");
 
