@@ -40,3 +40,19 @@ test('native frontend rejects contradictory public and package directives', {ski
     assert.match(result.stderr + result.stdout, /EXPORT_/);
   }
 });
+
+test('identical checked main exports are idempotent in either position', {skip:!dotnet}, () => {
+  for (const source of [
+    'export pub main;\nexport pub fnc main;\n'+main,
+    'export pub fnc main;\n'+main+'export pub main;\n',
+    main+'export pub main;\nexport pub fnc main;\n'
+  ]) {
+    const result=check(source);
+    assert.equal(result.status,0,result.stderr+result.stdout);
+  }
+});
+test('raw export directive budget cannot be bypassed by duplicates', {skip:!dotnet}, () => {
+  const result=check('export pub main;\n'.repeat(128)+main+'export pub main;\n');
+  assert.notEqual(result.status,0);
+  assert.match(result.stderr+result.stdout,/EXPORT_SOURCE_LIMIT/);
+});
