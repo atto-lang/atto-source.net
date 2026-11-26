@@ -2,6 +2,9 @@
 # Actual NativeAOT compiler + separately statically linked guest. No CoreCLR
 # substitution. Source-local fixtures are generated deterministically.
 set -Eeuo pipefail
+command=compile
+strict=0
+if [[ "${1:-}" == "--strict" ]]; then command=compile-strict-i64; strict=1; shift; [[ "$#" -eq 1 ]]; fi
 [[ "$#" -le 1 ]]
 corpus=""
 if [[ "$#" -eq 1 ]]; then corpus="$(realpath -- "$1")"; [[ -f "$corpus" ]]; fi
@@ -29,7 +32,7 @@ guest() {
   else
   printf '%s\npub fnc main() -> int { return %s; }\n' "$pre" "$expr" >"$source"
   fi
-  "$compiler" compile "$source" --out "$generated"
+  "$compiler" "$command" "$source" --out "$generated"
   [[ -s "$generated" ]]
   dotnet clean "$host" -c Release -r "$rid" "-p:GeneratedAssembly=$generated"
   dotnet publish "$host" -c Release -r "$rid" -o "$output" "-p:GeneratedAssembly=$generated" -warnaserror
@@ -55,14 +58,36 @@ reject() {
   else
   printf '%s\npub fnc main() -> int { return %s; }\n' "$pre" "$expr" >"$source"
   fi
-  "$compiler" compile "$source" --out "$work/$name.dll" >"$work/stdout" 2>"$work/stderr" || status=$?
-  [[ "$status" -eq 1 && ! -e "$work/$name.dll" && ! -s "$work/stdout" ]]
+  mkdir -p -- "$work/$name"
+  local rejected="$work/$name/OresGenerated.dll"
+  "$compiler" "$command" "$source" --out "$rejected" >"$work/stdout" 2>"$work/stderr" || status=$?
+  [[ "$status" -eq 1 && ! -e "$rejected" && ! -s "$work/stdout" ]]
   if [[ "$diagnostic" == "-" ]]; then [[ -s "$work/stderr" ]]; else grep -Fq "$diagnostic:" "$work/stderr"; fi
   printf 'NATIVE_AOT_REJECT %s %s\n' "$name" "$diagnostic"
   cases=$((cases+1))
 }
 if [[ -n "$corpus" ]]; then
   mkdir -p "$work/shared"
+  if [[ "$strict" -eq 1 ]]; then
+    node --input-type=module - "$corpus" "$work/shared" <<'STRICTJS'
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+const [corpus,out]=process.argv.slice(2);
+const manifest=JSON.parse(readFileSync(corpus,'utf8'));
+assert.equal(manifest.profile,'verified-core-strict-i64-v1');
+const cases=manifest.cases.filter(c=>['arithmetic','boundaries'].includes(c.tier));
+assert.equal(cases.length,21);
+const seen=new Set(),lines=[];
+for(const {id,source,expected:e} of cases){
+ assert.match(id,/^[a-z0-9-]+$/);assert.ok(!seen.has(id));seen.add(id);
+ writeFileSync(join(out,id+'.atto'),source,{flag:'wx'});
+ if(e.kind==='value'){assert.match(e.decimal,/^-?[0-9]+$/);lines.push([id,'guest','0',e.decimal].join('\t'));}
+ else{assert.equal(e.kind,'diagnostic');assert.match(e.category,/^E_[A-Z0-9_]+$/);lines.push([id,'reject','1',e.category].join('\t'));}
+}
+writeFileSync(join(out,'cases.tsv'),lines.join('\n')+'\n',{flag:'wx'});
+STRICTJS
+  else
   node --input-type=module - "$corpus" "$work/shared" <<'JS'
 import assert from 'node:assert/strict';
 import {writeFileSync} from 'node:fs';
@@ -90,10 +115,11 @@ for(const {source,text,expected:e} of cases){
 }
 writeFileSync(join(out,"cases.tsv"),lines.join("\n")+"\n",{flag:"wx"});
 JS
+  fi
   while IFS=$'\t' read -r name kind status expected; do
     if [[ "$kind" == "reject" ]]; then reject "$name" "" "$expected"; else guest "$name" "" "$status" "$expected"; fi
   done <"$work/shared/cases.tsv"
-  [[ "$cases" -eq 24 ]]
+  if [[ "$strict" -eq 1 ]]; then [[ "$cases" -eq 21 ]]; else [[ "$cases" -eq 24 ]]; fi
 else
 guest prefix '(<Positive>(42.<Second>)) / 1<Second>' 0 42
 guest postfix '(42.<Second>::<Positive>) / 1<Second>' 0 42
