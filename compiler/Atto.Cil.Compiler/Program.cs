@@ -124,7 +124,9 @@ internal sealed class Parser
     internal List<Function> Parse()
     {
         // A lexed Pointer token is admitted only by the closed local read-lease profile.
-        if (_tokens.Contains("Pointer", StringComparer.Ordinal)) return ParseBorrowedLocalPointer();
+        if (_tokens.Contains("Pointer", StringComparer.Ordinal))
+            return _tokens.Count > 10 && _tokens[8] == "let" && _tokens[9] == "mut" && _tokens[10] == "Pointer"
+                ? ParseOwnedScalarPointer() : ParseBorrowedLocalPointer();
         // File-scoped namespace metadata is distinct from a module/import.
         // It may occur exactly once, and only before any declarations.
         bool hasNamespace = false;
@@ -256,6 +258,161 @@ internal sealed class Parser
             throw new CompilerError("E_POINTER_SYNTAX",
                 $"ownership {name}! operator must have an adjacent bang");
         _position++; // !
+    }
+
+    // Closed, statically bounded Copy-i64 owning region. Every store is
+    // evaluated exactly once into a fresh ordinary CIL local. The owner and
+    // its nonescaping cells disappear after source-order lifetime proof.
+    // The four-local budget is the existing direct CIL scalar ABI limit.
+    private List<Function> ParseOwnedScalarPointer()
+    {
+        foreach (var token in new[] { "pub", "fnc", "main", "(", ")", ":", "int", "{",
+                "let", "mut", "Pointer", "<", "int", ">" }) PointerNeed(token);
+        var owner = PointerName();
+        PointerNeed("="); PointerNeed("Pointer"); PointerNeed(".");
+        var initialized = Eat("alloc_value");
+        if (!initialized) PointerNeed("alloc");
+        PointerNeed("<"); PointerNeed("int"); PointerNeed(">"); PointerNeed("(");
+        List<Statement> body = [];
+        var scalars = new Dictionary<string, (Expression Expr, long Known)>(StringComparer.Ordinal);
+        var cells = new (Expression Expr, long Known)?[16];
+        bool live = false;
+        int count = 1;
+
+        (Expression Expr, long Known) Bind((Expression Expr, long Known) value)
+        {
+            if (body.Count >= 4)
+                throw new CompilerError("E_POINTER_LIMIT", "four scalar storage bindings per direct CIL region");
+            var name = "$ptr" + body.Count.ToString(CultureInfo.InvariantCulture);
+            body.Add(new LocalBinding(name, value.Expr));
+            return (new Arg(name), value.Known);
+        }
+        int Index(int low, int high)
+        {
+            if (!int.TryParse(Peek, NumberStyles.None, CultureInfo.InvariantCulture, out var n)
+                || n < low || n > high)
+                throw new CompilerError("E_POINTER_BOUNDS", "index or capacity outside static region");
+            _position++;
+            return n;
+        }
+        void RequireLive()
+        {
+            if (!live) throw new CompilerError("E_POINTER_LIFETIME", "owner unavailable or already closed");
+        }
+        (Expression Expr, long Known) Value(int min = 0, int depth = 0)
+        {
+            if (depth > 16) throw new CompilerError("E_POINTER_LIMIT", "pointer expression nesting");
+            (Expression Expr, long Known) left;
+            if (Eat("("))
+            {
+                left = Value(0, depth + 1); PointerNeed(")");
+            }
+            else if (Eat("-"))
+            {
+                if (Eat("9223372036854775808")) left = (new Literal(long.MinValue), long.MinValue);
+                else
+                {
+                    var rhs = Value(30, depth + 1);
+                    left = (new Binary("-", new Literal(0), rhs.Expr), checked(-rhs.Known));
+                }
+            }
+            else if (long.TryParse(Peek, NumberStyles.None, CultureInfo.InvariantCulture, out var number))
+            {
+                _position++; left = (new Literal(number), number);
+            }
+            else if (Eat(owner))
+            {
+                RequireLive(); PointerNeed(".");
+                if (Peek is "len" or "size_bytes")
+                {
+                    var bytes = Eat("size_bytes");
+                    if (!bytes) PointerNeed("len");
+                    PointerNeed("("); PointerNeed(")");
+                    long n = bytes ? count * 8L : count;
+                    left = (new Literal(n), n);
+                }
+                else
+                {
+                    bool singleton = Eat("read");
+                    if (!singleton) PointerNeed("read_at");
+                    PointerNeed("(");
+                    if (singleton && count != 1)
+                        throw new CompilerError("E_POINTER_BOUNDS", "read requires a singleton");
+                    var index = singleton ? 0 : Index(0, count - 1);
+                    PointerNeed(")");
+                    left = cells[index] ?? throw new CompilerError("E_POINTER_INITIALIZE", "uninitialized element");
+                }
+            }
+            else
+            {
+                var name = PointerName();
+                if (!scalars.TryGetValue(name, out left))
+                    throw new CompilerError("E_POINTER_ESCAPE", "unknown scalar or unsupported pointer expression");
+            }
+            while (true)
+            {
+                var op = Peek;
+                int precedence = op == "*" ? 20 : op is "+" or "-" ? 10 : -1;
+                if (precedence < min) return left;
+                _position++;
+                var right = Value(precedence + 1, depth + 1);
+                long known = op switch
+                {
+                    "+" => checked(left.Known + right.Known),
+                    "-" => checked(left.Known - right.Known),
+                    "*" => checked(left.Known * right.Known),
+                    _ => throw new CompilerError("E_POINTER_PROFILE", "unsupported operation")
+                };
+                left = (new Binary(op, left.Expr, right.Expr), known);
+            }
+        }
+        try
+        {
+            if (initialized) cells[0] = Bind(Value());
+            else count = Index(1, 16);
+            PointerNeed(")"); PointerNeed(";"); live = true;
+            int steps = 0;
+            while (Peek != "return")
+            {
+                if (++steps > 32) throw new CompilerError("E_POINTER_LIMIT", "operation budget exceeded");
+                if (Eat("val"))
+                {
+                    PointerNeed("int"); var name = PointerName();
+                    if (name == owner || scalars.ContainsKey(name))
+                        throw new CompilerError("E_POINTER_ALIAS", "duplicate pointer or scalar name");
+                    PointerNeed("="); scalars.Add(name, Bind(Value())); PointerNeed(";");
+                }
+                else
+                {
+                    RequireLive(); PointerNeed(owner); PointerNeed(".");
+                    if (Eat("close"))
+                    {
+                        PointerNeed("("); PointerNeed(")"); PointerNeed(";"); live = false;
+                    }
+                    else
+                    {
+                        bool singleton = Eat("write");
+                        if (!singleton) PointerNeed("write_at");
+                        PointerNeed("(");
+                        if (singleton && count != 1)
+                            throw new CompilerError("E_POINTER_BOUNDS", "write requires a singleton");
+                        var index = singleton ? 0 : Index(0, count - 1);
+                        if (!singleton) PointerNeed(",");
+                        cells[index] = Bind(Value()); PointerNeed(")"); PointerNeed(";");
+                    }
+                }
+            }
+            PointerNeed("return");
+            if (live) throw new CompilerError("E_POINTER_LIFETIME", "owner must close before return");
+            body.Add(new ReturnStmt(Value().Expr));
+            PointerNeed(";"); PointerNeed("}");
+            if (Peek != "<eof>") throw new CompilerError("E_POINTER_ESCAPE", "extra declarations not admitted");
+            return [new Function("main", [], CheckedType.Int, body)];
+        }
+        catch (OverflowException)
+        {
+            throw new CompilerError("E_POINTER_OVERFLOW", "checked signed i64 arithmetic overflow");
+        }
     }
 
     private List<Function> ParseBorrowedLocalPointer()

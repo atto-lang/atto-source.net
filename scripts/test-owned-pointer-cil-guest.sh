@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Real .atto -> direct CIL -> CoreCLR and Linux NativeAOT. No host oracle substitution.
+set -euo pipefail
+compiler=compiler/Atto.Cil.Compiler/Atto.Cil.Compiler.csproj
+host=tests/Atto.Cil.Guest.Host/Atto.Cil.Guest.Host.csproj
+guest=artifacts/AttoGuest.dll
+mkdir -p artifacts
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+dotnet build "$compiler" -c Release
+expect_42() {
+  set +e
+  "$@"
+  local rc=$?
+  set -e
+  test "$rc" -eq 42
+}
+positive() {
+  local name="$1" source="$2"
+  printf '%s\n' "$source" >"$work/$name.atto"
+  rm -f "$guest"
+  dotnet run --no-build -c Release --project "$compiler" -- "$work/$name.atto" "$guest"
+  test -s "$guest"
+  dotnet build "$host" -c Release -t:Rebuild
+  expect_42 dotnet run --no-build -c Release --project "$host"
+  dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true --self-contained true -o "$work/$name-native"
+  expect_42 "$work/$name-native/Atto.Cil.Guest.Host"
+  echo "ATTO_OWNED_POINTER_GUEST_PASS=$name CoreCLR+NativeAOT"
+}
+positive singleton 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); p.write(21); val int first = p.read(); p.write(first * 2); val int answer = p.read(); p.close(); return answer; }'
+positive initialized 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(21 * 2); val int answer = p.read(); p.close(); return answer; }'
+positive metadata 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(4); p.write_at(3, 6); val int n = p.len(); val int b = p.size_bytes(); val int x = p.read_at(3); p.close(); return n + b + x; }'
+negative() {
+  local name="$1" code="$2" source="$3"
+  printf '%s\n' "$source" >"$work/$name.atto"
+  rm -f "$work/rejected.dll"
+  set +e
+  dotnet run --no-build -c Release --project "$compiler" -- "$work/$name.atto" "$work/rejected.dll" >"$work/out" 2>"$work/err"
+  local rc=$?
+  set -e
+  test "$rc" -eq 2
+  grep -Fq "$code:" "$work/err"
+  test ! -e "$work/rejected.dll"
+  echo "ATTO_OWNED_POINTER_REJECT_PASS=$name"
+}
+negative uninitialized E_POINTER_INITIALIZE 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); val int x = p.read(); p.close(); return x; }'
+negative bounds E_POINTER_BOUNDS 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(2); p.write(42); p.close(); return 0; }'
+negative index E_POINTER_BOUNDS 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(2); p.write_at(2, 42); p.close(); return 0; }'
+negative closed E_POINTER_LIFETIME 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); p.close(); val int x = p.len(); return x; }'
+negative missing_close E_POINTER_LIFETIME 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); return 42; }'
+negative self_initializer E_POINTER_LIFETIME 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(p.len()); p.close(); return 0; }'
+negative overflow E_POINTER_OVERFLOW 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(9223372036854775807 + 1); p.close(); return 0; }'
+negative double_close E_POINTER_LIFETIME 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); p.close(); p.close(); return 0; }'
+echo ATTO_OWNED_POINTER_CIL_NATIVEAOT_PASS
