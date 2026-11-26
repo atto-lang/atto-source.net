@@ -1,0 +1,32 @@
+name: Draft bounded v2 generated NativeAOT codec
+on:
+  pull_request:
+    paths:
+      - 'compiler/Ores.Net.Compiler.Core/DurableBoundedSourceV2.cs'
+      - 'verification/durable_bounded_v2_nativeaot.mjs'
+      - '.github/workflows/durable-bounded-v2-nativeaot.yml'
+permissions:
+  contents: read
+jobs:
+  generated:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify exact head and execute generated NativeAOT codec
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD^{tree}
+          sudo apt-get update -qq
+          sudo apt-get install -y clang zlib1g-dev binutils
+          node verification/durable_bounded_v2_nativeaot.mjs
