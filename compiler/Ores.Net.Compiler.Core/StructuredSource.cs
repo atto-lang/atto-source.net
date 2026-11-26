@@ -2902,7 +2902,7 @@ public static partial class OresStructuredParser
                 {
                     Require(left, IrValueType.GuestError, "Type inspection requires Error in this backend");
                     string name = Current.Text;
-                    if (name is not ("Error" or "ArithmeticOverflowError" or "DivisionByZeroError"))
+                    if (name is not ("Error" or "ArithmeticOverflowError" or "DivisionByZeroError" or "OptionUnwrapError" or "ResultUnwrapError"))
                         throw Error("Unsupported nominal Error type test");
                     index++;
                     left = TypedNode(new StructuredErrorTest(left.Offset, left, name, IsType: true), left);
