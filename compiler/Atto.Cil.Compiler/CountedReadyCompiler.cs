@@ -74,9 +74,9 @@ internal sealed class CountedReadyCompiler
         if (Peek.Length > 0 && char.IsAsciiDigit(Peek[0])) return new("int", Literal().ToString(CultureInfo.InvariantCulture) + "L");
         if (binding is not null)
         {
-            string n = Name();
-            if (binding == "@count") return new("int",Get(n,"int").Code);
-            if (n != binding) throw Bad("projection may reference only its binder");
+            string boundName = Name();
+            if (binding == "@count") return new("int",Get(boundName,"int").Code);
+            if (boundName != binding) throw Bad("projection may reference only its binder");
             return new("int","x");
         }
         if (Eat("await"))
