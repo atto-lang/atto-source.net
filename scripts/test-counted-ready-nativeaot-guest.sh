@@ -34,7 +34,9 @@ test "$(git hash-object tests/fixtures/counted-ready-v1/counted-distinct-alias-p
 for name in counted-distinct-alias-projection counted-mixed-future-alias counted-multi-channel-fair counted-mixed-zero counted-three counted-zero counted-one counted-alias counted-dynamic counted-dynamic-zero; do
   class="$(dotnet "$work/compiler/Atto.Cil.Compiler.dll" --counted-ready-v1 "tests/fixtures/counted-ready-v1/$name.atto" "$work/guest/$name.cs")"
   [[ "$class" =~ ^Guest_[a-f0-9]{64}$ ]]
-  echo "if ($class.Run() != 42L) throw new Exception(\"$name failed\"); Console.WriteLine(\"GUEST_PASS $name\");" >> "$work/guest/Program.cs"
+  grep -Fq "fence.TryClaim(ticket)" "$work/guest/$name.cs"
+  grep -Fq "fence.RetirementReady" "$work/guest/$name.cs"
+  echo "if ($class.Run() != 42L || $class.Run() != 42L) throw new Exception(\"$name failed\"); Console.WriteLine(\"GUEST_PASS $name\");" >> "$work/guest/Program.cs"
 done
 for name in reject-counted-negative reject-counted-bool reject-counted-scalar reject-counted-default reject-counted-write reject-counted-dynamic-bool reject-counted-dynamic-unknown; do
   if dotnet "$work/compiler/Atto.Cil.Compiler.dll" --counted-ready-v1 "tests/fixtures/counted-ready-v1/$name.atto" "$work/guest/bad.cs" > "$work/out" 2> "$work/err"; then

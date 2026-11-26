@@ -1,3 +1,4 @@
+SelectContinuationFenceSelfTest.Run(print: false);
 SelectArbiterSelfTest.Run();
 SelectableI64ChannelSelfTest.Run();
 SelectableI64FutureSelfTest.Run();

@@ -95,7 +95,7 @@ public static partial class OresParser
     private static List<Token> StripFileExports(List<Token> tokens, string source)
     {
         var stripped = new List<Token>(tokens.Count);
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        int exportCount = 0;
         int braces = 0;
         for (int i = 0; i < tokens.Count; i++)
         {
@@ -116,8 +116,8 @@ public static partial class OresParser
                 if (declaration.Items.Count != 1 || declaration.Items[0].LocalName != declaration.Items[0].ExternalName)
                     throw new FormatException($"EXPORT_SCALAR_UNSUPPORTED: grouped/aliased exports at offset {token.Offset}");
                 string name = declaration.Items[0].LocalName;
-                if (!names.Add(name))
-                    throw new FormatException($"EXPORT_DUPLICATE: duplicate export {name} at offset {token.Offset}");
+                if (++exportCount > 128)
+                    throw new FormatException($"EXPORT_SOURCE_LIMIT: too many export directives at offset {token.Offset}");
                 if (declaration.Kind is not (null or ExplicitExportKind.Fnc) || name != "main")
                     throw new FormatException($"EXPORT_BACKEND_UNSUPPORTED: only fnc main is lowered in .NET NativeAOT scalar compiler at offset {token.Offset}");
                 if (declaration.Scope != ExplicitExportScope.Public)
@@ -642,6 +642,7 @@ public static partial class OresParser
             var start = _i;
             if (_i == text.Length) return new Token("", start);
             var ch = text[_i];
+            if (ch is '⧖' or '∂') { _i++; return new Token("suspends", start); }
             if (ch is '\'' or '"' or '\u0060')
             {
                 _i = QuotedSourceSyntax.Scan(text, start);
@@ -813,7 +814,7 @@ public static partial class OresParser
                 if (word is "gen" or "generator")
                     throw new FormatException(
                         $"generator declarations require iterator-frame and continuation lowering in .NET Native AOT backend at offset {start}");
-                return new Token(word, start);
+                return new Token(word == "susp" ? "suspends" : word, start);
             }
             if (ch == '"')
             {

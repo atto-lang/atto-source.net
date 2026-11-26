@@ -5,8 +5,9 @@ namespace Ores.Net.Runtime;
 /// Completion producers enqueue tickets; the actor lane consumes a ticket
 /// immediately before executing the continuation. Generation advance
 /// invalidates all outstanding tickets. Close permanently rejects new tickets.
-/// The scheduler must serialize consume-and-invoke with lifecycle changes on
-/// the actor lane; this fence does not join already-running native workers.
+/// TryClaim retains physical execution capacity until the lease is disposed.
+/// Advance rejects while any lease lives. TryConsume is legacy logical-only;
+/// the scheduler must migrate to TryClaim before claiming physical fencing.
 /// </summary>
 public sealed class SelectContinuationFence
 {
@@ -21,9 +22,12 @@ public sealed class SelectContinuationFence
 
     private readonly object _gate = new();
     private readonly Slot[] _slots;
+    private readonly int[] _free;
+    private int _freeCount;
     private ulong _generation;
     private ulong _nextId = 1;
     private bool _closed;
+    private int _executing;
 
     public SelectContinuationFence(
         ulong generation = 1,
@@ -36,8 +40,13 @@ public sealed class SelectContinuationFence
 
         _generation = generation;
         _slots = new Slot[maxTickets];
+        _free = new int[maxTickets];
+        _freeCount = maxTickets;
         for (var i = 0; i < maxTickets; i++)
+        {
             _slots[i] = new Slot();
+            _free[i] = maxTickets - 1 - i;
+        }
     }
 
     public ulong Generation
@@ -57,9 +66,16 @@ public sealed class SelectContinuationFence
         {
             if (_closed) return false;
             _closed = true;
-            foreach (var slot in _slots) ClearLocked(slot);
+            ClearPendingLocked();
             return true;
         }
+    }
+
+    public int Executing { get { lock (_gate) return _executing; } }
+
+    public bool RetirementReady
+    {
+        get { lock (_gate) return _closed && _executing == 0 && _freeCount == _slots.Length; }
     }
 
     public int PendingTickets
@@ -68,10 +84,7 @@ public sealed class SelectContinuationFence
         {
             lock (_gate)
             {
-                var count = 0;
-                foreach (var slot in _slots)
-                    if (slot.Active) count++;
-                return count;
+                return _slots.Length - _freeCount;
             }
         }
     }
@@ -85,28 +98,25 @@ public sealed class SelectContinuationFence
             if (expectedGeneration != _generation)
                 throw new InvalidOperationException("stale actor generation");
 
-            var index = -1;
-            for (var i = 0; i < _slots.Length; i++)
-            {
-                if (!_slots[i].Active)
-                {
-                    index = i;
-                    break;
-                }
-            }
-            if (index < 0)
-                throw new InvalidOperationException(
-                    "Continuation ticket capacity exhausted");
+            if (_slots.Length - _freeCount + _executing >= _slots.Length)
+                throw new InvalidOperationException("Continuation physical capacity exhausted");
+            if (_freeCount == 0)
+                throw new InvalidOperationException("Continuation ticket capacity exhausted");
+            var index = _free[_freeCount - 1];
             if (_nextId == ulong.MaxValue)
                 throw new OverflowException(
                     "Continuation ticket identity exhausted");
 
-            var id = _nextId++;
+            var id = _nextId;
+            // Construct the ticket before changing quota or slot state.
+            var ticket = new Ticket(this, index, id, _generation);
+            _nextId++;
+            _freeCount--;
             var slot = _slots[index];
             slot.Id = id;
             slot.Generation = _generation;
             slot.Active = true;
-            return new Ticket(this, index, id, _generation);
+            return ticket;
         }
     }
 
@@ -118,22 +128,74 @@ public sealed class SelectContinuationFence
         {
             if (!MatchesLocked(ticket, requireCurrent: true))
                 return false;
-            ClearLocked(_slots[ticket.Index]);
+            ClearLocked(ticket.Index);
             return true;
         }
+    }
+
+    /// <summary>Claim on the actor lane and dispose after callback return.</summary>
+    public Execution? TryClaim(Ticket? ticket)
+    {
+        if (ticket is null) return null;
+        lock (_gate)
+        {
+            if (_closed || !MatchesLocked(ticket, requireCurrent: true)) return null;
+            // Allocate the lease before consuming the pending slot.
+            var lease = new Execution(this, _generation);
+            ClearLocked(ticket.Index);
+            _executing++;
+            return lease;
+        }
+    }
+
+    /// <summary>
+    /// Claim and invoke on the calling actor lane; retain physical credit
+    /// until callback completion, including cancellation or exception.
+    /// The callback and scheduler are responsible for actor-lane affinity.
+    /// </summary>
+    public async ValueTask<bool> TryInvokeAsync(Ticket? ticket, Func<ValueTask> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        using var lease = TryClaim(ticket);
+        if (lease is null) return false;
+        await callback().ConfigureAwait(false);
+        return true;
+    }
+
+    public sealed class Execution : IDisposable
+    {
+        private readonly SelectContinuationFence _owner;
+        private bool _active = true;
+        internal Execution(SelectContinuationFence owner, ulong generation)
+        {
+            _owner = owner;
+            Generation = generation;
+        }
+        public ulong Generation { get; }
+        public bool Active { get { lock (_owner._gate) return _active; } }
+        public bool Close()
+        {
+            lock (_owner._gate)
+            {
+                if (!_active) return false;
+                _active = false;
+                _owner._executing--;
+                return true;
+            }
+        }
+        public void Dispose() => Close();
     }
 
     public bool Advance(ulong expectedGeneration)
     {
         lock (_gate)
         {
-            if (_closed || expectedGeneration != _generation) return false;
+            if (_closed || expectedGeneration != _generation || _executing != 0) return false;
             if (_generation == ulong.MaxValue)
                 throw new OverflowException("Actor generation exhausted");
 
             _generation++;
-            foreach (var slot in _slots)
-                ClearLocked(slot);
+            ClearPendingLocked();
             return true;
         }
     }
@@ -144,7 +206,7 @@ public sealed class SelectContinuationFence
         {
             if (!MatchesLocked(ticket, requireCurrent: false))
                 return false;
-            ClearLocked(_slots[ticket.Index]);
+            ClearLocked(ticket.Index);
             return true;
         }
     }
@@ -163,10 +225,18 @@ public sealed class SelectContinuationFence
         return !requireCurrent || ticket.Generation == _generation;
     }
 
-    private static void ClearLocked(Slot slot)
+    private void ClearPendingLocked()
     {
+        for (var index = 0; index < _slots.Length; index++)
+            if (_slots[index].Active) ClearLocked(index);
+    }
+
+    private void ClearLocked(int index)
+    {
+        var slot = _slots[index];
         slot.Active = false;
         slot.Generation = 0;
+        _free[_freeCount++] = index;
     }
 
     public sealed class Ticket

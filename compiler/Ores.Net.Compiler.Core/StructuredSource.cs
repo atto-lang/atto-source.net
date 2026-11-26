@@ -565,7 +565,7 @@ public static partial class OresStructuredParser
             string next = tokens[i + 1].Text;
             // Frozen package providers retain the prior closed scalar boundary.
             // Standalone task/guard/match support is not an imported ABI grant.
-            if (frozenNamespace is not null && word is ("guard" or "match" or "susp"))
+            if (frozenNamespace is not null && word is ("guard" or "match" or "suspends"))
                 throw new FormatException($"E_UNSUPPORTED: frozen provider requires closed scalar lowering at offset {tokens[i].Offset}");
             // Compiler-owned lexical recognition: the Java/LLVM canonical
             // telemetry scope must not accidentally become an ordinary scalar
@@ -729,6 +729,7 @@ public static partial class OresStructuredParser
                 }
                 int cursor = member;
                 if (tokens[cursor].Text is "pub" or "private") cursor++;
+                bool obsoleteMethodIntroducer = false;
                 bool staticMethod = cursor < tokens.Count &&
                     tokens[cursor].Text == "static";
                 if (staticMethod)
@@ -743,9 +744,18 @@ public static partial class OresStructuredParser
                     }
                     cursor++;
                 }
-                else if (cursor < tokens.Count &&
-                    (tokens[cursor].Text is "mtd" or "method" or "fnc"))
+                else if (cursor < tokens.Count && tokens[cursor].Text == "fnc")
+                    cursor++; // compatibility introducer, never a callable name
+                else if (cursor + 2 < tokens.Count &&
+                    (tokens[cursor].Text is "mtd" or "method") &&
+                    IsSimpleNominalWord(tokens[cursor + 1].Text) &&
+                    tokens[cursor + 2].Text == "(")
+                {
+                    // Inspect a complete declaration before diagnosing the obsolete marker.
+                    // A callable literally named method() is not an introducer.
+                    obsoleteMethodIntroducer = tokens[cursor].Text == "method";
                     cursor++;
+                }
                 if (cursor < tokens.Count && tokens[cursor].Text == "constructor")
                 {
                     // Constructors do not occupy ordinary method slots.
@@ -802,6 +812,8 @@ public static partial class OresStructuredParser
                     member++;
                     continue;
                 }
+                if (obsoleteMethodIntroducer)
+                    throw new FormatException($"Obsolete method introducer; use mtd at offset {tokens[member].Offset}");
                 try
                 {
                     slots.DeclareLowered(owner, name, checked(values + (staticMethod ? 0 : 1)),
@@ -1175,12 +1187,14 @@ public static partial class OresStructuredParser
             // Preserve the earlier != / !eq recognition and the separate
             // fail-closed macro and ownership admission gates.
             else if (ch == '!') index++;
+            else if (ch is '⧖' or '∂') index++;
             else if (booleanPackBracket || "()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
                 (ch == '|' && precededByString) ||
                 (allowStaticTupleProjection && sawTupleDeclaration && ch is ('[' or ']')) ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             var tokenText = source[offset..index];
+            if (tokenText is "susp" or "⧖" or "∂") tokenText = "suspends";
             if (tokenText == "import" && !moduleMode)
                 throw new FormatException("source imports require verified module graph lowering");
             if (tokenText == "enum")
