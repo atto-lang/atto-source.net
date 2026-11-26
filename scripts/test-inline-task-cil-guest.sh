@@ -30,7 +30,7 @@ reject() {
   shift 2
   rm -f "$work/reject.dll"
   set +e
-  dotnet run --no-build -c Release --project "$compiler" -- "$@" "$src" "$work/reject.dll" >"$work/stdout" 2>"$work/stderr"
+  dotnet run --no-build -c Release --project "$compiler" -- "$src" "$work/reject.dll" "$@" >"$work/stdout" 2>"$work/stderr"
   rc=$?
   set -e
   test "$rc" -eq 2 && grep -Fq "$code:" "$work/stderr" && test ! -e "$work/reject.dll" || { cat "$work/stderr"; echo "TASK_REJECT_FAILED $src $code $rc"; exit 1; }
