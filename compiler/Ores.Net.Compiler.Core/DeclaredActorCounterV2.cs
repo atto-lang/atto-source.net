@@ -36,6 +36,9 @@ public static partial class OresParser
 {
     private const string CounterPath = "src/counter/";
 
+    private static bool IsStateIntrinsicName(string name) =>
+        name is "handle_state" or "handle_state_ro" or "handle_state_w" or "state_ro" or "state_w";
+
     public static VerifiedExternalCounterV2 InspectExternalCounterV2(
         IReadOnlyDictionary<string, string> units)
     {
@@ -125,7 +128,9 @@ public static partial class OresParser
         receive.E("("); receive.E(")"); receive.E(";"); receive.E("fi");
         receive.E("return"); receive.E(";"); receive.E("}"); receive.Done();
 
-        if (new[] { "self", "receive", "handle_state", "send", "end" }.Contains(actorName) ||
+        if (new[] { actorName, field, methodName, mail, writer, reader, detached,
+                methodReceiver, receiverName, contractArg, methodArg }.Any(IsStateIntrinsicName) ||
+            new[] { "self", "receive", "handle_state", "send", "end" }.Contains(actorName) ||
             new[] { "self", "receive", "handle_state", "send", "end" }.Contains(field) ||
             methodName is "receive" or "handle_state" or "send" or "end" ||
             mail is "self" or "handle_state" or "receive" or "end" ||
@@ -289,7 +294,7 @@ public static partial class OresParser
         internal string Loan()
         {
             E("|"); string name = Id(); E("|"); E("->");
-            if (name is "self" or "mail" or "handle_state")
+            if (name is "self" or "mail" or "_" || IsStateIntrinsicName(name))
                 throw new FormatException("E_EXTERNAL_RECEIVE: reserved state loan name");
             return name;
         }
@@ -298,6 +303,12 @@ public static partial class OresParser
         {
             bool qualified = Take("self");
             if (qualified) E(".");
+            // Mode-specific aliases are sealed and normalize to the same
+            // checked MIR; an opposite-mode alias or extra marker fails closed.
+            if (mode == "write" && (Take("state_w") || Take("handle_state_w")))
+            { E("("); return; }
+            if (mode == "read" && (Take("state_ro") || Take("handle_state_ro")))
+            { E("("); return; }
             E("handle_state"); E("(");
             int offset = At.Offset;
             E("critical");
