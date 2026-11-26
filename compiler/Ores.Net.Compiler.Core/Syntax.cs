@@ -659,7 +659,7 @@ public static partial class OresParser
                 var word = text[start.._i];
                 // Mandatory whitespace follows the entire contextual keyword suffix.
                 // Keep exact inequality tokens distinct.
-                if ((word is "trap" or "throw" or "raise" or "panic" or "copy" or "take" or
+                if ((word is "trap" or "throw" or "raise" or "panic" or "copy" or "take" or "move" or
                     "borrow" or "share" or "pin" or "drop" or "pipe" or "rpipe" or "stop" or "expand") &&
                     _i < text.Length && text[_i] == '!' &&
                     (_i + 1 >= text.Length || text[_i + 1] != '=') &&
@@ -1230,7 +1230,7 @@ public static partial class OresParser
             if (verbIndex + 1 < tokens.Count &&
                 (Current.Text != "mut" ||
                     (tokens[verbIndex].Text == "borrow")) &&
-                (tokens[verbIndex].Text is "copy" or "take" or "borrow" or "share") &&
+                (tokens[verbIndex].Text is "copy" or "take" or "move" or "borrow" or "share") &&
                 tokens[verbIndex + 1].Text == "!" &&
                 (verbIndex + 2 >= tokens.Count ||
                     tokens[verbIndex + 2].Text is not ("=" or "eq")) &&
