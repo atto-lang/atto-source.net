@@ -28,7 +28,9 @@ internal static class HeapContainerSourceBoundaryTests
             ("pub fnc main():int{return Pair.of(\"count\", 23).second + 19;}", 42),
             ("pub fnc main():int{return Pair.of<int>(\"count\", 11).second + 31;}", 42),
             ("pub fnc main():int{return Entry.of<int,int>(-9223372036854775808, 42).value;}", 42),
-            ("pub fnc main():int{return Pair.of<string,int>(\"count\", 11).second + 31;}", 42)
+            ("pub fnc main():int{return Pair.of<string,int>(\"count\", 11).second + 31;}", 42),
+            ("pub fnc main():int{return Pair.of<int>(\"count\", (10+11)*2).second;}", 42),
+            ("pub fnc main():int{return Pair.of(\"outer\", Pair.of(\"inner\", 40+2).second).second;}", 42)
         };
         string folder = Path.Combine(Path.GetTempPath(),
             "atto-tuple-scalar-cil-" + Guid.NewGuid().ToString("N"));
@@ -85,6 +87,9 @@ internal static class HeapContainerSourceBoundaryTests
             "~pair(1,2).value",
             "Entry.of(1,2).key.foo", // no dynamic member fallback
             "Pair.of(\"a\",true).second",
+            "Pair.of(\"a\",missing).second",
+            "Entry.of(1+2,3).key",
+            "Entry.of(1,2+3).value",
             "Entry.of<int>(1,2).key", // both type slots required, int-only
             "~entry(1+2,3).key", // no unproven effects
             "Array.of(1,2)",
