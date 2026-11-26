@@ -47,6 +47,26 @@ internal readonly record struct VerifiedI64Range
         _ => throw new FormatException("E_REFINEMENT_PREDICATE: expected an interval comparison"),
     };
 
+    // Universal safety, not clipped normal-result facts.
+    internal bool ProvesArithmetic(string op, VerifiedI64Range right)
+    {
+        static bool Fits(BigInteger a, BigInteger b) => a >= long.MinValue && b <= long.MaxValue;
+        switch (op)
+        {
+            case "+": return Fits((BigInteger)low + right.low, (BigInteger)high + right.high);
+            case "-": return Fits((BigInteger)low - right.high, (BigInteger)high - right.low);
+            case "*":
+                BigInteger a = (BigInteger)low * right.low, b = (BigInteger)low * right.high,
+                    c = (BigInteger)high * right.low, d = (BigInteger)high * right.high;
+                return Fits(BigInteger.Min(BigInteger.Min(a,b),BigInteger.Min(c,d)),
+                    BigInteger.Max(BigInteger.Max(a,b),BigInteger.Max(c,d)));
+            case "/": return (right.low > 0 || right.high < 0)
+                && !(low == long.MinValue && right.low <= -1 && right.high >= -1);
+            default: return false;
+        }
+    }
+    internal bool ProvesNegation => low != long.MinValue;
+
     internal VerifiedI64Range Add(VerifiedI64Range right) =>
         Clip((BigInteger)low + right.low, (BigInteger)high + right.high);
 
