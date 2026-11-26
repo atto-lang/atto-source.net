@@ -93,6 +93,7 @@ internal static class FrozenDependencyGraphSelfTest
     }
     internal static void EmitPersistentCilGuests(string output,string lane)
     {
+        if(!OperatingSystem.IsLinux())throw new PlatformNotSupportedException("Linux fixture only");
         var c=Snapshot(C,"1.0.0",new(),new(),"use namespace network; pub fnc answer(int x):int{return x*2"+(lane=="edit"?"+1":"")+";}");
         var d=WithDeps(D);string main="import pkg '"+C+"' as p; pub fnc main()->int{return p.network.answer(21);}";
         string root=System.IO.Path.Combine(output,"cache");
