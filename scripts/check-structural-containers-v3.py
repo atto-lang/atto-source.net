@@ -21,11 +21,14 @@ list.literal.covariance list.writable.covariance list.not.array
 list.push list.unknown list.nested.mutable fixedlist.extent
 fixedlist.wrong.extent fixedlist.zero.element.identity map.readonly map.value.literal map.key.invariant
 map.value.numeric map.unknown.key map.unknown.value map.mutable.put
-map.unsafe.key map.nested.mutable capability.no_escape
+map.unsafe.key map.nested.mutable capability.no.escape
 capability.no_await overload.no_shape_only spread.no_dynamic_container
 map.key.optional
 """.split())
 BACKENDS = ["java", "llvm", "net", "wasm", "forge"]
+ACCEPT_IDS = frozenset("""array.homogeneous array.literal fixedarray.extent
+list.readonly list.literal.covariance fixedlist.extent map.readonly
+map.value.literal map.key.optional""".split())
 
 
 def require(ok, message):
@@ -65,6 +68,8 @@ def validate(data):
         found.add(name)
         require(expected in ("accept", "reject") and type(expected) is str,
                 "missing or invalid decision")
+        require((expected == "accept") == (name in ACCEPT_IDS),
+                "changed per-case decision: " + name)
         require(type(case["source"]) is str and case["source"].strip(),
                 "empty source")
         require(type(case["reason"]) is str and case["reason"].strip(),
@@ -103,6 +108,11 @@ def self_test():
     tests.append(altered)
     altered = json.loads(json.dumps(original))
     altered["max_fixed_extent"] = 65
+    tests.append(altered)
+    altered = json.loads(json.dumps(original))
+    accepted = next(c for c in altered["cases"] if c["expect"] == "accept")
+    rejected = next(c for c in altered["cases"] if c["expect"] == "reject")
+    accepted["expect"], rejected["expect"] = rejected["expect"], accepted["expect"]
     tests.append(altered)
     for notice in ("not", "Not restricted: runtime parity established.", "", None):
         altered = json.loads(json.dumps(original))
