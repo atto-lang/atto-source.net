@@ -127,12 +127,28 @@ internal sealed class Parser
         // A lexed Pointer token is admitted only by the closed local read-lease profile.
         if (_tokens.Contains("Pointer", StringComparer.Ordinal))
         {
-            // One private, readonly singleton helper before the closed owner main.
-            if (_tokens.Count > 7 && _tokens[0] == "fnc" && _tokens[2] == "(" &&
-                    _tokens[3] == "Pointer") return ParseOwnedScalarPointer(ParseReadonlyPointerHelper());
-            if (_tokens.Count > 8 && _tokens[0] == "fnc" && _tokens[2] == "(" &&
-                    _tokens[3] == "mut" && _tokens[4] == "Pointer")
-                return ParseOwnedScalarPointer(ParseMutablePointerHelper());
+            if (Peek == "fnc")
+            {
+                Function? readonlyHelper = null, mutableHelper = null;
+                while (Peek == "fnc")
+                {
+                    if (_position + 3 >= _tokens.Count)
+                        throw new CompilerError("E_POINTER_PROFILE", "incomplete helper");
+                    if (_tokens[_position + 3] == "mut")
+                    {
+                        if (mutableHelper != null) throw new CompilerError("E_POINTER_ALIAS", "excess mutable helper");
+                        mutableHelper = ParseMutablePointerHelper();
+                    }
+                    else
+                    {
+                        if (readonlyHelper != null) throw new CompilerError("E_POINTER_ALIAS", "excess readonly helper");
+                        readonlyHelper = ParseReadonlyPointerHelper();
+                    }
+                    if (readonlyHelper != null && mutableHelper != null && readonlyHelper.Name == mutableHelper.Name)
+                        throw new CompilerError("E_POINTER_ALIAS", "duplicate helper identity");
+                }
+                return ParseOwnedScalarPointer(readonlyHelper, mutableHelper);
+            }
             return _tokens.Count > 10 && _tokens[8] == "let" && _tokens[9] == "mut" && _tokens[10] == "Pointer"
                 ? ParseOwnedScalarPointer() : ParseBorrowedLocalPointer();
         }
@@ -312,12 +328,12 @@ internal sealed class Parser
         return new Function(name, ["$exclusive_slot"], CheckedType.Void, [], value);
     }
 
-    private List<Function> ParseOwnedScalarPointer(Function? helper = null)
+    private List<Function> ParseOwnedScalarPointer(Function? helper = null, Function? mutableHelper = null)
     {
         foreach (var token in new[] { "pub", "fnc", "main", "(", ")", ":", "int", "{",
                 "let", "mut", "Pointer", "<", "int", ">" }) PointerNeed(token);
         var owner = PointerName();
-        if (helper?.Name == owner) throw new CompilerError("E_POINTER_ALIAS", "owner shadows borrowed helper");
+        if (helper?.Name == owner || mutableHelper?.Name == owner) throw new CompilerError("E_POINTER_ALIAS", "owner shadows borrowed helper");
         PointerNeed("="); PointerNeed("Pointer"); PointerNeed(".");
         var initialized = Eat("alloc_value");
         if (!initialized) PointerNeed("alloc");
@@ -447,11 +463,11 @@ internal sealed class Parser
                 if (Eat("val"))
                 {
                     PointerNeed("int"); var name = PointerName();
-                    if (name == owner || name == helper?.Name || scalars.ContainsKey(name))
+                    if (name == owner || name == helper?.Name || name == mutableHelper?.Name || scalars.ContainsKey(name))
                         throw new CompilerError("E_POINTER_ALIAS", "duplicate pointer or scalar name");
                     PointerNeed("="); scalars.Add(name, Bind(Value())); PointerNeed(";");
                 }
-                else if (helper?.MutableWrite is long write && Eat(helper.Name))
+                else if (mutableHelper?.MutableWrite is long write && Eat(mutableHelper.Name))
                 {
                     RequireLive(); PointerNeed("(");
                     if (Peek == "borrow")
@@ -469,7 +485,7 @@ internal sealed class Parser
                     // local has exclusive address authority only during this call.
                     var cell = Bind((new Literal(0), 0));
                     var storage = ((Arg)cell.Expr).Name;
-                    body.Add(new MutablePointerCall(helper.Name, storage));
+                    body.Add(new MutablePointerCall(mutableHelper.Name, storage));
                     cells[0] = (cell.Expr, write);
                 }
                 else
@@ -517,7 +533,11 @@ internal sealed class Parser
             PointerNeed(";"); PointerNeed("}");
             if (Peek != "<eof>") throw new CompilerError("E_POINTER_ESCAPE", "extra declarations not admitted");
             var main = new Function("main", [], CheckedType.Int, body);
-            return helper == null ? [main] : [helper, main];
+            List<Function> functions = [];
+            if (helper != null) functions.Add(helper);
+            if (mutableHelper != null) functions.Add(mutableHelper);
+            functions.Add(main);
+            return functions;
         }
         catch (OverflowException)
         {
