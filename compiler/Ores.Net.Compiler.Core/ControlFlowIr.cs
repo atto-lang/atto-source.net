@@ -67,7 +67,8 @@ public enum CfgOpcode
     ResultUnwrapTextErr,
     CheckedRemainder,
     CheckedModulo,
-    InlineCooperate
+    InlineCooperate,
+    BitXorI64
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -628,6 +629,7 @@ public static class OresCfgVerifier
                     case CfgOpcode.CheckedSubtract:
                     case CfgOpcode.CheckedMultiply:
                     case CfgOpcode.CheckedDivide:
+                    case CfgOpcode.BitXorI64:
                     case CfgOpcode.ShiftLeftI64:
                     case CfgOpcode.ShiftRightLogicalI64:
                     case CfgOpcode.ShiftRightArithmeticI64:

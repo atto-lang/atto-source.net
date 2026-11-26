@@ -754,16 +754,47 @@ internal static class StructuredCfgLoweringTests
             "if true || x+1>0{return 42;}else{return 7;}}",
             42, "|| skips overflowing right operand");
         CheckOverflow("fnc main():int{let int x=9223372036854775807;" +
-            "if false ^^ x+1>0{return 42;}else{return 7;}}",
-            "^^ eagerly evaluates overflowing right operand");
-        Check("fnc main():int{if true ^^ true{return 7;}else{return 42;}}",
-            42, "^^ boolean false result");
-        Check("fnc main():int{if true ^^ false{return 42;}else{return 7;}}",
-            42, "^^ boolean true result");
-        Check("fnc main():int{if true ^^ true && false{return 42;}else{return 7;}}",
-            42, "&& binds tighter than ^^");
-        Check("fnc main():int{if true || true ^^ true{return 42;}else{return 7;}}",
-            42, "^^ binds tighter than ||");
+            "if Xor(false, x+1>0){return 42;}else{return 7;}}",
+            "named Xor eagerly evaluates overflowing right operand");
+        Check("fnc main():int{if Xor(true,true){return 7;}else{return 42;}}",
+            42, "named Xor boolean false result");
+        Check("fnc main():int{if Xor(true,false){return 42;}else{return 7;}}",
+            42, "named Xor boolean true result");
+        Check("fnc main():int{if Xor(true,true && false){return 42;}else{return 7;}}",
+            42, "named Xor retains typed conjunction argument");
+        Check("fnc main():int{if true || Xor(true,true){return 42;}else{return 7;}}",
+            42, "named Xor remains inside lazy disjunction");
+        foreach (var (body, expected) in new (string, long)[] {
+            ("let int x=12; x ^^=10; return x;", 6),
+            ("let int x=-9223372036854775808; x ^^= -1; return x;", long.MaxValue),
+            ("let int x=9223372036854775807; x ^^= -1; return x;", long.MinValue),
+            ("let int x=-9223372036854775808; x ^^=x; return x;", 0),
+            ("let int x=9007199254740993; x ^^=9007199254740992; return x;", 1),
+            ("let int x=12; if true {x ^^=10;} return x;", 6),
+            ("const int x=12 ^^ 10; return x;", 6),
+            ("return 5+6 ^^ 4;", 15),
+            ("return 11 ^^ 4 ^^ 7;", 8),
+            ("return Integer.bitXor(12,10);", 6),
+            ("return (11 ^^ 4) eq 15 ? 42 : 0;", 42)
+        })
+            Check("fnc main():int{" + body + "}", expected, "canonical i64 XOR " + body);
+        CheckModule("fnc mask(int a,int b):int{return a ^^ b;}" +
+            "fnc main():int{return mask(12,10);}", 6, "linked typed helper XOR");
+        CheckOverflow("fnc main():int{let int x=9223372036854775807; x ^^=x+1; return x;}",
+            "compound XOR evaluates checked RHS before storing");
+        foreach (string body in new[] {
+            "val int x=12; x ^^=10; return x;",
+            "const int x=12; x ^^=10; return x;",
+            "let bool x=true; x ^^=false; return 0;",
+            "let int x=12; x ^^=true; return x;",
+            "let int x=12; x ^^ =10; return x;",
+            "let int x=12; x ^/*gap*/^=10; return x;",
+            "return true ^^ false ? 1 : 0;",
+            "return 11 ^^ 4 eq 15 ? 42 : 0;",
+            "return Xor(1,2) ? 1 : 0;",
+            "return Xor(true) ? 1 : 0;"
+        })
+            Reject("fnc main():int{" + body + "}", "canonical XOR rejection " + body);
         Check("fnc main():int{if true != false{return 42;}else{return 7;}}",
             42, "typed bool inequality");
         Check("fnc main():int{let int n=0;while (n<3) and (n<10) {n=n+1;}return n+39;}",
