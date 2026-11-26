@@ -11,6 +11,7 @@ internal static class CountedSelectI64CursorSelfTest
     public static void Run()
     {
         Aggregate();
+        ProjectedAggregate();
         var a = new SelectableI64Channel(2);
         var b = new SelectableI64Channel(2);
         a.TryWrite(10); a.TryWrite(30); b.TryWrite(20); b.TryWrite(40);
@@ -116,6 +117,31 @@ internal static class CountedSelectI64CursorSelfTest
         var foreign = new Thread(()=>{try{batch.Cancel();}catch(InvalidOperationException){rejected=true;}});
         foreign.Start();foreign.Join();
         Require(rejected && !batch.Completion.IsCompleted && batch.Cancel(),"foreign cancellation rejected");
+    }
+
+    private static void ProjectedAggregate()
+    {
+        var a = new SelectableI64Channel(2);
+        var b = new SelectableI64Channel(1);
+        var f = new SelectableI64Future();
+        a.TryWrite(1); a.TryWrite(4); b.TryWrite(3); f.Resolve(2);
+        var batch = new CountedSelectI64Batch(4, new object[]{a,f,b,a,f}, true,
+            new Func<long,long>[] {v=>v+10,v=>v+20,v=>v+30,v=>v+40,
+                _=>throw new Exception("retired alias projected")});
+        for (int i=0;i<8;i++) Require(batch.Pump(), "mixed projection progress");
+        Require(batch.Completion.Result.SequenceEqual(new long[]{11,22,33,44}), "mixed lexical projections");
+        Require(a.PendingReaders+b.PendingReaders+f.PendingWaiters==0, "no mixed projection waiter leak");
+        try { _ = new CountedSelectI64Batch(1,new object[]{a},true,Array.Empty<Func<long,long>>()); throw new Exception("mismatch accepted"); }
+        catch (ArgumentException) {}
+        try { _ = new CountedSelectI64Batch(1,new object[]{a},true,new Func<long,long>[] {null!}); throw new Exception("null projector accepted"); }
+        catch (ArgumentException) {}
+        Require(a.PendingReaders==0,"invalid plan rejected before registration");
+        Require(new CountedSelectI64Batch(0,null!,true,new Func<long,long>[] {null!}).Completion.Result.Count==0,"zero ignores plan");
+        a.TryWrite(10); a.TryWrite(20);
+        var error = new InvalidOperationException("projection failed");
+        batch = new CountedSelectI64Batch(2,new object[]{a},true,new Func<long,long>[] {_=>throw error});
+        Require(batch.Pump() && batch.Pump() && ReferenceEquals(batch.Completion.Exception?.InnerException,error),"projection failure identity");
+        Require(a.PendingReaders==0 && a.TryRead(out var remaining) && remaining==20 && !batch.Pump(),"no next commit after projection failure");
     }
 
 }
