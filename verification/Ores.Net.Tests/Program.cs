@@ -119,6 +119,8 @@ foreach (string source in new[] {
         "Static select requires checked Channel/Future arbitration",
         "structured frontend must fail closed on typed select syntax");
 }
+Require(OresStructuredParser.Parse("fnc select(int n):int{return n;} pub fnc main():int{return select((42));}") is not null,
+    "ordinary contextual select call must remain accepted in the structured frontend");
 Require(OresParser.Parse("fnc main():int{return 42;} /* select<int> over ignored */") is not null,
     "comment-only typed select must not trigger scalar admission");
 Require(OresStructuredParser.Parse(

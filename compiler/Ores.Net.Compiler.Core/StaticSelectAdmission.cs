@@ -6,7 +6,7 @@ internal static class StaticSelectAdmission
         "Static select requires checked Channel/Future arbitration, actor-lane continuation, ownership and cancellation lowering in the .NET backend";
 
     internal static bool IsStaticSelectFollower(string token) =>
-        token is "{" or "<" or "(" or "over" or "first" or "fair" or "random";
+        token is "{" or "<" or "over" or "first" or "fair" or "random";
 
     internal static FormatException Unsupported(int offset) =>
         new($"{Diagnostic} at offset {offset}");
@@ -27,9 +27,15 @@ internal static class StaticSelectAdmission
 
         i = end;
         if (!SkipTrivia(source, ref i) || i >= source.Length) return false;
-        // Counted and typed select are reserved source forms; fail closed at
-        // lexical admission before the generic scalar/call parser can consume them.
-        if (source[i] is '{' or '<' or '(') return true;
+        // Preserve ordinary contextual select(...) calls. A count header
+        // becomes a static select only when followed by a static body/policy.
+        if (source[i] is '{' or '<') return true;
+        if (source[i] == '(')
+        {
+            if (!SkipCountHeader(source, ref i)) return false;
+            if (!SkipTrivia(source, ref i) || i >= source.Length) return false;
+            if (source[i] == '{') return true;
+        }
         if (!(char.IsLetter(source[i]) || source[i] == '_')) return false;
 
         int start = i++;
@@ -37,6 +43,49 @@ internal static class StaticSelectAdmission
                (char.IsLetterOrDigit(source[i]) || source[i] == '_'))
             i++;
         return IsStaticSelectFollower(source[start..i]);
+    }
+
+    // The source budget and nesting cap bound contextual lookahead. Quotes
+    // and nested comments cannot counterfeit the closing count delimiter.
+    private static bool SkipCountHeader(string source, ref int i)
+    {
+        int start = i;
+        int depth = 0;
+        while (i < source.Length)
+        {
+            if (i - start > 16_384)
+                throw new FormatException("Select count lookahead exceeds source budget");
+            if (!SkipTrivia(source, ref i) || i >= source.Length) return false;
+            if (i - start > 16_384)
+                throw new FormatException("Select count lookahead exceeds source budget");
+            char ch = source[i++];
+            if (ch == '(')
+            {
+                if (++depth > 128)
+                    throw new FormatException("Select count nesting exceeds source budget");
+            }
+            else if (ch == ')')
+            {
+                if (--depth == 0) return true;
+            }
+            else if (ch is '\'' or '"' or '`')
+            {
+                bool closed = false;
+                while (i < source.Length)
+                {
+                    if (i - start > 16_384)
+                        throw new FormatException("Select count lookahead exceeds source budget");
+                    char quoted = source[i++];
+                    if (quoted == '\\')
+                    {
+                        if (i < source.Length) i++;
+                    }
+                    else if (quoted == ch) { closed = true; break; }
+                }
+                if (!closed) return false;
+            }
+        }
+        return false;
     }
 
     private static bool SkipTrivia(string source, ref int i)
