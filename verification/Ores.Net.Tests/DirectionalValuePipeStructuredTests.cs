@@ -85,6 +85,21 @@ internal static class DirectionalValuePipeStructuredTests
         RejectStructured(funcs + "fnc main():int{return 20 pipe increment;}",
             "E_ACTOR_PIPE_BACKEND_UNSUPPORTED");
 
+        CheckCil(funcs + "fnc main():int{return 41 |> await |> increment;}",
+            42, "immediate await stage");
+        CheckCil(funcs + "fnc main():int{return increment(await 41);}",
+            42, "prefix immediate await");
+        CheckCil(funcs + "fnc main():int{return 2 |> match<int> over { on 2 -> 41, on _ -> 0, } |> increment;}",
+            42, "brace match receiver");
+        CheckCil(funcs + "fnc main():int{return 2 |> match over on 2 -> 41, on _ -> 0, end |> increment;}",
+            42, "end match receiver");
+        CheckCil(funcs + "fnc main():int{return 2 |> await |> match over { on 2 -> 41, on _ -> 0, } |> increment;}",
+            42, "await and match receiver composition");
+        RejectStructured("fnc main():int{return true |> await;}", "immediate await requires int");
+        RejectStructured("fnc main():int{return 42 |> await(7);}", "await takes only the left-hand value");
+        RejectStructured("fnc main():int{return 42 |> std.await;}", "E_SUSPENDS_UNSUPPORTED");
+        RejectStructured("fnc main():int{return 2 |> match over { on 2 -> 42, };}", "MATCH_NON_EXHAUSTIVE");
+
         // The shipping one-main i64 compiler does not support named helper
         // definitions or tagged pipelines and must remain fail-closed.
         foreach (string op in new[] { "|>", "<|" })
