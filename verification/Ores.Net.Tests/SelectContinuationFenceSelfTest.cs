@@ -278,6 +278,33 @@ internal static class SelectContinuationFenceSelfTest
         }
         Require(mixed.Close() && mixed.RetirementReady, "final mixed retirement");
 
+        var dispatch = new SelectContinuationFence(maxTickets: 1);
+        var dispatchTicket = dispatch.Register(1);
+        var completion = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var invocation = dispatch.TryInvokeAsync(dispatchTicket,
+            async () => { await completion.Task.ConfigureAwait(false); });
+        Require(dispatch.Executing == 1 && !invocation.IsCompleted &&
+                !dispatch.Advance(1), "async callback retains execution credit");
+        Require(!dispatch.TryInvokeAsync(dispatchTicket,
+            () => throw new Exception("duplicate callback")).AsTask().GetAwaiter().GetResult(),
+            "duplicate dispatch cannot execute callback");
+        Require(dispatch.Close() && !dispatch.RetirementReady,
+            "terminal close waits for async callback");
+        completion.SetResult(true);
+        Require(invocation.AsTask().GetAwaiter().GetResult() && dispatch.RetirementReady,
+            "async callback release makes shutdown ready");
+        var failingDispatch = new SelectContinuationFence(maxTickets: 1);
+        var failingTicket = failingDispatch.Register(1);
+        Reject<ArgumentNullException>(() => failingDispatch.TryInvokeAsync(
+            failingTicket, null!).AsTask().GetAwaiter().GetResult(), "null dispatch callback");
+        Require(failingTicket.Active, "invalid callback does not consume ticket");
+        Reject<InvalidOperationException>(() => failingDispatch.TryInvokeAsync(
+            failingTicket, () => throw new InvalidOperationException("callback"))
+            .AsTask().GetAwaiter().GetResult(), "failing dispatch callback");
+        Require(failingDispatch.Executing == 0 && failingDispatch.Advance(1),
+            "failing callback retires execution credit");
+
         Console.WriteLine("Select continuation fence lifecycle checks passed");
     }
 }
