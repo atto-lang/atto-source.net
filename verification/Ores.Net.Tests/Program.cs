@@ -1024,8 +1024,8 @@ Require(OresParser.Parse("fnc main():int{return 1;} // \ud83d\ude00") is Literal
 foreach (var division in new[] { "3/2", "4/2", "5/0", "-9223372036854775808/-1" })
 {
     try { OresParser.Parse("fnc main():int{return " + division + ";}"); }
-    catch (FormatException ex) when (ex.Message.Contains("float result lowering")) { continue; }
-    throw new Exception("Source division must fail closed until float lowering exists");
+    catch (FormatException ex) when (ex.Message.Contains("Checked integer division requires typed guest error lowering", StringComparison.Ordinal)) { continue; }
+    throw new Exception("Restricted scalar source division must fail closed until checked guest error lowering exists");
 }
 // Explicit internal checked-i64 IR remains available; it is not source /.
 foreach (var pair in new[] { (long.MinValue, -1L), (5L, 0L) })
