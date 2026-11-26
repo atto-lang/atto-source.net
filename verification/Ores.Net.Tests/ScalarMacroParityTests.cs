@@ -214,9 +214,16 @@ public static class ScalarMacroParityTests
             "NET_MACRO_CONST_OVERFLOW", "checked constant overflow");
         Reject(LiteralMacro + MainSource("literal!(const -(-9223372036854775808))"),
             "NET_MACRO_CONST_OVERFLOW", "unary signed overflow");
+        // The scalar bootstrap must reject division even though the separate
+        // structured frontend can lower checked integer division.
+        const string divisionDiagnostic =
+            "Checked integer division requires typed guest error lowering; unsupported in the i64 source subset";
         Reject(LiteralMacro + MainSource("literal!(const 1 / 2)"),
-            "Checked integer division requires typed guest error lowering",
-            "restricted scalar macro frontend rejects unsupported checked division rather than floating conversion");
+            divisionDiagnostic, "Const<int> cannot bypass the scalar division admission gate");
+        Reject(IdentityMacro + MainSource("identity!(syntax expr 1 / 2)"),
+            divisionDiagnostic, "Syntax<Expr> cannot bypass the scalar division admission gate");
+        Reject(MainSource("1 / 2"), divisionDiagnostic,
+            "ordinary scalar division retains the same fail-closed diagnostic");
 
         // Inclusive 64-level const evaluator bound, distinct from parser's
         // independent 128 nesting bound. No runtime bypass on depth 65.
