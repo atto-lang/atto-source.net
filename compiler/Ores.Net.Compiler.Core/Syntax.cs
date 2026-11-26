@@ -6,7 +6,7 @@ public abstract record Expression;
 public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
-// Named intrinsic only. Single '^' is not AttoLang syntax ('^^' is boolean XOR).
+// Canonical integer ^^ and the named Integer.bitXor intrinsic share this AST.
 public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
 // Named signed-64 Integer.rem/mod/pow (Java StrictIntegerArithmetic parity):
 // truncating remainder, Euclidean modulus, checked nonnegative power.
@@ -864,16 +864,16 @@ public static partial class OresParser
                     _i++;
                     return new Token("^", start);
                 }
-                // Rejected after lexical trivia and before any scalar instruction
-                // reaches typed IR or CIL. `^^` is the canonical boolean XOR
-                // (spec ch.16), but this frontend only types int scalars, so any
-                // `^^` here has non-bool operands; the structured frontend lowers
-                // it. Single `^` is not AttoLang syntax (use Integer.bitXor).
+                // Canonical adjacent ^^ is integer XOR. This scalar reader
+                // has no writable locals, so a following '=' is not consumed.
+                // Never join tokens separated by whitespace or comments.
                 if (_i + 1 < text.Length && text[_i + 1] == '^')
-                    throw new FormatException(
-                        $"Logical operator requires bool operands: '^^' in scalar int source at offset {start}");
+                {
+                    _i += 2;
+                    return new Token("^^", start);
+                }
                 throw new FormatException(
-                    $"Reserved AttoLang operator '^'; use Integer.bitXor(a, b) at offset {start}");
+                    $"Reserved AttoLang operator '^'; use ^^ or Integer.bitXor(a, b) at offset {start}");
             }
             throw new FormatException($"Invalid character at offset {start}");
         }
@@ -1160,7 +1160,7 @@ public static partial class OresParser
             {
                 if (Current.Text == "return" || Current.Text == "^")
                     throw new FormatException("E_SYNTAX: comma body uses expression-tail syntax");
-                Expression last = ParseAdd(0);
+                Expression last = ParseXor(0);
                 int steps = 0;
                 while (Take(","))
                 {
@@ -1170,7 +1170,7 @@ public static partial class OresParser
                         throw new FormatException("E_UNSUPPORTED: discarded comma-body value requires effect-safe lowering");
                     if (Current.Text is "," or "end" or ";" or "")
                         throw new FormatException("E_SYNTAX: empty comma-body item");
-                    last = ParseAdd(0);
+                    last = ParseXor(0);
                 }
                 if (Current.Text == ";")
                     throw new FormatException("E_SYNTAX: comma body requires ',' not ';'");
@@ -1186,7 +1186,7 @@ public static partial class OresParser
                     $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {Current.Offset}");
             if (!(languageVersion.HasValue && Take("^")))
                 Expect("return");
-            var expression = ParseAdd(0);
+            var expression = ParseXor(0);
             if (!braced && languageVersion == 2 && Current.Text == ",")
                 throw new FormatException("E_LANGUAGE_VERSION: v2 comma body requires '::'");
             Expect(";");
@@ -1201,8 +1201,25 @@ public static partial class OresParser
             Literal => true,
             Unary unary => VersionedPureScalar(unary.Value),
             Binary binary => VersionedPureScalar(binary.Left) && VersionedPureScalar(binary.Right),
+            NamedBitXor xor => VersionedPureScalar(xor.Left) && VersionedPureScalar(xor.Right),
             _ => false
         };
+
+        private Expression ParseXor(int depth)
+        {
+            CheckDepth(depth);
+            Expression left = ParseAdd(depth);
+            while (Current.Text == "^^")
+            {
+                // The historical portable scalar-v1 contract rejects this spelling.
+                // Canonical unversioned and explicit v2 source use integer XOR.
+                if (languageVersion == 1)
+                    throw new FormatException($"Integer XOR requires canonical scalar syntax (language version 2) at offset {Current.Offset}");
+                Expect("^^");
+                left = new NamedBitXor(left, ParseAdd(depth));
+            }
+            return left;
+        }
 
         private Expression ParseAdd(int depth)
         {
@@ -1231,7 +1248,7 @@ public static partial class OresParser
             {
                 char op = Current.Text[0];
                 // Checked int/int division remains unsupported in this
-                // i64-only bootstrap; % and ^ are removed at lexical admission.
+                // i64-only bootstrap; % is removed at lexical admission.
                 if (op == '/')
                     throw new FormatException(
                         "Checked integer division requires typed guest error lowering; unsupported in the i64 source subset");
@@ -1310,7 +1327,7 @@ public static partial class OresParser
                 {
                     if (!Take("const"))
                         throw UnsupportedMacro(at, "Const<int> macro requires a const argument");
-                    argument = ParseAdd(depth + 1);
+                    argument = ParseXor(depth + 1);
                     Expect(")");
                     // Materialize a new checked literal in the compiler AST.
                     // No token-string rewriting, reflection or JIT execution.
@@ -1322,7 +1339,7 @@ public static partial class OresParser
                     IsMacroName(Current.Text) &&
                     (_index + 1 >= tokens.Count || tokens[_index + 1].Text != "!"))
                     throw UnsupportedMacro(at, "repeated unquote requires a closed integer literal; cannot duplicate a name or call before ownership analysis");
-                argument = ParseAdd(depth + 1);
+                argument = ParseXor(depth + 1);
                 Expect(")");
                 if (macro.Kind == MacroKind.SyntaxExprLiteralTwice)
                 {
@@ -1353,16 +1370,16 @@ public static partial class OresParser
                 if (Take("Abs"))
                 {
                     Expect("(");
-                    var value = ParseAdd(depth + 1);
+                    var value = ParseXor(depth + 1);
                     Expect(")");
                     return new DotnetMathAbsI64(value);
                 }
                 if (Take("Max"))
                 {
                     Expect("(");
-                    var left = ParseAdd(depth + 1);
+                    var left = ParseXor(depth + 1);
                     Expect(",");
-                    var right = ParseAdd(depth + 1);
+                    var right = ParseXor(depth + 1);
                     Expect(")");
                     return new DotnetMathMaxI64(left, right);
                 }
@@ -1414,9 +1431,9 @@ public static partial class OresParser
                         $"Unsupported Integer intrinsic at offset {Current.Offset}");
                 _index++;
                 Expect("(");
-                var left = ParseAdd(depth + 1);
+                var left = ParseXor(depth + 1);
                 Expect(",");
-                var right = ParseAdd(depth + 1);
+                var right = ParseXor(depth + 1);
                 Expect(")");
                 return operation switch
                 {
@@ -1439,7 +1456,7 @@ public static partial class OresParser
             }
             if (Take("("))
             {
-                var inner = ParseAdd(depth + 1);
+                var inner = ParseXor(depth + 1);
                 Expect(")");
                 return inner;
             }
@@ -1506,7 +1523,7 @@ public static partial class OresParser
             // The static Pair key is effect-free. Preserve the second
             // expression in the real checked scalar IR. Entry still requires
             // pure literals because either operand may be discarded.
-            Expression second = isEntry ? new Literal(ReadPureI64Literal()) : ParseAdd(depth + 1);
+            Expression second = isEntry ? new Literal(ReadPureI64Literal()) : ParseXor(depth + 1);
             Expect(")");
             if (!Take("."))
                 throw new FormatException(
