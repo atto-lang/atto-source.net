@@ -79,7 +79,7 @@ public sealed class CountedSelectI64Batch
         switch (_cursor.State)
         {
             case CountedSelectI64Cursor.CursorState.Success:
-                _completion.TrySetResult(Array.AsReadOnly(_cursor.Result())); break;
+                _completion.TrySetResult(Array.AsReadOnly(_cursor.Snapshot())); break;
             case CountedSelectI64Cursor.CursorState.Cancelled:
                 _completion.TrySetCanceled(); break;
             case CountedSelectI64Cursor.CursorState.Failed:

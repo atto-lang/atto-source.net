@@ -176,7 +176,9 @@ public sealed class CountedSelectI64Cursor
         catch (Exception error) { Fail(error); throw; }
         finally { _driving = false; }
     }
-    public long[] Result()
+    public long[] Result() => Snapshot();
+
+    internal long[] Snapshot()
     {
         Owner();
         if (_state != CursorState.Success) throw new InvalidOperationException("batch not successful");
