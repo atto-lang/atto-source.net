@@ -262,6 +262,49 @@ internal static class ActorArenaTests
         if (!failedPinned.PhysicallyDisposed || failedPinned.OutstandingExternalLeases != 0)
             throw new Exception("faulted final bridge leaked the retired arena");
 
+        // The factory overload must pin before publishing external work.
+        using var factoryArena = new ActorArena(407, 1);
+        var factoryTurn = factoryArena.BeginTurn(407, 1);
+        var factoryCalls = 0;
+        var factoryPending = new System.Threading.Tasks.TaskCompletionSource<int>(
+            System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+        var factoryTracked = factoryArena.TrackExternalCompletion<int>(factoryTurn, () =>
+        {
+            ++factoryCalls;
+            if (factoryArena.OutstandingExternalLeases != 1)
+                throw new Exception("external work started before lifetime pin");
+            return factoryPending.Task;
+        });
+        if (factoryCalls != 1 || factoryArena.OutstandingExternalLeases != 1)
+            throw new Exception("external factory did not start exactly once");
+        var factoryError = new ApplicationException("injected factory failure");
+        try
+        {
+            factoryArena.TrackExternalCompletion<int>(factoryTurn, () => throw factoryError);
+            throw new Exception("throwing factory unexpectedly succeeded");
+        }
+        catch (ApplicationException ex) when (ReferenceEquals(ex, factoryError)) { }
+        ExpectFailure(() => factoryArena.TrackExternalCompletion<int>(factoryTurn, () => null!));
+        if (factoryArena.OutstandingExternalLeases != 1)
+            throw new Exception("failed factory changed another operation's lifetime pin");
+        var alreadyDone = factoryArena.TrackExternalCompletion<int>(factoryTurn,
+            () => System.Threading.Tasks.Task.FromResult(42));
+        if (alreadyDone.GetAwaiter().GetResult() != 42 || factoryArena.OutstandingExternalLeases != 1)
+            throw new Exception("settled factory retained a phantom lifetime pin");
+        factoryArena.EndTurn(factoryTurn);
+        factoryArena.Dispose();
+        ExpectFailure(() => factoryArena.TrackExternalCompletion<int>(factoryTurn, () =>
+        {
+            ++factoryCalls;
+            return System.Threading.Tasks.Task.FromResult(0);
+        }));
+        if (factoryCalls != 1 || factoryArena.PhysicallyDisposed)
+            throw new Exception("retired actor started external work or freed pinned memory");
+        factoryPending.SetResult(17);
+        if (factoryTracked.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult() != 17 ||
+            !factoryArena.PhysicallyDisposed || factoryArena.OutstandingExternalLeases != 0)
+            throw new Exception("factory completion failed to release last lifetime pin");
+
         using var restarted = new ActorArena(101, 2);
         var tr = restarted.BeginTurn(101, 2);
         ExpectFailure(() => restarted.Read(tr, h));
