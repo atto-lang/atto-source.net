@@ -18,7 +18,8 @@ internal static class AttoLibrariesV1SelfTest
         "core_num.atto", "core_cmp.atto", "core_option_result.atto", "core_mem.atto",
         "alloc_arena.atto", "std_io.atto", "std_path_posix.atto", "std_path_windows.atto",
         "aliases.atto", "neg_unknown_core.atto", "neg_unknown_std.atto", "neg_traversal.atto",
-        "neg_nested.atto", "neg_private.atto", "neg_dotted_selector.atto", "neg_ores_selector.atto"
+        "neg_nested.atto", "neg_private.atto", "neg_dotted_selector.atto", "neg_ores_selector.atto",
+        "net_core_int_slice.atto"
     };
     private static readonly Dictionary<string, string> KnownUnsupported = new(StringComparer.Ordinal)
     {
@@ -35,8 +36,34 @@ internal static class AttoLibrariesV1SelfTest
     {
         if (!KnownUnsupported.TryGetValue(name, out string? unit)) return false;
         string layer = unit.Split('/')[0];
-        return error.StartsWith($"compiler-owned {layer} module '{unit}' is not implemented by the .NET backend yet",
-            StringComparison.Ordinal);
+        string expected = $"compiler-owned {layer} module '{unit}' is not implemented by the .NET backend yet";
+        if (layer == "atto.std") expected += " (unsupported compiler-owned AttoLang library namespace)";
+        return string.Equals(error, expected, StringComparison.Ordinal);
+    }
+
+    private static readonly Dictionary<string, string> PinnedLayeredCore = new(StringComparer.Ordinal)
+    {
+        ["@atto.core/num.atto"] = "42b0adc66e34c44918538e71b3b6de935ee2c48e0b047ac443191db35614e1e3",
+        ["@atto.core/cmp.atto"] = "bf5c656df7e539e077f6bd7cfbe4f80d0b4980c539b57e11c79414cb05501d3a",
+        ["@atto.core/mem.atto"] = "8450235b9d7194f44910423738dfb395ab15753860e78bb7abee36d51b094fe4"
+    };
+
+    private static void VerifyLayeredCoreWitnesses(string name, SourceModuleCompilation compiled)
+    {
+        // These three required guests exercise all registered layered resources.
+        string[] required = name switch
+        {
+            "aliases.atto" => new[] { "@atto.core/num.atto", "@atto.core/cmp.atto" },
+            "core_cmp.atto" => new[] { "@atto.core/cmp.atto" },
+            "net_core_int_slice.atto" => new[] { "@atto.core/num.atto", "@atto.core/cmp.atto", "@atto.core/mem.atto" },
+            _ => Array.Empty<string>()
+        };
+        foreach (string identity in required)
+        {
+            var witnesses = compiled.Sources.Where(w => w.Path == identity).ToArray();
+            if (witnesses.Length != 1 || witnesses[0].Sha256 != PinnedLayeredCore[identity])
+                throw new Exception($"FAILED: {name}: missing or drifted layered source identity {identity}");
+        }
     }
 
     private static void RequireCorpus(IEnumerable<string> cases)
@@ -56,11 +83,12 @@ internal static class AttoLibrariesV1SelfTest
             catch (Exception error) when (error.Message.StartsWith("FAILED: missing library cases", StringComparison.Ordinal)) { denied = true; }
             if (!denied) throw new Exception("FAILED: missing-case control " + missing);
         }
-        string explicitError = "compiler-owned atto.std module 'atto.std/io' is not implemented by the .NET backend yet";
+        string explicitError = "compiler-owned atto.std module 'atto.std/io' is not implemented by the .NET backend yet (unsupported compiler-owned AttoLang library namespace)";
         if (!ExplicitUnsupported("std_io.atto", explicitError) ||
             ExplicitUnsupported("std_io.atto", "arbitrary parser failure") ||
             ExplicitUnsupported("aliases.atto", explicitError) ||
-            ExplicitUnsupported("std_path_posix.atto", explicitError))
+            ExplicitUnsupported("std_path_posix.atto", explicitError) ||
+            ExplicitUnsupported("std_io.atto", explicitError + " unrelated failure"))
             throw new Exception("FAILED: unsupported classification controls");
     }
 
@@ -122,6 +150,7 @@ internal static class AttoLibrariesV1SelfTest
                     failures.Add($"{name}: runner must implement required target flags before claiming execution");
                     continue;
                 }
+                VerifyLayeredCoreWitnesses(name, compiled!);
                 string assembly = Path.Combine(scratch, Path.GetFileNameWithoutExtension(name), "OresGenerated.dll");
                 Directory.CreateDirectory(Path.GetDirectoryName(assembly)!);
                 CilEmitter.EmitLibrary(compiled!.Module, assembly);
@@ -140,7 +169,7 @@ internal static class AttoLibrariesV1SelfTest
         {
             try { Directory.Delete(scratch, true); } catch (IOException) { }
         }
-        Console.WriteLine($"ATTO_LIBRARIES_V1 net passed={executed + rejected} executed={executed} rejected={rejected} unsupported={unsupported} failed={failures.Count}");
+        Console.WriteLine($"ATTO_LIBRARIES_V1 net guest_passed={executed} executed={executed} rejected={rejected} unsupported={unsupported} failed={failures.Count}");
         if (failures.Count > 0) throw new Exception("FAILED: " + string.Join("; ", failures));
         if (executed < 3 || rejected < 7) throw new Exception($"FAILED: insufficient positive/rejection coverage {executed}/{rejected}");
     }
