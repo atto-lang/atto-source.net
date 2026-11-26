@@ -3,6 +3,13 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+if (args.Length == 1 && args[0] == "--aggregate-factories")
+{
+    HeapContainerSourceBoundaryTests.Run();
+    Console.WriteLine("AGGREGATE_FACTORY_CIL_BOUNDARIES_PASS");
+    return;
+}
+
 if (args.Length == 1 && args[0] == "--explicit-ternary-arms")
 {
     StructuredSourceTests.RunExplicitTernaryArms();
