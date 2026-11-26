@@ -5,13 +5,20 @@ namespace Ores.Net.Compiler;
 public static partial class OresParser
 {
     /// <summary>Recognize the file-local refinement profile using the production source lexer.</summary>
-    public static VerifiedCfgModule? TryLowerVerifiedRefinementModule(string source)
+    public static VerifiedCfgModule? TryLowerVerifiedRefinementModule(string source) =>
+        LowerRefinementProfile(source, false);
+
+    public static VerifiedCfgModule LowerVerifiedStrictI64(string source) =>
+        LowerRefinementProfile(source, true) ?? throw new FormatException(
+            "E_VERIFY_UNSUPPORTED: strict signed-i64 refinement source required");
+
+    private static VerifiedCfgModule? LowerRefinementProfile(string source, bool strict)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576 || !HasVerifiedRefinementPrefix(source)) return null;
         var tokens = Tokenize(source);
         RejectUnsupportedInvertedClasses(tokens);
-        var reader = new Reader(tokens, DotnetHostImportPolicy.DenyAll, source, null);
+        var reader = new Reader(tokens, DotnetHostImportPolicy.DenyAll, source, null) { StrictVerifiedI64 = strict };
         var prelude = reader.ParseVerifiedPrelude();
         var program = reader.ParseVerifiedFunctions(prelude);
         ValidateVerifiedSourceTokens(tokens, prelude.Actors);
@@ -121,6 +128,7 @@ public static partial class OresParser
             public IReadOnlyCollection<string> UpperBounds => Bounds ?? Array.Empty<string>();
         }
 
+        public bool StrictVerifiedI64 { get; init; }
         private readonly Dictionary<string, RefinedQuantity> refinementAliases = new(StringComparer.Ordinal);
         private readonly Dictionary<string, RefinedQuantity> verifiedLocals = new(StringComparer.Ordinal);
         private readonly Dictionary<string, IReadOnlyCollection<string>> verifiedUpperBounds = new(StringComparer.Ordinal);
@@ -226,6 +234,8 @@ public static partial class OresParser
         {
             ParseQuantityDeclarations();
             while (AtRefinedQuantityAlias()) ParseRefinementAlias();
+            if (StrictVerifiedI64 && (refinementAliases.Count == 0 || AtProtocolDeclaration() || AtProtocolActor()))
+                throw new FormatException("E_VERIFY_UNSUPPORTED: strict standalone signed-i64 refinement source only");
             var protocols = new List<VerifiedProtocol>();
             var protocolNames = new HashSet<string>(StringComparer.Ordinal);
             while (AtProtocolDeclaration()) protocols.Add(ParseProtocolDeclaration(protocolNames));
@@ -392,6 +402,8 @@ public static partial class OresParser
             if (target.Unit.IsScalar && !term.Type.Unit.IsScalar)
                 throw new FormatException("E_UNIT_ERASURE: scalar cast cannot erase units");
             target.Unit.RequireCompatible(term.Type.Unit);
+            if (StrictVerifiedI64 && !target.Range.Includes(term.Type.Range))
+                throw new FormatException("E_VERIFY_UNPROVEN: refinement cast may fail");
             if (term.Height + 1 >= MaxDepth)
                 throw new FormatException("E_UNIT_LIMIT: quantity expression is too deep");
             var range = term.Type.Range.OnNormalResultWithin(target.Range);
@@ -448,7 +460,7 @@ public static partial class OresParser
                 _index++;
                 var right = VerifiedAtom(depth);
                 bool divide = op.Text == "/";
-                if (divide && !left.Type.I32 && !right.Type.I32
+                if (!StrictVerifiedI64 && divide && !left.Type.I32 && !right.Type.I32
                         && left.Type.Unit.IsScalar && right.Type.Unit.IsScalar)
                     throw new FormatException("E_UNIT_SCALAR_DIVISION: two plain int operands use ordinary division");
                 var unit = left.Type.Unit.Combine(right.Type.Unit, divide);
@@ -459,10 +471,26 @@ public static partial class OresParser
             return left;
         }
 
-        private static QuantityTerm VerifiedBinary(int at, StructuredOperator op,
+        private QuantityTerm VerifiedBinary(int at, StructuredOperator op,
             QuantityTerm left, QuantityTerm right, RefinedQuantity type)
         {
             bool i32 = left.Type.I32 || right.Type.I32;
+            if (StrictVerifiedI64)
+            {
+                if (i32) throw new FormatException("E_VERIFY_UNSUPPORTED: strict i32 arithmetic not implemented");
+                System.Numerics.BigInteger a = left.Type.Range.Minimum, b = left.Type.Range.Maximum,
+                    c = right.Type.Range.Minimum, d = right.Type.Range.Maximum;
+                static bool Fits(System.Numerics.BigInteger n) => n >= long.MinValue && n <= long.MaxValue;
+                bool proven = op switch
+                {
+                    StructuredOperator.Add => Fits(a+c) && Fits(b+d),
+                    StructuredOperator.Subtract => Fits(a-d) && Fits(b-c),
+                    StructuredOperator.Multiply => Fits(a*c) && Fits(a*d) && Fits(b*c) && Fits(b*d),
+                    StructuredOperator.DivideQuantity => (c>0 || d<0) && !(a==long.MinValue && c<=-1 && d>=-1),
+                    _ => false
+                };
+                if (!proven) throw new FormatException("E_VERIFY_UNPROVEN: signed arithmetic may overflow or divide by zero");
+            }
             var carrier = VerifiedI64Range.SignedI32;
             if (i32 && (!carrier.Includes(left.Type.Range) || !carrier.Includes(right.Type.Range)))
                 throw new FormatException("E_I32_RANGE: checked i32 arithmetic requires both operands to fit i32");
