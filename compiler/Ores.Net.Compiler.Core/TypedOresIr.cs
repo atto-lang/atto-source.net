@@ -296,6 +296,17 @@ public static class OresIrLowering
                         results.Push(EmitDotnetAbs(results.Pop()));
                         break;
                     }
+                    case EntryScalarProjection projection:
+                    {
+                        if (results.Count < 2)
+                            throw new FormatException("IR lowering Entry operand underflow");
+                        int right = results.Pop();
+                        int left = results.Pop();
+                        // Every SSA instruction is executed in order, including
+                        // the unused value; selecting an earlier ID is legal.
+                        results.Push(projection.SelectKey ? left : right);
+                        break;
+                    }
                     case DotnetMathMaxI64:
                     {
                         if (results.Count < 2)
@@ -377,6 +388,11 @@ public static class OresIrLowering
                     case DotnetMathAbsI64 host:
                         pending.Push(new Pending(node, true));
                         pending.Push(new Pending(host.Value, false));
+                        break;
+                    case EntryScalarProjection projection:
+                        pending.Push(new Pending(node, true));
+                        pending.Push(new Pending(projection.Second, false));
+                        pending.Push(new Pending(projection.First, false));
                         break;
                     case DotnetMathMaxI64 hostMax:
                         pending.Push(new Pending(node, true));

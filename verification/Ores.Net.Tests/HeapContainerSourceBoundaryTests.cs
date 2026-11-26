@@ -25,6 +25,9 @@ internal static class HeapContainerSourceBoundaryTests
             ("pub fnc main():int{return Record.of(a: -9223372036854775808, b: 42).b;}", 42),
             ("pub fnc main():int{return Entry.of(11, 23).value + 19;}", 42),
             ("pub fnc main():int{return Entry.of(11, 23).key + 31;}", 42),
+            ("pub fnc main():int{return Entry.of<int,int>(11+31, 3*5).key;}", 42),
+            ("pub fnc main():int{return Entry.of(11+31, (10+11)*2).value;}", 42),
+            ("pub fnc main():int{return Entry.of(Entry.of(20,21).value,Entry.of(21,22).key).key+21;}", 42),
             ("pub fnc main():int{return Pair.of(\"count\", 23).second + 19;}", 42),
             ("pub fnc main():int{return Pair.of<int>(\"count\", 11).second + 31;}", 42),
             ("pub fnc main():int{return Entry.of<int,int>(-9223372036854775808, 42).value;}", 42),
@@ -58,6 +61,74 @@ internal static class HeapContainerSourceBoundaryTests
             Directory.Delete(folder, recursive: true);
         }
 
+        // A discarded operand must still trap. Lowering keeps its SSA
+        // instructions even when the selected return ID precedes them.
+        foreach (string source in new[] {
+            "pub fnc main():int{return Entry.of(42,9223372036854775807+1).key;}",
+            "pub fnc main():int{return Entry.of(9223372036854775807+1,42).value;}"
+        })
+        {
+            var ir = OresIrLowering.Lower(OresParser.Parse(source));
+            try
+            {
+                _ = OresIrReferenceEvaluator.Evaluate(ir);
+                throw new Exception("Discarded Entry operand overflow erased");
+            }
+            catch (OverflowException) { }
+        }
+
+        // Source division is deliberately denied in this scalar profile.
+        // Test the same fault ordering at the public checked AST -> SSA ->
+        // CIL boundary; separately prove both source operands are rejected.
+        Expression divideFault = new Binary('/', new Literal(1), new Literal(0));
+        Expression overflowFault = new Binary('+', new Literal(long.MaxValue), new Literal(1));
+        var orderedEntryFaults = new (Expression Ast, Type Expected)[]
+        {
+            (new EntryScalarProjection(divideFault, overflowFault, true), typeof(DivideByZeroException)),
+            (new EntryScalarProjection(divideFault, overflowFault, false), typeof(DivideByZeroException)),
+            (new EntryScalarProjection(overflowFault, divideFault, true), typeof(OverflowException)),
+            (new EntryScalarProjection(overflowFault, divideFault, false), typeof(OverflowException))
+        };
+        foreach (string source in new[] {
+            "pub fnc main():int{return Entry.of(1/0,42).value;}",
+            "pub fnc main():int{return Entry.of(42,1/0).key;}"
+        })
+        {
+            try
+            {
+                _ = OresParser.Parse(source);
+                throw new Exception("Unsupported discarded source division admitted");
+            }
+            catch (FormatException ex) when (ex.Message.Contains("Checked integer division requires typed guest error lowering", StringComparison.Ordinal)) { }
+        }
+        Directory.CreateDirectory(folder);
+        try
+        {
+            for (int i = 0; i < orderedEntryFaults.Length; i++)
+            {
+                var (ast, expected) = orderedEntryFaults[i];
+                var ir = OresIrLowering.Lower(ast);
+                ExpectEntryFault(() => OresIrReferenceEvaluator.Evaluate(ir), expected, "IR");
+                string output = Path.Combine(folder, "entry-order-" + i + ".dll");
+                CilEmitter.EmitLibrary(ir, output);
+                using var assembly = Mono.Cecil.AssemblyDefinition.ReadAssembly(output);
+                var entry = assembly.MainModule.Types.Single(t =>
+                    t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+                ExpectEntryFault(() => CilReferenceEvaluator.Evaluate(entry), expected, "CIL");
+            }
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+
+        static void ExpectEntryFault(Func<long> evaluate, Type expected, string lane)
+        {
+            try { _ = evaluate(); }
+            catch (Exception ex) when (ex.GetType() == expected) { return; }
+            throw new Exception(lane + " erased eager Entry fault: " + expected.Name);
+        }
+
         var forbiddenFactories = new[]
         {
             "Tuple.of(1,2)",           // cannot escape as a first-class value
@@ -88,8 +159,9 @@ internal static class HeapContainerSourceBoundaryTests
             "Entry.of(1,2).key.foo", // no dynamic member fallback
             "Pair.of(\"a\",true).second",
             "Pair.of(\"a\",missing).second",
-            "Entry.of(1+2,3).key",
-            "Entry.of(1,2+3).value",
+            "Entry.of(1,missing).key",
+            "Entry.of(missing,2).value",
+            "Entry.of(1,true).key",
             "Entry.of<int>(1,2).key", // both type slots required, int-only
             "~entry(1+2,3).key", // no unproven effects
             "Array.of(1,2)",

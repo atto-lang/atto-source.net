@@ -75,6 +75,13 @@ public static partial class OresStructuredParser
                     scopes.Add(scope);
                     try
                     {
+                        if (!imperative && Take(":"))
+                        {
+                            var armType = Type();
+                            if (armType == IrValueType.Void || result is { } known && known != armType)
+                                throw Error("MATCH_ARM_TYPE: arm annotation must agree with the match value type");
+                            result ??= armType;
+                        }
                         var guard = Take("when") ? Expr(depth + 1) : null;
                         if (guard is not null) Require(guard, IrValueType.Bool, "Match guard must be bool");
                         else if (literal is long covered) coveredLiterals.Add(covered);
@@ -177,7 +184,7 @@ public static partial class OresStructuredParser
                         IrValueType.ResultI64Text => IrValueType.GuestText,
                         IrValueType.ResultI64TextOrError => null,
                         _ => IrValueType.GuestError
-                    });
+                    }, allowEmpty: true);
             }
             // Only constructor names have payloads. A bare ordinary identifier
             // is an irrefutable binding for the complete, already checked value.
@@ -187,9 +194,10 @@ public static partial class OresStructuredParser
         }
 
         private (MatchTags Tags, string? Binding, IrValueType? BindingType) ReadMatchPayload(
-            MatchTags tags, IrValueType? type)
+            MatchTags tags, IrValueType? type, bool allowEmpty = false)
         {
             Expect("(");
+            if (allowEmpty && Take(")")) return (tags, null, null);
             if (Take("_"))
             {
                 Expect(")");

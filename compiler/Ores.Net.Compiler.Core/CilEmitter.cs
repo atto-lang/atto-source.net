@@ -90,6 +90,11 @@ public static class CilEmitter
     public static void EmitLibrary(VerifiedCfgModule module, string outputFile) =>
         CfgCilEmitter.EmitLibrary(module, outputFile);
 
+    /// <summary>Build actual verified deterministic CIL in memory, with the
+    /// same independent module linkage verification as file emission.</summary>
+    public static byte[] BuildLibrary(VerifiedCfgModule module) =>
+        CfgCilEmitter.BuildLibrary(module);
+
     private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il,
         MetadataBuilder metadata)
     {
@@ -342,14 +347,13 @@ public static class CilEmitter
     // Experimental multi-method Native AOT assembly. MethodDef handles are
     // reserved before body emission so statically resolved calls target only
     // verified methods in this exact module, never reflection/dynamic code.
-    internal static void EmitLibraryModuleCore(string outputFile,
+    internal static byte[] BuildLibraryModuleCore(
         VerifiedCfgModule module,
         Func<VerifiedCfgFunction, MetadataBuilder, MethodBodyStreamEncoder,
             IReadOnlyDictionary<string, MethodDefinitionHandle>, CfgGuestResultEmitter?,
             (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody)
     {
         ArgumentNullException.ThrowIfNull(module);
-        ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
         var methods = new[] { module.Main }.Concat(module.Helpers).ToArray();
         if (methods.Length is < 1 or > 65 || methods[0].Name != "main" ||
             methods[0].ResultType != IrValueType.I64 ||
@@ -496,13 +500,18 @@ public static class CilEmitter
             deterministicIdProvider: DeterministicImageId);
         var bytes = new BlobBuilder();
         pe.Serialize(bytes);
+        return bytes.ToArray();
+    }
 
+    internal static void PublishLibraryBytes(string outputFile,byte[] bytes)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
         string full = Path.GetFullPath(outputFile);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         string temporary = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            File.WriteAllBytes(temporary, bytes.ToArray());
+            File.WriteAllBytes(temporary, bytes);
             File.Move(temporary, full, overwrite: true);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
@@ -579,7 +588,7 @@ public static class CilEmitter
         return BlobContentId.FromHash(hash.GetHashAndReset());
     }
 
-    private readonly record struct Pending(Expression Node, bool EmitOperator);
+    private readonly record struct Pending(Expression Node, bool EmitOperator, bool Discard = false);
 
     // A flat expression such as a+b+c+... may create thousands of AST nodes,
     // even with shallow source nesting. Traversal MUST NOT recurse on the CLR
@@ -595,7 +604,14 @@ public static class CilEmitter
         while (pending.Count > 0)
         {
             var work = pending.Pop();
-            if (work.EmitOperator)
+            if (work.Discard)
+            {
+                if (evaluationDepth < 1)
+                    throw new FormatException("Invalid CIL discard stack");
+                il.OpCode(ILOpCode.Pop);
+                evaluationDepth--;
+            }
+            else if (work.EmitOperator)
             {
                 if (evaluationDepth < 2)
                     throw new FormatException("Invalid CIL operator stack");
@@ -631,6 +647,21 @@ public static class CilEmitter
                         evaluationDepth++;
                         pending.Push(new Pending(unary, true));
                         pending.Push(new Pending(unary.Value, false));
+                        break;
+                    case EntryScalarProjection projection:
+                        // key: first, second, pop; value: first, pop, second.
+                        // Both are evaluated once, left-to-right.
+                        if (projection.SelectKey)
+                        {
+                            pending.Push(new Pending(projection, false, true));
+                            pending.Push(new Pending(projection.Second, false));
+                        }
+                        else
+                        {
+                            pending.Push(new Pending(projection.Second, false));
+                            pending.Push(new Pending(projection, false, true));
+                        }
+                        pending.Push(new Pending(projection.First, false));
                         break;
                     case NamedBitXor bitXor:
                         pending.Push(new Pending(bitXor, true));

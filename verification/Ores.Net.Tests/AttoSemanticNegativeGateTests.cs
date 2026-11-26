@@ -21,7 +21,7 @@ internal static class AttoSemanticNegativeGateTests
             "Reserved AttoLang operator '^'", true),
         new("double-caret-int-operands", "pub fnc main(): int { return 2 ^^ 3; }\n",
             "7ee99948018e927cce74c9ad0edc1975e4251689",
-            "Logical operator requires bool operands", true),
+            "Integer XOR requires canonical scalar syntax (language version 2)", true),
         new("type-first-reassignment",
             "pub fnc main(): int { int x = 7; x = 8; return x; }\n",
             "b118f53e68565dcb9e6acd58deb8ee47dca67606",
@@ -106,7 +106,8 @@ internal static class AttoSemanticNegativeGateTests
             FormatException error;
             try
             {
-                _ = OresParser.Parse(row.Source); // real compiler lexer/parser
+                // Preserve the historical pinned XOR rejection only in the explicit v1 profile.
+                _ = OresParser.Parse(row.Source, languageVersion: row.Id == "double-caret-int-operands" ? 1 : null);
                 throw new InvalidOperationException("forbidden source admitted: " + row.Id);
             }
             catch (FormatException ex)
@@ -126,13 +127,14 @@ internal static class AttoSemanticNegativeGateTests
                 unsupported++;
             }
             Console.WriteLine("ATTO_NET_NEGATIVE|" + row.Id +
-                "|stage=" + (row.SemanticCredit ? "SEMANTIC_REJECT" : "UNSUPPORTED_NOT_SEMANTIC_PROOF"));
+                "|stage=" + (row.Id == "double-caret-int-operands" ? "HISTORICAL_V1_REJECT" : row.SemanticCredit ? "SEMANTIC_REJECT" : "UNSUPPORTED_NOT_SEMANTIC_PROOF"));
         }
 
         using var directory = new TemporaryDirectory();
         foreach (var (label, source, expected) in new[] {
             ("canonical-add", "pub fnc main(): int { return 40 + 2; }\n", 42L),
             ("canonical-multiply", "pub fnc main(): int { return 7 * 6; }\n", 42L),
+            ("canonical-xor", Negative.Single(c => c.Id == "double-caret-int-operands").Source, 1L),
             ("effect-words-in-comment", "pub fnc main(): int { /* async critical suspends */ return 42; }\n", 42L)
         })
         {
@@ -147,7 +149,7 @@ internal static class AttoSemanticNegativeGateTests
             Need(CilReferenceEvaluator.Evaluate(method) == expected,
                 "wrong emitted CIL for legal scalar source " + label);
         }
-        Console.WriteLine($"ATTO_NET_SOURCE_GATE|semantic={acceptedSemantic}|unsupported={unsupported}|positive_ir_cil=3|NATIVE_AOT_NOT_EXECUTED");
+        Console.WriteLine($"ATTO_NET_SOURCE_GATE|semantic={acceptedSemantic - 1}|unsupported={unsupported}|positive_ir_cil=4|historical_v1_reject=1|NATIVE_AOT_NOT_EXECUTED");
     }
 
     private sealed class TemporaryDirectory : IDisposable

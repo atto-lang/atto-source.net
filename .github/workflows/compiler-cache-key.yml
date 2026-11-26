@@ -4,6 +4,16 @@ on:
     paths:
       - 'compiler/Ores.Net.Compiler.Core/CompilerCacheKey.cs'
       - 'verification/Ores.Net.Tests/CompilerCacheKeySelfTest.cs'
+      - 'compiler/Ores.Net.Compiler.Core/CompilerArtifactReceipt.cs'
+      - 'verification/Ores.Net.Tests/CompilerArtifactReceiptSelfTest.cs'
+      - 'compiler/Ores.Net.Compiler.Core/CompilerCacheLedger.cs'
+      - 'compiler/Ores.Net.Compiler.Core/FrozenCilSession.cs'
+      - 'compiler/Ores.Net.Compiler.Core/PersistentFrozenCilSession.cs'
+      - 'compiler/Ores.Net.Compiler.Core/LinuxCacheDirectory.cs'
+      - 'compiler/Ores.Net.Compiler.Core/CilEmitter.cs'
+      - 'compiler/Ores.Net.Compiler.Core/CfgCilEmitter.cs'
+      - 'verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs'
+      - 'verification/Ores.Net.Tests/CompilerCacheLedgerSelfTest.cs'
       - '.github/workflows/compiler-cache-key.yml'
 permissions:
   contents: read
@@ -37,5 +47,25 @@ jobs:
           dotnet add "$work" reference "$PWD/compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj"
           cp verification/Ores.Net.Tests/CompilerCacheKeySelfTest.cs "$work/"
           cmp verification/Ores.Net.Tests/CompilerCacheKeySelfTest.cs "$work/CompilerCacheKeySelfTest.cs"
-          printf '%s\n' 'CompilerCacheKeySelfTest.Run();' > "$work/Program.cs"
-          dotnet run --project "$work" --configuration Release
+          cp verification/Ores.Net.Tests/CompilerArtifactReceiptSelfTest.cs "$work/"
+          cmp verification/Ores.Net.Tests/CompilerArtifactReceiptSelfTest.cs "$work/CompilerArtifactReceiptSelfTest.cs"
+          cp verification/Ores.Net.Tests/CompilerCacheLedgerSelfTest.cs "$work/"
+          cmp verification/Ores.Net.Tests/CompilerCacheLedgerSelfTest.cs "$work/CompilerCacheLedgerSelfTest.cs"
+          cp verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs "$work/"
+          cmp verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs "$work/FrozenDependencyGraphSelfTest.cs"
+          printf '%s\n' 'CompilerCacheKeySelfTest.Run();' 'CompilerArtifactReceiptSelfTest.Run();' 'CompilerCacheLedgerSelfTest.Run();' 'if(args.Length==1) FrozenDependencyGraphSelfTest.EmitCilCacheGuests(args[0]); else if(System.OperatingSystem.IsLinux()) FrozenDependencyGraphSelfTest.EmitPersistentCilGuests(args[0],args[1]); else throw new System.PlatformNotSupportedException();' > "$work/Program.cs"
+          dotnet run --project "$work" --configuration Release -- "$work/artifacts"
+          for lane in cold warm edit; do
+            dotnet run --project "$work" --configuration Release --no-build -- "$work/persistent" "$lane"
+          done
+          for lane in cold warm edit; do
+            host="$work/host-$lane"
+            mkdir -p "$host"
+            cp "$work/persistent/$lane.dll" "$host/OresGenerated.dll"
+            printf '%s\n' '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><PublishAot>true</PublishAot><SelfContained>true</SelfContained><InvariantGlobalization>true</InvariantGlobalization></PropertyGroup><ItemGroup><Reference Include="OresGenerated"><HintPath>OresGenerated.dll</HintPath><Private>true</Private></Reference></ItemGroup></Project>' > "$host/Host.csproj"
+            printf '%s\n' 'return checked((int)Oreslang.Generated.OresProgram.Run());' > "$host/Program.cs"
+            dotnet publish "$host/Host.csproj" -c Release -r linux-x64 -o "$host/out"
+            rc=0; "$host/out/Host" || rc=$?
+            if [ "$lane" = edit ]; then test "$rc" = 43; else test "$rc" = 42; fi
+            echo "INCREMENTAL_NET_NATIVEAOT|$lane|$rc"
+          done

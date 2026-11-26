@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'compiler/Ores.Net.Compiler.Core/DurableCounterSourceV1.cs'
+      - 'compiler/Ores.Net.Compiler.Core/DurableScalarSourceV1.cs'
+      - 'verification/durable_scalar_nativeaot.mjs'
       - 'compiler/Ores.Net.Compiler/Program.cs'
       - 'verification/durable_counter_nativeaot.mjs'
       - '.github/workflows/durable-counter-nativeaot.yml'
@@ -33,3 +35,4 @@ jobs:
           dotnet publish compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -r linux-x64 -o "$RUNNER_TEMP/atto-net-compiler" -warnaserror
           bash verification/assert-linux-native-release.sh "$RUNNER_TEMP/atto-net-compiler/oresnet"
           ATTO_NET_COMPILER="$RUNNER_TEMP/atto-net-compiler/oresnet" node verification/durable_counter_nativeaot.mjs
+          ATTO_NET_COMPILER="$RUNNER_TEMP/atto-net-compiler/oresnet" node verification/durable_scalar_nativeaot.mjs
