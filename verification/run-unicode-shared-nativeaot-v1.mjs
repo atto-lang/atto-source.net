@@ -33,7 +33,7 @@ try{
    if(c.expect==='reject'){
     const diagnostic=r.stderr.trim();
     const stray=['postfix','composite-eq','composite-equal','unicode-not-not-a-bang-keyword'].includes(c.id)&&/expected.*;|expected.*semicolon/i.test(diagnostic);
-    if(r.status!==1||row.artifact||!diagnostic||(!stray&&!new RegExp(c.diagnostic,'i').test(diagnostic))||/entrypoint|file not found|could not execute|Unhandled exception|unsupported feature/i.test(diagnostic))throw Error('unexpected rejection: '+diagnostic);
+    if(r.status!==1||row.artifact||!diagnostic||(!stray&&!new RegExp(c.diagnostic,'i').test(diagnostic))||/entrypoint|main must have signature|file not found|could not execute|Unhandled exception|unsupported feature/i.test(diagnostic))throw Error('unexpected rejection: '+diagnostic);
     row.diagnostic=diagnostic;
    }else{
     if(r.status!==0||!row.artifact)throw Error('compiler failed: '+r.stderr);

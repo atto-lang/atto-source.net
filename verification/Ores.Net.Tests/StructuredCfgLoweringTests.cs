@@ -11,6 +11,7 @@ internal static class StructuredCfgLoweringTests
         const string source = "pub fnc main(): int { val int Φ = 10; val int φ = 20; val int 数量 = 30; val int 𠮷 = 40; if ¬false && ¬¬true then return Φ + φ + 数量 + 𠮷; else return 0; fi }";
         Check(source, 100, "Unicode names and negation");
         Check(source.Replace("¬", "!", StringComparison.Ordinal), 100, "ASCII negation alias");
+        CheckModule("fnc 合計(int Φ, int φ, int 数量, int 𠮷): int { return Φ + φ + 数量 + 𠮷; } pub fnc main(): int { return 合計(10,20,30,40); }", 100, "Unicode callable and parameter names");
         foreach (var invalid in new[] {
             "pub fnc main(): int { return 未定義; }",
             "pub fnc main(): int { if ¬1 then return 1; else return 0; fi }",
