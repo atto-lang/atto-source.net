@@ -228,6 +228,40 @@ internal static class ActorArenaTests
             throw new Exception("Task completion did not release actor arena lifetime");
 
 
+        // Concurrent external completions: retirement must remain pinned until
+        // both independently charged leases settle, even on cancellation/fault.
+        using var failedPinned = new ActorArena(406, 1);
+        var failedTurn = failedPinned.BeginTurn(406, 1);
+        var cancelled = new System.Threading.Tasks.TaskCompletionSource<int>(
+            System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+        var faulted = new System.Threading.Tasks.TaskCompletionSource<int>(
+            System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelledBridge = failedPinned.TrackExternalCompletion(failedTurn, cancelled.Task);
+        var faultedBridge = failedPinned.TrackExternalCompletion(failedTurn, faulted.Task);
+        if (failedPinned.OutstandingExternalLeases != 2)
+            throw new Exception("two independent lifetime charges required");
+        failedPinned.EndTurn(failedTurn);
+        failedPinned.Dispose();
+        cancelled.SetCanceled();
+        try
+        {
+            cancelledBridge.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            throw new Exception("cancelled bridge unexpectedly succeeded");
+        }
+        catch (OperationCanceledException) { }
+        if (failedPinned.PhysicallyDisposed || failedPinned.OutstandingExternalLeases != 1)
+            throw new Exception("cancelled bridge released another owner's lease");
+        var injected = new ApplicationException("injected external completion fault");
+        faulted.SetException(injected);
+        try
+        {
+            faultedBridge.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            throw new Exception("faulted bridge unexpectedly succeeded");
+        }
+        catch (ApplicationException ex) when (ReferenceEquals(ex, injected)) { }
+        if (!failedPinned.PhysicallyDisposed || failedPinned.OutstandingExternalLeases != 0)
+            throw new Exception("faulted final bridge leaked the retired arena");
+
         using var restarted = new ActorArena(101, 2);
         var tr = restarted.BeginTurn(101, 2);
         ExpectFailure(() => restarted.Read(tr, h));
