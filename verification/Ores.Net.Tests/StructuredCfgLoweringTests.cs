@@ -180,7 +180,7 @@ internal static class StructuredCfgLoweringTests
         int offset = source.LastIndexOf(spelling, StringComparison.Ordinal);
         if (offset < 0 || source[offset] != '!')
             throw new Exception("Missing operator boundary in fixture: " + label);
-        RejectWithDiagnostic(source, "Invalid character at offset " + offset, label);
+        RejectWithDiagnostic(source, "Invalid infix operator at offset " + offset, label);
     }
 
     private static void NegatedDoIfAotControlFlow()
