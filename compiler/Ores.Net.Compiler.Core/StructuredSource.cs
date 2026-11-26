@@ -1827,6 +1827,33 @@ public static partial class OresStructuredParser
                 tokens[index + 4].Text == (kind == "struct" ? "{" : "(");
         }
 
+        // Aggregate names are erased by static scalar lowering. Do not let
+        // this path accept language keywords that the ordinary parser rejects
+        // (or that belong to unsupported statement forms).
+        private string NamedAggregateIdentifier(bool typeAlias = false)
+        {
+            string name = Current.Text;
+            if (name is "infer" or "unsafe" or "sync" or "task" or "pipe" or "rpipe"
+                or "def" or "namespace" or "contract" or "conforms" or "interface"
+                or "trait" or "types" or "typeof" or "abstract" or "extends" or "implements"
+                or "impl" or "using" or "pure" or "suspends" or "generator" or "yield"
+                or "nlex" or "begin" or "self" or "super" or "static" or "private" or "mut"
+                or "then" or "elif" or "elseif" or "done" or "for" or "of" or "block"
+                or "switch" or "maybe" or "matches" or "over" or "default" or "recover"
+                or "defer" or "persistent" or "durable" or "shared" or "untrusted"
+                or "spawn" or "stop" or "rt" or "await" or "nb" or "cb" or "select"
+                or "readch" or "writech" or "eq" or "neq" or "null" or "void"
+                or "obj" or "arr" or "cpu" or "gpu" or "quantum")
+                throw Error("E_TYPE_NAME: reserved aggregate identifier");
+            if (typeAlias && (CoreTypeRegistry.Lookup(name) is not null ||
+                CoreTypeRegistry.IsProtectedIdentity(name) ||
+                name is "Record" or "Tuple" or "Pointer" or "ActorRef" or "ActorMail"
+                    or "ReadLoan" or "WriteLoan" or "AtomicInt" or "AtomicBool"
+                    or "RwLock" or "Mutex" or "boolean"))
+                throw Error("E_TYPE_NAME: compiler-owned aggregate type name");
+            return Name();
+        }
+
         private (StructuredStmt Statement, bool Returns) NamedAggregate(int depth, int at)
         {
             Expect("const");
@@ -1838,7 +1865,7 @@ public static partial class OresStructuredParser
             if (Take("<"))
             {
                 introduce = Take("infer");
-                alias = Name();
+                alias = NamedAggregateIdentifier(typeAlias: true);
                 if (alias is "infer" or "Record" or "Tuple" or "Map" or "Set" or "String" or "string"
                     or "Integer" or "Bool" or "Any" or "Unknown" or "void" or "null" or "self"
                     or "List" or "Vector" or "Slice" or "Pair" or "Entry" or "Future" or "Channel")
@@ -1853,7 +1880,7 @@ public static partial class OresStructuredParser
                 if (!introduce && expected!.Wrapper != wrapper)
                     throw Error("E_AGGREGATE_KIND: incompatible named aggregate");
             }
-            string rowName = Name();
+            string rowName = NamedAggregateIdentifier();
             if (scopes.Any(scope => scope.ContainsKey(rowName)) ||
                 aggregateScopes.Any(scope => scope.ContainsKey(rowName)))
                 throw Error("Duplicate aggregate binding");
@@ -1868,7 +1895,7 @@ public static partial class OresStructuredParser
                 if (values.Count >= 64) throw Error("AGGREGATE_FIELD_BUDGET");
                 int offset = Current.Offset;
                 string field = wrapper == "Tuple"
-                    ? values.Count.ToString(CultureInfo.InvariantCulture) : Name();
+                    ? values.Count.ToString(CultureInfo.InvariantCulture) : NamedAggregateIdentifier();
                 if (wrapper != "Tuple") Expect(wrapper == "struct" ? ":" : "=");
                 if (values.ContainsKey(field)) throw Error("E_DUPLICATE_FIELD: duplicate aggregate field");
                 var expr = Expr(depth + 1);
