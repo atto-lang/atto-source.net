@@ -1,0 +1,2 @@
+fnc divide(int value, int divisor): int { return value / divisor; }
+pub fnc main(): int { return divide(84, 2); }

@@ -1,0 +1,10 @@
+// Same effect as brace-continue.atto, with keyword delimiter.
+pub fnc positive(bool ready): int {
+  guard ready else
+    return 0;
+  end
+  return 42;
+}
+pub fnc main(): int {
+  return positive(true);
+}

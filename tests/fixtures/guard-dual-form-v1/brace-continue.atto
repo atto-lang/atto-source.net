@@ -1,0 +1,8 @@
+// Typed CFG scalar guard: true continues, false exits.
+pub fnc positive(bool ready): int {
+  guard ready { return 0; }
+  return 42;
+}
+pub fnc main(): int {
+  return positive(true);
+}

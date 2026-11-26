@@ -180,7 +180,18 @@ internal static class StructuredCfgLoweringTests
         int offset = source.LastIndexOf(spelling, StringComparison.Ordinal);
         if (offset < 0 || source[offset] != '!')
             throw new Exception("Missing operator boundary in fixture: " + label);
-        RejectWithDiagnostic(source, "Invalid character at offset " + offset, label);
+        // Standalone ! now lexes as unary Boolean negation. In these
+        // infix fixtures the preceding integer remains the condition and
+        // must be rejected, never interpreted as != or !eq.
+        int conditionEnd = offset;
+        while (conditionEnd > 0 && char.IsWhiteSpace(source[conditionEnd - 1]))
+            conditionEnd--;
+        int conditionStart = conditionEnd;
+        while (conditionStart > 0 && char.IsAsciiDigit(source[conditionStart - 1]))
+            conditionStart--;
+        if (conditionStart == conditionEnd)
+            throw new Exception("Missing integer condition: " + label);
+        RejectWithDiagnostic(source, "If condition must be bool at offset " + conditionStart, label);
     }
 
     private static void NegatedDoIfAotControlFlow()
@@ -239,10 +250,35 @@ internal static class StructuredCfgLoweringTests
             7, "ifnot-value");
         Check("fnc main():int{return unless true then 7 else 9 fi;}",
             9, "unless-value");
-        Reject("fnc main():int{loop{if true then break; fi}return 0;}",
-            "keyword value-if cannot contain break");
+        const string legacy = "fnc main():int{loop{if true then break; fi}return 0;}";
+        Check(legacy, 0, "migration-only keyword statement");
+        try
+        {
+            _ = OresStructuredCfgLowering.LowerStrictConditionals(legacy);
+            throw new Exception("Strict conditional CFG incorrectly admitted a bare keyword statement");
+        }
+        catch (FormatException ex) when (ex.Message.Contains("E_CONDITIONAL_STATEMENT", StringComparison.Ordinal)) { }
+        foreach (string head in new[] { "if", "ifnot", "unless" })
+        {
+            var strict = OresStructuredCfgLowering.LowerStrictConditionals(
+                "fnc main():int{do " + head + " true then return 42; else return 42; fi}");
+            if (CfgReferenceEvaluator.Evaluate(strict) != 42)
+                throw new Exception("Strict conditional CFG mismatch: " + head);
+        }
+        Reject("fnc main():int{return if true then break; else 0 fi;}",
+            "value-if cannot contain break");
         Reject("fnc main():int{do ifnot false then break; fi return 0;}",
             "break outside loop");
+    }
+
+    public static void RunExplicitTernaryArms()
+    {
+        Check("fnc main():int{let int x=true ? {return 40;} : {^ 7;};return x+2;}",
+            42, "explicit arm return is not a function return");
+        Check("fnc main():int{return false ? 7 : {^ 42;};}",
+            42, "selected explicit false arm");
+        Check("fnc main():int{let int x=9223372036854775807;return true ? {^ 42;} : {return x+1;};}",
+            42, "unselected explicit arm does not overflow");
     }
 
     public static void Run()
@@ -672,6 +708,7 @@ internal static class StructuredCfgLoweringTests
         Check("fnc inc(int x):int{return x+1;}" +
             "fnc main():int{return inc((false xor true) ? 41 : 0);}",
             42, "ternary and eager xor inside typed call argument");
+        RunExplicitTernaryArms();
         Check("fnc main():int{if true or (false and true){return 42;}else{return 7;}}",
             42, "nested logical short-circuit branches");
         Check("fnc main():int{const bool b=false and (9223372036854775807+1>0);" +
@@ -856,8 +893,9 @@ internal static class StructuredCfgLoweringTests
             "no self-reference");
         Reject("fnc main():int{if true{return 1;}}",
             "all source paths must return");
-        Reject("fnc main():int{return 1/2;}",
-            "source int division requires float lowering");
+        Check("fnc main():int{return -7/3;}", -2, "checked signed integer quotient");
+        Check("fnc main():int{const int quotient=7/2; return quotient;}", 3,
+            "compile-time division agrees with the runtime quotient");
 
         Reject("fnc main():int{val int x=1;x=2;return x;}", "val reassignment");
         Reject("fnc main():int{const int x=1;x=2;return x;}", "const reassignment");

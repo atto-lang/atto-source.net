@@ -1,0 +1,25 @@
+fnc scalar(bool first): int {
+    let int count = 0;
+    let int value = 0;
+    value = if first then sync task<int> {
+        count = 2;
+        return 40;
+    } else sync task<int> {
+        count = 3;
+        return 39;
+    } fi;
+    return value + count;
+}
+fnc tagged(bool first): int {
+    let int count = 0;
+    val Option<int> state = if first then sync task<Option<int>> {
+        count = 2;
+        return Some(40);
+    } else Some(42) fi;
+    return state.unwrap() + count;
+}
+pub fnc main(): int {
+    guard scalar(true) eq 42, scalar(false) eq 42,
+        tagged(true) eq 42, tagged(false) eq 42 { return 1; }
+    return 42;
+}

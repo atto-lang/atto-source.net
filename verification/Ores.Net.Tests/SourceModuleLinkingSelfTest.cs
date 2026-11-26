@@ -12,6 +12,43 @@ internal static class SourceModuleLinkingSelfTest
         string outside = root + "-outside.ores";
         try
         {
+        // Compile and execute the actual .atto compiler-owned modules through CIL.
+        // Native AOT runs the same embedded source and identity-pinned linker.
+        string coreSicFixture = File.ReadAllText(Path.Combine("core", "tests", "slice_iter_cmp_smoke.atto"));
+        File.WriteAllText(Path.Combine(root, "core-sic-main.atto"), coreSicFixture);
+        var sic = OresSourceModuleCompiler.Compile(
+            Path.Combine(root, "core-sic-main.atto"), new[] { root });
+        Require(sic.Sources.Count == 4, "core slice/iter/cmp are exactly three source-owned imports");
+        foreach (string name in new[] { "slice", "iter", "cmp" })
+        {
+            string identity = "@atto.core/" + name + ".atto";
+            Require(sic.Sources.Count(unit => unit.Path == identity) == 1,
+                "core slice/iter/cmp module identity is canonical and unique: " + identity);
+            byte[] sourceBytes = File.ReadAllBytes(Path.Combine("core", name + ".atto"));
+            string expectedHash = Convert.ToHexStringLower(
+                System.Security.Cryptography.SHA256.HashData(sourceBytes));
+            Require(sic.Sources.Single(unit => unit.Path == identity).Sha256 == expectedHash,
+                "runtime linker source digest matches compiler-owned .atto source for " + identity);
+        }
+        string sicDll = Path.Combine(root, "AttoCoreSliceIterCmp.dll");
+        CilEmitter.EmitLibrary(sic.Module, sicDll);
+        using (var sicImage = AssemblyDefinition.ReadAssembly(sicDll))
+        {
+            var sicProgram = sicImage.MainModule.Types.Single(t => t.Name == "OresProgram");
+            Require(CfgCilTestInterpreter.Evaluate(
+                sicProgram.Methods.Single(m => m.Name == "Run")) == 42,
+                "real compiler-owned core slice/iter/cmp CIL executes to 42");
+        }
+        foreach (string badPath in new[] { "atto.core/../slice", "atto.core/slice.ores",
+                     "atto.core/missing", "atto.core//iter" })
+        {
+            string negative = coreSicFixture.Replace("atto.core/slice", badPath);
+            File.WriteAllText(Path.Combine(root, "core-sic-negative.atto"), negative);
+            Reject(() => OresSourceModuleCompiler.Compile(
+                Path.Combine(root, "core-sic-negative.atto"), new[] { root }),
+                "unknown/traversal compiler-owned core paths must fail closed: " + badPath);
+        }
+
             Write("main.ores", "import module left from \"./left\"; import module right from \"./right\"; pub fnc main():int { return left.value(10) + right.value(11); }");
             Write("left.ores", "import fnc twice from \"./base\"; define module left as pub fnc value(int n) -> int { return twice(n); } end");
             Write("right.ores", "define module right as pub fnc value(int n):int { return n * 2; } fnc hidden():int { return 99; } end");
@@ -73,6 +110,24 @@ internal static class SourceModuleLinkingSelfTest
             Reject(Compile, "local does not silently become an imported namespace");
             Write("main.ores", "import fnc twice from \"./base\"; fnc main():int { return twice(true); }");
             Reject(Compile, "cross-file argument types are checked");
+
+            // std/env is staged but is NOT yet compiler-linked on .NET.
+            // Reserved library roots MUST fail before consulting project files,
+            // including a locally planted, same-named shadow module.
+            Directory.CreateDirectory(Path.Combine(root, "std"));
+            Write("std/env.atto", "define module std_env as " +
+                "pub fnc get(String name):Option<String>{return Some(\"SHADOWED\");} end");
+            foreach (string alias in new[] {
+                "std/env", "std/env.atto", "std/env.ores",
+                "ores.std/env", "atto.std/env", "atto.std/env.atto"
+            })
+            {
+                Write("main.ores", "import module std_env from \"" + alias +
+                    "\"; pub fnc main():int{return 42;}");
+                Reject(Compile, "compiler-owned std/env must fail closed before .NET linker admission",
+                    "unsupported compiler-owned AttoLang library namespace");
+            }
+
             // A source actor graph must be denied before even attempting to
             // resolve a missing module dependency or emitting linked CIL.
             Write("main.ores", "import fnc not_found from \"./missing\"; fnc main():int { return 1 pipe 2; }");
