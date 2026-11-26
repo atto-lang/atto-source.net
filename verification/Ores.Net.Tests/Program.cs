@@ -735,6 +735,7 @@ AdtGuardParityAdmissionTests.Run(); // 24 exact canonical fixtures, not an unsup
 NumericSeparatorParityTests.Run();
 ExplicitExportSyntaxTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
+StrictI64ProofTests.Run();
 Signed64CandidateParityTests.Run(); // ten source-identical i64 candidates 40-49: typed IR + emitted CIL, not NativeAOT
 StrictSigned64ArithmeticSelfTest.Run(); // host reference semantics vs shared Java contract vectors
 StrictSigned64GuestRemTests.Run(); // Integer.rem/mod/pow verified IR + runtime MemberRef CIL, not NativeAOT
