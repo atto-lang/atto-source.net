@@ -36,7 +36,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Verify exact source and all twelve guest fixture Git blobs
+      - name: Verify exact source and all thirteen guest fixture Git blobs
         shell: pwsh
         env:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -45,7 +45,7 @@ jobs:
           $head = (git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_SHA) { throw 'Wrong source checkout' }
           $paths = @(Get-ChildItem 'tests/fixtures/collection-factories' -Filter '*.atto' -File)
-          if ($paths.Count -ne 12) { throw 'Expected exactly twelve checked AttoLang guests' }
+          if ($paths.Count -ne 13) { throw 'Expected exactly thirteen checked AttoLang guests' }
           foreach ($file in $paths) {
             $path = 'tests/fixtures/collection-factories/' + $file.Name
             $actual = (git hash-object --no-filters $path).Trim()
@@ -115,7 +115,7 @@ jobs:
             $guestBlob = (git rev-parse ('HEAD:tests/fixtures/collection-factories/' + $name + '.atto')).Trim()
             Write-Host "ATTO_NATIVE_FACTORY_GUEST_EXECUTED backend=net rid=$env:TARGET_RID fixture=$name expected=42 actual=42 source_head=$(git rev-parse HEAD) guest_blob=$guestBlob binary_sha256=$sha"
           }
-      - name: Verify ten explicit compiler denials without CIL publication
+      - name: Verify eleven explicit compiler denials without CIL publication
         shell: pwsh
         env:
           COMPILER_NAME: ${{ matrix.compiler }}
@@ -131,6 +131,7 @@ jobs:
             @('map-unsupported-negative','E_COLLECTION_FACTORY_UNSUPPORTED'),
             @('array-unsupported-negative','E_COLLECTION_FACTORY_UNSUPPORTED'),
             @('entry-pair-member-negative','E_PAIR_FIELD'),
+            @('pair-integer-key-negative','E_PAIR_KEY_TYPE'),
             @('entry-pair-escape-negative','E_BINARY_PRODUCT_ESCAPE_UNSUPPORTED'),
             @('tuple-record-tilde-removed-negative','E_COLLECTION_FACTORY_REMOVED'),
             @('entry-pair-tilde-removed-negative','E_COLLECTION_FACTORY_REMOVED')
