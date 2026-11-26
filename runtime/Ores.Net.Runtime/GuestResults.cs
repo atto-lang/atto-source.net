@@ -3,7 +3,12 @@ namespace Ores.Net.Runtime;
 /// <summary>The owned Error value passed between generated guest callables.</summary>
 public sealed class GuestError
 {
-    internal GuestError(string name, string message) { Name = name; Message = message; }
+    internal GuestError(string name, string message, GuestError? originalError = null, string? originalText = null)
+    { Name = name; Message = message; OriginalError = originalError; OriginalText = originalText; }
+    // The closed CIL ABI admits only Error and String error payloads.
+    // Retain the original object, not a formatted or reconstructed copy.
+    internal GuestError? OriginalError { get; }
+    internal string? OriginalText { get; }
     public string Name { get; }
     public string Message { get; }
 }
@@ -61,9 +66,9 @@ public static class GuestResults
     public static bool IsOk(GuestResultI64 value) => value.Error is null && value.TextError is null;
     public static bool IsErr(GuestResultI64 value) => !IsOk(value);
     public static long Unwrap(GuestResultI64 value) => IsOk(value) ? value.Value
-        : throw new GuestPanicSignal(CreateError("called Result::unwrap() on Err"));
+        : throw ResultUnwrapFailure(value);
     public static bool UnwrapOptionTag(GuestResultI64 value) => IsOk(value) ? value.OptionPresent
-        : throw new GuestPanicSignal(CreateError("called Result::unwrap() on Err"));
+        : throw ResultUnwrapFailure(value);
     public static long UnwrapOr(GuestResultI64 value, long fallback) => IsOk(value) ? value.Value : fallback;
     public static GuestError UnwrapErr(GuestResultI64 value) => value.Error
         ?? throw new GuestPanicSignal(CreateError("called Result::unwrap_err() on Ok"));
@@ -71,7 +76,9 @@ public static class GuestResults
         ?? throw new GuestPanicSignal(CreateError("called Result::unwrap_err() on Ok"));
     public static bool TextEquals(string left, string right) => string.Equals(left, right, StringComparison.Ordinal);
     public static long UnwrapOption(bool present, long value) => present ? value
-        : throw new GuestPanicSignal(CreateError("called Option::unwrap() on None"));
+        : throw new GuestThrowSignal(new GuestError("OptionUnwrapError", "called Option::unwrap() on None"));
+    private static GuestThrowSignal ResultUnwrapFailure(GuestResultI64 value) =>
+        new(new GuestError("ResultUnwrapError", "called Result::unwrap() on Err", value.Error, value.TextError));
     public static bool IsErrorType(GuestError error, string name) => name == "Error" || error.Name == name;
     public static bool ErrorHasMessage(GuestError error, string message) =>
         string.Equals(error.Message, message, StringComparison.Ordinal);
