@@ -707,6 +707,20 @@ public static partial class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                // Mandatory whitespace follows the entire contextual keyword suffix.
+                // Keep exact inequality tokens distinct.
+                if ((word is "trap" or "throw" or "raise" or "panic" or "copy" or "take" or "move" or
+                    "borrow" or "share" or "pin" or "drop" or "pipe" or "rpipe" or "stop" or "expand") &&
+                    _i < text.Length && text[_i] == '!' &&
+                    (_i + 1 >= text.Length || text[_i + 1] != '=') &&
+                    !(text.AsSpan(_i).StartsWith("!eq", StringComparison.Ordinal) &&
+                      (_i + 3 == text.Length ||
+                       !(char.IsLetterOrDigit(text[_i + 3]) || text[_i + 3] == '_'))))
+                {
+                    int after = _i + (word == "copy" && _i + 1 < text.Length && text[_i + 1] == '!' ? 2 : 1);
+                    if (after >= text.Length || text[after] is not (' ' or '\t' or '\r' or '\n' or '\v' or '\f'))
+                        throw new FormatException($"E_BANG_KEYWORD_WHITESPACE: whitespace required after bang keyword at offset {start}");
+                }
                 if (word == "select" &&
                     StaticSelectAdmission.FollowedByStaticSelect(text, start))
                     throw StaticSelectAdmission.Unsupported(start);
@@ -1266,7 +1280,7 @@ public static partial class OresParser
             if (verbIndex + 1 < tokens.Count &&
                 (Current.Text != "mut" ||
                     (tokens[verbIndex].Text == "borrow")) &&
-                (tokens[verbIndex].Text is "copy" or "take" or "borrow" or "share") &&
+                (tokens[verbIndex].Text is "copy" or "take" or "move" or "borrow" or "share") &&
                 tokens[verbIndex + 1].Text == "!" &&
                 (verbIndex + 2 >= tokens.Count ||
                     tokens[verbIndex + 2].Text is not ("=" or "eq")) &&
@@ -1429,6 +1443,12 @@ public static partial class OresParser
                 Expect(")");
                 return inner;
             }
+            // This closed scalar lane has no general name binding. Preserve
+            // identifier-shaped tokens as a distinct compile-time diagnostic,
+            // without admitting calls, names, or non-integer values.
+            if (Current.Text.Length > 0 &&
+                (Current.Text[0] is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or '_'))
+                throw new FormatException($"Unknown or unsupported scalar identifier at offset {Current.Offset}");
             if (Current.Text.Length == 0 || Current.Text[0] is < '0' or > '9')
                 throw new FormatException($"Expected integer at offset {Current.Offset}");
             var raw = Current.Text;
