@@ -109,6 +109,50 @@ static class Program
         Console.WriteLine("ATTO_NET_HOST_PER_MAIL_TICKETS_128_CONCURRENT=PASS");
     }
 
+    private static void TerminalRaceTenantFence()
+    {
+        bool zeroRejected = false;
+        try { _ = new HostProxyMailboxTicketsV1(0, 13, 14, 1); }
+        catch (ArgumentException) { zeroRejected = true; }
+        Check(zeroRejected);
+        for (int i = 0; i < 64; ++i)
+        {
+            var m = new HostProxyMailboxTicketsV1(11, 13, 14, 1);
+            var other = new HostProxyMailboxTicketsV1(88, 13, 14, 1);
+            var id = Route((ulong)(5000 + i));
+            var foreign = id with { Tenant = 88 };
+            var a = Admit(m, id, 42);
+            var b = Admit(other, foreign, 43);
+            var denied = m.TrySendTicket(foreign, 99);
+            Check(denied.Status == HostTicketAdmissionStateV1.Stale && denied.Ticket is null);
+            var turn = m.Begin()!;
+            var otherTurn = other.Begin()!;
+            Check(!m.Commit(otherTurn, 99) && !other.Commit(turn, 99));
+            Check(m.Snapshot(b) is null && other.Snapshot(a) is null);
+            using var start = new System.Threading.Barrier(4);
+            bool committed = false, panicked = false;
+            HostTicketAdmissionV1? attacked = null;
+            var commit = new System.Threading.Thread(() => { start.SignalAndWait(); committed = m.Commit(turn, 42); });
+            var panic = new System.Threading.Thread(() => { start.SignalAndWait(); panicked = m.Panic(turn); });
+            var attack = new System.Threading.Thread(() => { start.SignalAndWait(); attacked = m.TrySendTicket(foreign, 99); });
+            commit.Start(); panic.Start(); attack.Start();
+            start.SignalAndWait();
+            commit.Join(); panic.Join(); attack.Join();
+            Check(committed != panicked);
+            Check(attacked is not null && attacked.Status == HostTicketAdmissionStateV1.Stale && attacked.Ticket is null);
+            var snapshot = m.Snapshot(a)!;
+            Check(snapshot.State == (committed ? HostTicketStateV1.Processed : HostTicketStateV1.Failed));
+            Check(snapshot.HasResult == committed);
+            if (committed) Check(snapshot.Result == 42);
+            Check(!m.Commit(turn, 99) && !m.Panic(turn));
+            Check(other.Commit(otherTurn, 43));
+            m.Close();
+            Check(m.TrySendTicket(foreign, 99).Status == HostTicketAdmissionStateV1.Stale);
+            Check(m.Begin() is null && m.CheckConservation() && other.CheckConservation());
+        }
+        Console.WriteLine("ATTO_NET_HOST_TERMINAL_RACES_64=PASS");
+    }
+
     private static int Main()
     {
         var id = new ReceiptIdentityV1(1, 11, 12, 13, 14, 17, 15, 16, 1);
@@ -151,6 +195,7 @@ static class Program
         var invalid = new ProxyReceiptGateV1(id with {Tenant = 0});
         Check(!invalid.ApplyVerified(id with {Tenant = 0}, ReceiptEventV1.Admitted));
         HostMailboxTickets();
+        TerminalRaceTenantFence();
         Console.WriteLine("HOST_MODEL_ONLY proxy receipt v1 assertions passed");
         return 0;
     }
