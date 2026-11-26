@@ -250,6 +250,8 @@ public static partial class OresParser
         {
             ParseQuantityDeclarations();
             while (AtRefinedQuantityAlias()) ParseRefinementAlias();
+            if (StrictI64 && refinementAliases.Count == 0)
+                throw new FormatException("E_VERIFY_UNSUPPORTED: strict typed refinement profile required");
             var protocols = new List<VerifiedProtocol>();
             var protocolNames = new HashSet<string>(StringComparer.Ordinal);
             while (AtProtocolDeclaration()) protocols.Add(ParseProtocolDeclaration(protocolNames));
@@ -354,21 +356,26 @@ public static partial class OresParser
                     verifiedUpperBounds.Add(local, value.UpperBounds);
                     body.Add(new StructuredLet(at, local, IrValueType.I64, value.Expression, StructuredBindingKind.Val));
                 }
-                int returnAt = Current.Offset;
-                if (!Take("return"))
-                    throw new FormatException("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
-                var returned = VerifiedExpression(0);
-                declared.Require(returned.Type, "E_REFINEMENT_RETURN", "return from " + name);
-                guaranteed.Require(returned.Type, "E_REFINEMENT_POSTCONDITION", "ensures of " + name);
-                foreach (int upper in upperParameters)
+                if (StrictI64)
+                    body.AddRange(ParseStrictReturns(declared, guaranteed, name, upperParameters, parameters, required, 0));
+                else
                 {
-                    string parameter = parameters[upper].Name;
-                    if (!returned.UpperBounds.Contains(parameter) && !returned.Type.Range.AtMost(required[upper].Range))
-                        throw new FormatException($"E_REFINEMENT_POSTCONDITION: cannot prove result <= {parameter}");
+                    int returnAt = Current.Offset;
+                    if (!Take("return"))
+                        throw new FormatException("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
+                    var returned = VerifiedExpression(0);
+                    declared.Require(returned.Type, "E_REFINEMENT_RETURN", "return from " + name);
+                    guaranteed.Require(returned.Type, "E_REFINEMENT_POSTCONDITION", "ensures of " + name);
+                    foreach (int upper in upperParameters)
+                    {
+                        string parameter = parameters[upper].Name;
+                        if (!returned.UpperBounds.Contains(parameter) && !returned.Type.Range.AtMost(required[upper].Range))
+                            throw new FormatException($"E_REFINEMENT_POSTCONDITION: cannot prove result <= {parameter}");
+                    }
+                    Expect(";");
+                    body.Add(new StructuredReturn(returnAt, returned.Expression));
                 }
-                Expect(";");
                 Expect("}");
-                body.Add(new StructuredReturn(returnAt, returned.Expression));
                 if (main)
                 {
                     if (Current.Text.Length != 0)
@@ -385,6 +392,111 @@ public static partial class OresParser
                 verifiedFunctions.Add(name, new VerifiedFunction(required, guaranteed, upperParameters));
             }
             throw new FormatException("E_REFINEMENT_EXPORT: verified source requires a public main");
+        }
+
+        private sealed record StrictEdge(StructuredExpr Test,
+            Dictionary<string,RefinedQuantity> Yes, Dictionary<string,RefinedQuantity> No);
+        private Dictionary<string,RefinedQuantity> SnapshotStrict() => new(verifiedLocals, StringComparer.Ordinal);
+        private void RestoreStrict(Dictionary<string,RefinedQuantity> facts)
+        {
+            verifiedLocals.Clear();
+            foreach(var pair in facts) verifiedLocals.Add(pair.Key,pair.Value);
+        }
+        private static Dictionary<string,RefinedQuantity> JoinStrict(Dictionary<string,RefinedQuantity> a,
+            Dictionary<string,RefinedQuantity> b) =>
+            a.ToDictionary(p=>p.Key,p=>p.Value with { Range=p.Value.Range.Join(b[p.Key].Range) },StringComparer.Ordinal);
+        private StrictEdge StrictCondition(Dictionary<string,RefinedQuantity> facts, int depth)
+        {
+            if(depth>16) throw new FormatException("E_VERIFY_UNSUPPORTED: condition depth");
+            var p=StrictAnd(facts,depth);
+            while(Current.Text is "||" or "or")
+            {
+                int at=Current.Offset; _index++;
+                var q=StrictAnd(p.No,depth);
+                p=new(new StructuredConditional(at,p.Test,new StructuredBool(at,true),q.Test,IrValueType.Bool),
+                    JoinStrict(p.Yes,q.Yes),q.No);
+            }
+            return p;
+        }
+        private StrictEdge StrictAnd(Dictionary<string,RefinedQuantity> facts,int depth)
+        {
+            var p=StrictPredicate(facts,depth);
+            while(Current.Text is "&&" or "and")
+            {
+                int at=Current.Offset; _index++;
+                var q=StrictPredicate(p.Yes,depth);
+                p=new(new StructuredConditional(at,p.Test,q.Test,new StructuredBool(at,false),IrValueType.Bool),
+                    q.Yes,JoinStrict(p.No,q.No));
+            }
+            return p;
+        }
+        private StrictEdge StrictPredicate(Dictionary<string,RefinedQuantity> facts,int depth)
+        {
+            if(depth>16) throw new FormatException("E_VERIFY_UNSUPPORTED: predicate depth");
+            RestoreStrict(facts);
+            int at=Current.Offset;
+            if(Take("!"))
+            {
+                var p=StrictPredicate(facts,depth+1);
+                return new(new StructuredBinary(at,StructuredOperator.EqualBool,p.Test,new StructuredBool(at,false),IrValueType.Bool),p.No,p.Yes);
+            }
+            if(Take("("))
+            {
+                var p=StrictCondition(facts,depth+1);Expect(")");return p;
+            }
+            var left=VerifiedExpression(0);
+            string op=Current.Text;
+            int end=Current.Offset+op.Length;
+            _index++;
+            if((op is "<" or ">" or "=" or "!") && Current.Offset==end && Take("="))op+="=";
+            op=op switch {"eq"=>"==","neq" or "!eq"=>"!=",_=>op};
+            var cmp=op switch {
+                "<"=>StructuredOperator.LessThanI64,"<="=>StructuredOperator.LessThanOrEqualI64,
+                ">"=>StructuredOperator.GreaterThanI64,">="=>StructuredOperator.GreaterThanOrEqualI64,
+                "=="=>StructuredOperator.EqualI64,"!="=>StructuredOperator.NotEqualI64,
+                _=>throw new FormatException("E_VERIFY_UNSUPPORTED: strict comparison required")
+            };
+            var right=VerifiedExpression(0);left.Type.Unit.RequireCompatible(right.Type.Unit);
+            var yes=SnapshotStrict();var no=SnapshotStrict();
+            if(left.Expression is StructuredRead read && facts.TryGetValue(read.Name,out var binding)
+                && right.Type.Range.Minimum==right.Type.Range.Maximum)
+            {
+                string inverse=op switch {"<"=>">=","<="=>">",">"=>"<=",">="=>"<","=="=>"!=",_=>"=="};
+                long n=right.Type.Range.Minimum;
+                yes[read.Name]=binding with { Range=binding.Range.Restrict(op,n) };
+                no[read.Name]=binding with { Range=binding.Range.Restrict(inverse,n) };
+            }
+            return new(new StructuredBinary(at,cmp,left.Expression,right.Expression,IrValueType.Bool),yes,no);
+        }
+        private List<StructuredStmt> ParseStrictReturns(RefinedQuantity declared,RefinedQuantity guaranteed,
+            string name,List<int> upperParameters,List<StructuredParameter> parameters,
+            RefinedQuantity[] required,int depth)
+        {
+            if(depth>16)throw new FormatException("E_VERIFY_UNSUPPORTED: strict return depth");
+            int at=Current.Offset;
+            if(Take("if"))
+            {
+                var p=StrictCondition(SnapshotStrict(),0);
+                Expect("{");RestoreStrict(p.Yes);
+                var yes=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
+                Expect("}");RestoreStrict(p.No);
+                bool hasElse=Take("else");if(hasElse)Expect("{");
+                var no=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
+                if(hasElse)Expect("}");
+                return new(){new StructuredIf(at,p.Test,yes,no)};
+            }
+            if(!Take("return"))throw new FormatException("E_VERIFY_UNSUPPORTED: strict returning conditionals only");
+            var returned=VerifiedExpression(0);
+            declared.Require(returned.Type,"E_REFINEMENT_RETURN","return from "+name);
+            guaranteed.Require(returned.Type,"E_REFINEMENT_POSTCONDITION","ensures of "+name);
+            foreach(int upper in upperParameters)
+            {
+                string parameter=parameters[upper].Name;
+                if(!returned.UpperBounds.Contains(parameter)&&!returned.Type.Range.AtMost(required[upper].Range))
+                    throw new FormatException("E_REFINEMENT_POSTCONDITION: cannot prove result <= "+parameter);
+            }
+            Expect(";");
+            return new(){new StructuredReturn(at,returned.Expression)};
         }
 
         private QuantityTerm AttachVerifiedUnit(QuantityTerm term, string name)
