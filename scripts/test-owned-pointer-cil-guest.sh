@@ -37,6 +37,11 @@ helper='fnc inspect(Pointer<int> p): int { return p.read(); }'
 positive implicit_borrow "$helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(21); val int a = inspect(p); p.write(21); val int b = inspect(p); p.close(); return a + b; }"
 positive explicit_borrow "$helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(21); val int a = inspect(borrow! p); p.write(21); val int b = inspect(borrow! p); p.close(); return a + b; }"
 positive borrow_observes_current_cell "$helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(13); val int a = inspect(p); p.write(29); val int b = inspect(borrow! p); p.close(); return a + b; }"
+mut_helper='fnc update(mut Pointer<int> q): void { q.write(42); }'
+positive mutable_implicit "$mut_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p); val int a = p.read(); p.close(); return a; }"
+positive mutable_explicit "$mut_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(borrow! mut p); val int a = p.read(); p.close(); return a; }"
+positive mutable_preserves_snapshot 'fnc update(mut Pointer<int> q): void { q.write(29); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(13); val int before = p.read(); update(mut p); val int after = p.read(); p.close(); return before + after; }'
+positive mutable_initializes 'fnc update(mut Pointer<int> q): void { q.write(13); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); update(mut p); val int before = p.read(); p.write(29); val int after = p.read(); p.close(); return before + after; }'
 negative() {
   local name="$1" code="$2" source="$3"
   printf '%s\n' "$source" >"$work/$name.atto"
@@ -72,4 +77,12 @@ negative borrow_bang_gap E_POINTER_SYNTAX "$helper pub fnc main(): int { let mut
 negative borrow_mut_not_admitted E_POINTER_AUTHORITY "$helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); val int a = inspect(borrow! mut p); p.close(); return a; }"
 negative borrow_close E_POINTER_PROFILE 'fnc inspect(Pointer<int> p): int { p.close(); return 42; } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); val int a = inspect(p); p.close(); return a; }'
 negative borrow_escape E_POINTER_PROFILE 'fnc inspect(Pointer<int> p): int { return p; } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); val int a = inspect(p); p.close(); return a; }'
+negative mut_borrow_closed E_POINTER_LIFETIME "$mut_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); p.close(); update(mut p); return 0; }"
+negative mut_borrow_wrong_owner E_POINTER_AUTHORITY "$mut_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut other); p.close(); return 0; }"
+negative mut_borrow_multi E_POINTER_BOUNDS "$mut_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(2); update(mut p); p.close(); return 0; }"
+negative mut_borrow_gap E_POINTER_SYNTAX "$mut_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(borrow ! mut p); p.close(); return 0; }"
+negative mut_borrow_readonly E_POINTER_AUTHORITY "$mut_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(p); p.close(); return 0; }"
+negative mut_borrow_extra_argument E_POINTER_PROFILE "$mut_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p, mut p); p.close(); return 0; }"
+negative mut_borrow_no_close E_POINTER_LIFETIME "$mut_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p); return 0; }"
+negative mut_borrow_helper_close E_POINTER_PROFILE 'fnc update(mut Pointer<int> q): void { q.close(); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p); p.close(); return 0; }'
 echo ATTO_OWNED_POINTER_CIL_NATIVEAOT_PASS
