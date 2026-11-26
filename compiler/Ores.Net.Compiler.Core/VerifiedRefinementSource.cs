@@ -276,7 +276,7 @@ public static partial class OresParser
                     if(!requires&&!Take("ensures"))throw new FormatException("E_REFINEMENT_CONTRACT: unsupported annotation");
                     Expect("(");int start=_index;
                     while(Current.Text!=")") {
-                        if(Current.Text.Length==0||_index-start>=32||Current.Text is ("("|"{"|"}"|";"|"@"))
+                        if(Current.Text.Length==0||_index-start>=32||Current.Text is ("(" or "{" or "}" or ";" or "@"))
                             throw new FormatException("E_REFINEMENT_CONTRACT: invalid bounded annotation predicate");
                         _index++;
                     }
