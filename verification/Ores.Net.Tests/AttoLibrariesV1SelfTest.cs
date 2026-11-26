@@ -13,14 +13,59 @@ using Ores.Net.Compiler;
 /// </summary>
 internal static class AttoLibrariesV1SelfTest
 {
+    // A rejection is not guest execution. Missing mandatory cases and
+    // unexpected errors in otherwise unsupported guests must fail the suite.
+    private static readonly HashSet<string> RequiredGuests = new(StringComparer.Ordinal)
+    {
+        "aliases.atto", "core_cmp.atto", "net_core_int_slice.atto"
+    };
+    private static readonly HashSet<string> RequiredRejections = new(StringComparer.Ordinal)
+    {
+        "neg_dotted_selector.atto", "neg_nested.atto", "neg_ores_selector.atto",
+        "neg_private.atto", "neg_traversal.atto", "neg_unknown_core.atto", "neg_unknown_std.atto"
+    };
+    private static readonly Dictionary<string, string> KnownUnsupported = new(StringComparer.Ordinal)
+    {
+        ["alloc_arena.atto"] = "atto.alloc/arena",
+        ["core_mem.atto"] = "atto.core/option",
+        ["core_num.atto"] = "atto.core/option",
+        ["core_option_result.atto"] = "atto.core/option",
+        ["std_io.atto"] = "atto.std/io",
+        ["std_path_posix.atto"] = "atto.std/path",
+        ["std_path_windows.atto"] = "atto.std/path"
+    };
+
+    private static bool ExplicitlyUnsupported(string name, string error)
+    {
+        if (!KnownUnsupported.TryGetValue(name, out string? selector)) return false;
+        string layer = selector[..selector.IndexOf('/')];
+        string expected = $"compiler-owned {layer} module '{selector}' is not implemented by the .NET backend yet";
+        if (layer == "atto.std") expected += " (unsupported compiler-owned AttoLang library namespace)";
+        return string.Equals(error, expected, StringComparison.Ordinal);
+    }
+
+    private static void CheckEvidencePolicy()
+    {
+        const string known = "compiler-owned atto.std module 'atto.std/io' is not implemented by the .NET backend yet (unsupported compiler-owned AttoLang library namespace)";
+        if (!ExplicitlyUnsupported("std_io.atto", known) ||
+            ExplicitlyUnsupported("std_io.atto", "parser regression") ||
+            ExplicitlyUnsupported("aliases.atto", known) ||
+            ExplicitlyUnsupported("std_path_posix.atto", known) ||
+            ExplicitlyUnsupported("std_io.atto", known + " unexpected failure"))
+            throw new Exception("FAILED: unsupported library evidence policy is not fail closed");
+    }
+
     [ModuleInitializer]
     internal static void Run()
     {
+        CheckEvidencePolicy();
         string root = FindRepositoryRoot();
         string corpus = Path.Combine(root, "tests", "atto_libraries");
         string scratch = Path.Combine(Path.GetTempPath(), "atto-libs-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(scratch);
-        int passed = 0, unsupported = 0;
+        int guestPassed = 0, rejected = 0, unsupported = 0;
+        var executedGuests = new HashSet<string>(StringComparer.Ordinal);
+        var executedRejections = new HashSet<string>(StringComparer.Ordinal);
         var failures = new List<string>();
         try
         {
@@ -30,6 +75,8 @@ internal static class AttoLibrariesV1SelfTest
             {
                 string name = Path.GetFileName(path);
                 var meta = Headers(path);
+                if (RequiredGuests.Contains(name) && meta.Reject || RequiredRejections.Contains(name) && !meta.Reject)
+                { failures.Add($"{name}: mandatory case changed outcome category"); continue; }
                 SourceModuleCompilation? compiled = null;
                 string? error = null;
                 try { compiled = OresSourceModuleCompiler.Compile(path, new[] { corpus }); }
@@ -40,13 +87,12 @@ internal static class AttoLibrariesV1SelfTest
                     string? missing = meta.Errors.FirstOrDefault(e => error is null || !error.Contains(e, StringComparison.Ordinal));
                     if (error is null) failures.Add($"{name}: expected rejection, compiled");
                     else if (missing is not null) failures.Add($"{name}: diagnostic lacks '{missing}': {error}");
-                    else passed++;
+                    else { rejected++; executedRejections.Add(name); }
                     continue;
                 }
                 if (error is not null)
                 {
-                    if (error.Contains("not implemented by the .NET backend", StringComparison.Ordinal) ||
-                        meta.Stdout is not null || meta.Flags.Count > 0)
+                    if (ExplicitlyUnsupported(name, error))
                     {
                         unsupported++;
                         continue;
@@ -54,21 +100,28 @@ internal static class AttoLibrariesV1SelfTest
                     failures.Add($"{name}: compile failed: {error}");
                     continue;
                 }
+                // This harness currently verifies only scalar CIL returns.
+                // Do not label stdout/target-OS cases as passing without exercising them.
+                if (meta.Stdout is not null || meta.Flags.Count > 0)
+                { failures.Add($"{name}: compiled but target flags/stdout execution not implemented by harness"); continue; }
                 string assembly = Path.Combine(scratch, Path.GetFileNameWithoutExtension(name), "OresGenerated.dll");
                 Directory.CreateDirectory(Path.GetDirectoryName(assembly)!);
                 CilEmitter.EmitLibrary(compiled!.Module, assembly);
                 long result = Execute(assembly);
                 if (result != meta.Exit) failures.Add($"{name}: main returned {result}, expected {meta.Exit}");
-                else passed++;
+                else { guestPassed++; executedGuests.Add(name); }
             }
         }
         finally
         {
             try { Directory.Delete(scratch, true); } catch (IOException) { }
         }
-        Console.WriteLine($"ATTO_LIBRARIES_V1 net passed={passed} unsupported={unsupported} failed={failures.Count}");
+        foreach (string name in RequiredGuests.Except(executedGuests))
+            failures.Add($"{name}: required guest not executed successfully");
+        foreach (string name in RequiredRejections.Except(executedRejections))
+            failures.Add($"{name}: required rejection not verified");
+        Console.WriteLine($"ATTO_LIBRARIES_V1 net guest_passed={guestPassed} rejected={rejected} unsupported={unsupported} failed={failures.Count}");
         if (failures.Count > 0) throw new Exception("FAILED: " + string.Join("; ", failures));
-        if (passed < 9) throw new Exception($"FAILED: only {passed} library guests executed");
     }
 
     private static long Execute(string assemblyPath)
