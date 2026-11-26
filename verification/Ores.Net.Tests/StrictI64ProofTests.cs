@@ -60,6 +60,10 @@ static class StrictI64ProofTests
         Reject(pre+"pub fnc main() -> int { let int x=1; val snapshot=x; x=0; return 42/x; }","E_VERIFY_UNPROVEN");
         Reject(pre+"pub fnc main() -> int { let int x=1; val snapshot=x; snapshot=0; return snapshot; }","E_VERIFY_UNSUPPORTED");
         Reject(pre+"pub fnc main() -> int { let int x=1; val snapshot=9223372036854775807+1; return x; }","E_VERIFY_UNPROVEN");
+        const string header="fnc f(int x) -> int requires x >= 1 requires x <= 42";
+        foreach (string body in new[]{" { return 84/x; }","\nbegin return 84/x; end"," :: return 84/x; end","\n:: return 84/x; end"})
+            _ = OresParser.LowerVerifiedStrict(pre+header+body+" "+Main("f(2)"));
+        Reject(pre+header+" begin return 84/x; end "+Main("f(2)"),"E_SYNTAX");
         Reject(Main("42"),"E_VERIFY_UNSUPPORTED");
         Reject(pre+"type Narrow = i32 where self > 0; "+Main("42"),"E_VERIFY_UNSUPPORTED");
         Console.WriteLine("PASS strict signed-i64 source-to-CFG admission (not native guest execution)");
