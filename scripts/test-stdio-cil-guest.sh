@@ -69,6 +69,7 @@ for form in return caret; do
   echo "PASS stdout without grant denied $form, no-artifact"
 
   # The source bytes are unchanged: permission is a host compilation policy.
+  rm -f "$guest"
   dotnet run --no-build -c Release --project "$compiler" -- \
     "$input" "$guest" --allow-stdio
   test -s "$guest"

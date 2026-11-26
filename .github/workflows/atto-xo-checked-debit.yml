@@ -1,0 +1,46 @@
+name: Atto-XO checked debit CIL and native guest
+
+on:
+  pull_request:
+    paths:
+      - 'compiler/**'
+      - 'runtime/**'
+      - 'host/**'
+      - 'scripts/publish-macos.sh'
+      - 'verification/assert-macos-native-release.sh'
+      - 'contracts/atto-xo-checked-debit-v1/**'
+      - 'ci/test-atto-xo-checked-debit.sh'
+      - '.github/workflows/atto-xo-checked-debit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guest:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            mode: coreclr
+          - os: macos-15
+            mode: native-macos
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Execute pinned corpus against the exact compiler head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git log -1 --format='%H %T'
+          bash ci/test-atto-xo-checked-debit.sh "$MODE"

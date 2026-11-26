@@ -239,11 +239,20 @@ internal static class CoreMathHashCellSourceSelfTest
             // canonical bang and legacy rt syntax before CIL emission.
             string deniedCellDll = Path.Combine(root, "ForbiddenCoreCellLoan.dll");
             foreach (var denied in new (string expression, string witness)[] {
-                ("borrow!owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
-                ("take!owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
-                ("share!owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
-                ("copy!owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
-                ("mut borrow!owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
+                ("borrow!owner", "E_BANG_KEYWORD_WHITESPACE"),
+                ("borrow! owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
+                ("take!owner", "E_BANG_KEYWORD_WHITESPACE"),
+                ("take! owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
+                ("move!owner", "E_BANG_KEYWORD_WHITESPACE"),
+                ("move! owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
+                ("share!owner", "E_BANG_KEYWORD_WHITESPACE"),
+                ("share! owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
+                ("copy!owner", "E_BANG_KEYWORD_WHITESPACE"),
+                ("copy! owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
+                ("copy!!owner", "E_BANG_KEYWORD_WHITESPACE"),
+                ("copy!! owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
+                ("mut borrow!owner", "E_BANG_KEYWORD_WHITESPACE"),
+                ("mut borrow! owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
                 ("rt borrow owner", "Ownership operation 'rt borrow'"),
                 ("rt mut borrow owner", "Ownership operation 'rt mut borrow'"),
                 ("rt take owner", "Ownership operation 'rt take'")
