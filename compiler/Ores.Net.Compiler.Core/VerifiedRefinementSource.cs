@@ -332,7 +332,7 @@ public static partial class OresParser
                 }
                 Expect("{");
                 var body = new List<StructuredStmt>();
-                while (Take("val"))
+                while (!StrictI64 && Take("val"))
                 {
                     if (body.Count >= 128) throw new FormatException("E_REFINEMENT_LIMIT: too many immutable bindings");
                     int at = Current.Offset;
@@ -364,8 +364,10 @@ public static partial class OresParser
                     verifiedUpperBounds.Add(local, value.UpperBounds);
                     body.Add(new StructuredLet(at, local, IrValueType.I64, value.Expression, StructuredBindingKind.Val));
                 }
-                if (StrictI64)
+                if (StrictI64) {
                     body.AddRange(ParseStrictReturns(declared, guaranteed, name, upperParameters, parameters, required, 0));
+                    if(!StrictAlwaysReturns(body))throw new FormatException("E_VERIFY_UNSUPPORTED: strict function must return on all paths");
+                }
                 else
                 {
                     int returnAt = Current.Offset;
@@ -481,6 +483,7 @@ public static partial class OresParser
             RefinedQuantity[] required,int depth)
         {
             if(depth>16)throw new FormatException("E_VERIFY_UNSUPPORTED: strict return depth");
+            if(Current.Text=="}")return new();
             int at=Current.Offset;
             // A val captures the current value and proof facts before later writes.
             // Keep the declaration in source order in the structured CFG.
@@ -540,46 +543,81 @@ public static partial class OresParser
             }
             if(Take("while"))
             {
-                // Only one direct scalar update is admitted on each backedge.
-                // Scan the target then independently parse the entire guard/body.
                 int brace=_index;
                 while(brace<tokens.Count&&tokens[brace].Text!=""&&tokens[brace].Text!="{")brace++;
-                if(brace+2>=tokens.Count||tokens[brace+2].Text!="="||
-                   !strictMutable.TryGetValue(tokens[brace+1].Text,out var invariant))
-                    throw new FormatException("E_VERIFY_UNSUPPORTED: strict while requires one mutable update");
-                string local=tokens[brace+1].Text;
-                invariant.Require(verifiedLocals[local],"E_REFINEMENT_BINDING","loop entry "+local);
+                if(brace>=tokens.Count||tokens[brace].Text!="{")
+                    throw new FormatException("E_VERIFY_UNSUPPORTED: loop block required");
+                var savedMutable=new Dictionary<string,RefinedQuantity>(strictMutable,StringComparer.Ordinal);
+                var writes=new HashSet<string>(StringComparer.Ordinal);
+                int nesting=1;
+                for(int k=brace+1;k<tokens.Count&&nesting>0;k++){
+                    string token=tokens[k].Text;
+                    if(token=="{")nesting++;
+                    else if(token=="}")nesting--;
+                    else if(k+1<tokens.Count&&tokens[k+1].Text=="="&&savedMutable.ContainsKey(token))
+                        writes.Add(token);
+                }
+                if(nesting!=0)throw new FormatException("E_VERIFY_UNSUPPORTED: unterminated loop");
                 var header=SnapshotStrict();
-                header[local]=invariant;
-                // Relational facts about prior values cannot survive the backedge.
-                verifiedUpperBounds[local]=Array.Empty<string>();
+                foreach(var key in writes){
+                    var invariant=savedMutable[key];
+                    invariant.Require(header[key],"E_REFINEMENT_BINDING","loop entry "+key);
+                    header[key]=invariant;verifiedUpperBounds[key]=Array.Empty<string>();
+                }
+                var headerBounds=new Dictionary<string,IReadOnlyCollection<string>>(verifiedUpperBounds,StringComparer.Ordinal);
                 var p=StrictCondition(header,0);
                 Expect("{");RestoreStrict(p.Yes);
-                if(ReadVerifiedName()!=local)throw new FormatException("E_VERIFY_UNSUPPORTED: wrong loop target");
-                Expect("=");var update=VerifiedExpression(0);Expect(";");
-                invariant.Require(update.Type,"E_REFINEMENT_BINDING","loop backedge "+local);
-                if(!Take("}"))throw new FormatException("E_VERIFY_UNSUPPORTED: one direct loop update only");
+                var loopBody=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
+                Expect("}");
+                if(!StrictAlwaysReturns(loopBody))foreach(var key in writes)
+                    savedMutable[key].Require(verifiedLocals[key],"E_REFINEMENT_BINDING","loop backedge "+key);
                 RestoreStrict(p.No);
+                verifiedUpperBounds.Clear();
+                foreach(var pair in headerBounds)verifiedUpperBounds.Add(pair.Key,pair.Value);
+                strictMutable.Clear();
+                foreach(var pair in savedMutable)strictMutable.Add(pair.Key,pair.Value);
                 var tail=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
-                tail.Insert(0,new StructuredWhile(at,p.Test,new StructuredStmt[]{new StructuredSet(at,local,update.Expression)}));
+                tail.Insert(0,new StructuredWhile(at,p.Test,loopBody));
                 return tail;
             }
             if(Take("if"))
             {
-                var p=StrictCondition(SnapshotStrict(),0);
+                var incoming=SnapshotStrict();
+                var p=StrictCondition(incoming,0);
                 var savedBounds=new Dictionary<string,IReadOnlyCollection<string>>(verifiedUpperBounds,StringComparer.Ordinal);
                 var savedMutable=new Dictionary<string,RefinedQuantity>(strictMutable,StringComparer.Ordinal);
                 Expect("{");RestoreStrict(p.Yes);
                 var yes=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
-                Expect("}");RestoreStrict(p.No);
+                Expect("}");
+                var yesFacts=SnapshotStrict();
+                var yesBounds=new Dictionary<string,IReadOnlyCollection<string>>(verifiedUpperBounds,StringComparer.Ordinal);
+                RestoreStrict(p.No);
                 verifiedUpperBounds.Clear();
                 foreach(var pair in savedBounds)verifiedUpperBounds.Add(pair.Key,pair.Value);
                 strictMutable.Clear();
                 foreach(var pair in savedMutable)strictMutable.Add(pair.Key,pair.Value);
-                bool hasElse=Take("else");if(hasElse)Expect("{");
-                var no=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
-                if(hasElse)Expect("}");
-                return new(){new StructuredIf(at,p.Test,yes,no)};
+                var no=new List<StructuredStmt>();
+                if(Take("else")){
+                    Expect("{");
+                    no=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
+                    Expect("}");
+                }
+                var noFacts=SnapshotStrict();
+                var noBounds=new Dictionary<string,IReadOnlyCollection<string>>(verifiedUpperBounds,StringComparer.Ordinal);
+                bool yr=StrictAlwaysReturns(yes),nr=StrictAlwaysReturns(no);
+                var statements=new List<StructuredStmt>{new StructuredIf(at,p.Test,yes,no)};
+                RestoreStrict(incoming);
+                verifiedUpperBounds.Clear();strictMutable.Clear();
+                foreach(var pair in savedMutable)strictMutable.Add(pair.Key,pair.Value);
+                foreach(var key in incoming.Keys){
+                    var y=yesFacts[key];var n=noFacts[key];
+                    verifiedLocals[key]=yr?n:nr?y:y with {Range=y.Range.Join(n.Range)};
+                    var bounds=new HashSet<string>(yr?noBounds[key]:yesBounds[key],StringComparer.Ordinal);
+                    if(!yr&&!nr)bounds.IntersectWith(noBounds[key]);
+                    verifiedUpperBounds[key]=bounds.ToArray();
+                }
+                if(!yr||!nr)statements.AddRange(ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1));
+                return statements;
             }
             if(!Take("return"))throw new FormatException("E_VERIFY_UNSUPPORTED: strict returning conditionals only");
             var returned=VerifiedExpression(0);
@@ -593,6 +631,14 @@ public static partial class OresParser
             }
             Expect(";");
             return new(){new StructuredReturn(at,returned.Expression)};
+        }
+
+        private static bool StrictAlwaysReturns(IReadOnlyList<StructuredStmt> body)
+        {
+            if(body.Count==0)return false;
+            return body[^1] is StructuredReturn ||
+                body[^1] is StructuredIf branch && branch.Else is not null &&
+                StrictAlwaysReturns(branch.Then) && StrictAlwaysReturns(branch.Else);
         }
 
         private QuantityTerm AttachVerifiedUnit(QuantityTerm term, string name)
