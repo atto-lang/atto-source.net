@@ -6,6 +6,24 @@ using Ores.Net.Compiler;
 
 internal static class StructuredCfgLoweringTests
 {
+    public static void RunUnicodeIdentifierNegation()
+    {
+        const string source = "pub fnc main(): int { val int Φ = 10; val int φ = 20; val int 数量 = 30; val int 𠮷 = 40; if ¬false && ¬¬true then return Φ + φ + 数量 + 𠮷; else return 0; fi }";
+        Check(source, 100, "Unicode names and negation");
+        Check(source.Replace("¬", "!", StringComparison.Ordinal), 100, "ASCII negation alias");
+        foreach (var invalid in new[] {
+            "pub fnc main(): int { return 未定義; }",
+            "pub fnc main(): int { if ¬1 then return 1; else return 0; fi }",
+            "pub fnc main(): int { val int ρ = 1; val int ρ = 2; return ρ; }",
+            "pub fnc main(): int { return 42; } // \u202e"
+        })
+        {
+            try { _ = OresStructuredCfgLowering.Lower(invalid); }
+            catch (FormatException) { continue; }
+            throw new Exception("Expected Unicode source rejection");
+        }
+    }
+
     private static void Check(string source, long expected, string label)
     {
         var graph = OresStructuredCfgLowering.Lower(source);
