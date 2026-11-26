@@ -102,7 +102,8 @@ for case in reject-inline-suspend:E_SYNC_TASK_SUSPEND reject-do-value:E_TASK_RET
     reject-ternary-predicate-writeback:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
     'reject-inline-not-int:Logical not requires bool' \
     reject-inline-macro:NET_STRUCTURED_MACRO_EXPANDER_REQUIRED \
-    reject-inline-ownership-bang:OWNERSHIP_BANG_BACKEND_UNSUPPORTED \
+    reject-inline-ownership-bang:E_BANG_KEYWORD_WHITESPACE \
+    reject-inline-ownership-bang-spaced:OWNERSHIP_BANG_BACKEND_UNSUPPORTED \
     'reject-parenthesized-not-int:Logical not requires bool' \
     reject-spaced-macro:NET_STRUCTURED_MACRO_EXPANDER_REQUIRED \
     reject-adjacent-keyword-bang:NET_STRUCTURED_MACRO_EXPANDER_REQUIRED; do
