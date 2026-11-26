@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val TaskFuture<int> task_handle = task<int> { return 42; };
+  return 42;
+}

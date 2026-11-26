@@ -1,0 +1,6 @@
+pub fnc add_two(int value): int {
+    return value + 2;
+}
+pub fnc main(): int {
+    return sync task<int> { return add_two(40); };
+}

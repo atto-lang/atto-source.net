@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val Future<int> future = task<int> { return 42; };
+  return 0;
+}
