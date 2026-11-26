@@ -4,7 +4,11 @@
 set -Eeuo pipefail
 command=compile
 strict=0
-if [[ "${1:-}" == "--strict" ]]; then command=compile-strict-i64; strict=1; shift; [[ "$#" -eq 1 ]]; fi
+tier=boundaries
+if [[ "${1:-}" == "--strict" || "${1:-}" == "--guards" ]]; then
+  if [[ "$1" == "--guards" ]]; then tier=guards; fi
+  command=compile-strict-i64; strict=1; shift; [[ "$#" -eq 1 ]]
+fi
 [[ "$#" -le 1 ]]
 corpus=""
 if [[ "$#" -eq 1 ]]; then corpus="$(realpath -- "$1")"; [[ -f "$corpus" ]]; fi
@@ -69,15 +73,16 @@ reject() {
 if [[ -n "$corpus" ]]; then
   mkdir -p "$work/shared"
   if [[ "$strict" -eq 1 ]]; then
-    node --input-type=module - "$corpus" "$work/shared" <<'STRICTJS'
+    node --input-type=module - "$corpus" "$work/shared" "$tier" <<'STRICTJS'
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-const [corpus,out]=process.argv.slice(2);
+const [corpus,out,tier]=process.argv.slice(2);
 const manifest=JSON.parse(readFileSync(corpus,'utf8'));
 assert.equal(manifest.profile,'verified-core-strict-i64-v1');
-const cases=manifest.cases.filter(c=>['arithmetic','boundaries'].includes(c.tier));
-assert.equal(cases.length,21);
+assert.ok(['boundaries','guards'].includes(tier));
+const cases=manifest.cases.filter(c=>tier==='guards'?c.tier==='guards':['arithmetic','boundaries'].includes(c.tier));
+assert.equal(cases.length,tier==='guards'?10:21);
 const seen=new Set(),lines=[];
 for(const {id,source,expected:e} of cases){
  assert.match(id,/^[a-z0-9-]+$/);assert.ok(!seen.has(id));seen.add(id);
@@ -119,7 +124,9 @@ JS
   while IFS=$'\t' read -r name kind status expected; do
     if [[ "$kind" == "reject" ]]; then reject "$name" "" "$expected"; else guest "$name" "" "$status" "$expected"; fi
   done <"$work/shared/cases.tsv"
-  if [[ "$strict" -eq 1 ]]; then [[ "$cases" -eq 21 ]]; else [[ "$cases" -eq 24 ]]; fi
+  if [[ "$strict" -eq 1 ]]; then
+    if [[ "$tier" == guards ]]; then [[ "$cases" -eq 10 ]]; else [[ "$cases" -eq 21 ]]; fi
+  else [[ "$cases" -eq 24 ]]; fi
 else
 guest prefix '(<Positive>(42.<Second>)) / 1<Second>' 0 42
 guest postfix '(42.<Second>::<Positive>) / 1<Second>' 0 42
