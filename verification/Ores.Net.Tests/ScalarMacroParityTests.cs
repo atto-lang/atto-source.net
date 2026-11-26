@@ -215,7 +215,8 @@ public static class ScalarMacroParityTests
         Reject(LiteralMacro + MainSource("literal!(const -(-9223372036854775808))"),
             "NET_MACRO_CONST_OVERFLOW", "unary signed overflow");
         Reject(LiteralMacro + MainSource("literal!(const 1 / 2)"),
-            "Division requires float result lowering", "integer division cannot change language typing");
+            "Checked integer division requires typed guest error lowering",
+            "restricted scalar macro frontend rejects unsupported checked division rather than floating conversion");
 
         // Inclusive 64-level const evaluator bound, distinct from parser's
         // independent 128 nesting bound. No runtime bypass on depth 65.
