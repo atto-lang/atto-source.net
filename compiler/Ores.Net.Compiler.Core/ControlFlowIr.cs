@@ -67,7 +67,8 @@ public enum CfgOpcode
     ResultUnwrapTextErr,
     CheckedRemainder,
     CheckedModulo,
-    InlineCooperate
+    InlineCooperate,
+    BitXorI64
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -448,7 +449,8 @@ public static class OresCfgVerifier
                         CheckGuestOp(op);
                         if (op.TextOperand is null || op.TextOperand.Length > 16_384 ||
                             op.Opcode == CfgOpcode.GuestErrorIsType && op.TextOperand is not
-                                ("Error" or "ArithmeticOverflowError" or "DivisionByZeroError"))
+                                ("Error" or "ArithmeticOverflowError" or "DivisionByZeroError" or
+                                 "OptionUnwrapError" or "ResultUnwrapError"))
                             throw new FormatException("Invalid guest Error comparison");
                         Use(i, opIndex, op.Left!.Value, IrValueType.GuestError);
                         break;
@@ -627,6 +629,7 @@ public static class OresCfgVerifier
                     case CfgOpcode.CheckedSubtract:
                     case CfgOpcode.CheckedMultiply:
                     case CfgOpcode.CheckedDivide:
+                    case CfgOpcode.BitXorI64:
                     case CfgOpcode.ShiftLeftI64:
                     case CfgOpcode.ShiftRightLogicalI64:
                     case CfgOpcode.ShiftRightArithmeticI64:

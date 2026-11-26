@@ -3,6 +3,36 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+if (args.Length == 1 && args[0] == "--aggregate-factories")
+{
+    HeapContainerSourceBoundaryTests.Run();
+    Console.WriteLine("AGGREGATE_FACTORY_CIL_BOUNDARIES_PASS");
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--directional-value-pipe")
+{
+    CriticalSuspendsBoundaryTests.Run();
+    DirectionalValuePipeStructuredTests.Run();
+    Console.WriteLine("DIRECTIONAL_VALUE_PIPE_AND_EFFECT_BOUNDARY_PASS");
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--explicit-ternary-arms")
+{
+    StructuredSourceTests.RunExplicitTernaryArms();
+    StructuredCfgLoweringTests.RunExplicitTernaryArms();
+    Console.WriteLine("EXPLICIT_TERNARY_ARMS_PASS: parser negatives and typed CFG/CIL");
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--static-select-admission")
+{
+    StaticSelectAdmissionTests.Run();
+    Console.WriteLine("NET_STATIC_SELECT_ADMISSION_PASS");
+    return;
+}
+
 DisjointFieldPlaceAdmissionTests.Run(); // reject-only; never guest parity
 ReadonlyShapeProjectionV1Tests.Run();
 NativeSourceIdentityV1SelfTest.Run();
@@ -79,32 +109,20 @@ Require(OresParser.Parse("fnc main():int{\r\n\treturn 42;\r\n}") is not null,
 Require(OresStructuredParser.Parse("fnc main():int{\r\n\treturn 42;\r\n}").Body.Count == 1,
     "ordinary structured CRLF and TAB must remain accepted");
 
-// Typed static select must fail with the select-specific diagnostic in
-// both compiler entry points, even when trivia separates the tokens. It is
-// never silently downgraded to scalar arithmetic or a CPU execution region.
-foreach (string source in new[] {
-    "select<int> over default: -> { return 42; } end",
-    "select /* trivia */ <int> over default: -> { return 42; } end",
-    "nb select<int> over default: -> { return 42; } end",
-    "try select<int> over default: -> { return 42; } end",
-    "do select<int> over default: -> { return 42; } end",
-    "do select over default: -> { return 42; } end",
-    "nb select over default: -> { return 42; } end",
-    "select { default: -> { return 42; } }"
-})
+// Distinguish unresolved scalar names from missing numeric operands.
+foreach (string name in new[] { "undeclared_value", "_missing", "Missing2" })
 {
-    RejectDiagnostic(() => OresParser.Parse(source),
-        "Static select requires checked Channel/Future arbitration",
-        "scalar frontend must fail closed on typed select syntax");
-    RejectDiagnostic(() => OresStructuredParser.Parse(source),
-        "Static select requires checked Channel/Future arbitration",
-        "structured frontend must fail closed on typed select syntax");
+    string unresolved = "pub fnc main(): int { return " + name + "; }";
+    RejectDiagnostic(() => OresParser.Parse(unresolved),
+        $"Unknown or unsupported scalar identifier at offset {unresolved.IndexOf(name, StringComparison.Ordinal)}",
+        "scalar identifier rejection preserves source offset");
 }
-Require(OresParser.Parse("fnc main():int{return 42;} /* select<int> over ignored */") is not null,
-    "comment-only typed select must not trigger scalar admission");
-Require(OresStructuredParser.Parse(
-    "fnc main()->int { /* select<int> over ignored */ return 42; }").Body.Count == 1,
-    "comment-only typed select must not trigger structured admission");
+RejectDiagnostic(() => OresParser.Parse("pub fnc main(): int { return ); }"),
+    "Expected integer", "punctuation remains a numeric grammar error");
+Require(OresParser.Parse("pub fnc main(): int { return 40 + 2; }") is Binary,
+    "scalar arithmetic remains accepted");
+
+StaticSelectAdmissionTests.Run();
 
 // Guarded mutable sharing is not implemented in either .NET bootstrap parser.
 // Enforce the dedicated lexer-owned error and the original source offset.
@@ -1016,8 +1034,10 @@ Require(OresParser.Parse("fnc main():int{return 1;} // \ud83d\ude00") is Literal
 foreach (var division in new[] { "3/2", "4/2", "5/0", "-9223372036854775808/-1" })
 {
     try { OresParser.Parse("fnc main():int{return " + division + ";}"); }
-    catch (FormatException ex) when (ex.Message.Contains("float result lowering")) { continue; }
-    throw new Exception("Source division must fail closed until float lowering exists");
+    catch (FormatException ex) when (ex.Message.Contains(
+        "Checked integer division requires typed guest error lowering; unsupported in the i64 source subset",
+        StringComparison.Ordinal)) { continue; }
+    throw new Exception("Scalar source division must fail closed until typed guest error lowering exists");
 }
 // Explicit internal checked-i64 IR remains available; it is not source /.
 foreach (var pair in new[] { (long.MinValue, -1L), (5L, 0L) })
@@ -1284,6 +1304,51 @@ try
     CilEmitter.EmitLibrary(lowered, irRepro);
     Require(File.ReadAllBytes(irGenerated).AsSpan().SequenceEqual(File.ReadAllBytes(irRepro)),
         "verified IR PE emission is byte-for-byte deterministic");
+
+    // Both spellings must share the verified integer-XOR path. These
+    // reference interpreters and PE inspections are not CLR/NativeAOT runs.
+    foreach (var (expression, expected) in new (string, long)[] {
+        ("12 ^^ 10", 6),
+        ("(-9223372036854775807 - 1) ^^ -1", long.MaxValue),
+        ("9223372036854775807 ^^ -1", long.MinValue),
+        ("-9223372036854775808 ^^ -9223372036854775808", 0),
+        ("4294967296 ^^ 1", 4294967297L),
+        ("9007199254740993 ^^ 9007199254740992", 1),
+        ("5 + 6 ^^ 4", 15),
+        ("11 ^^ 4 ^^ 7", 8),
+        ("(12 ^^ 10) * 7", 42),
+        ("Integer.bitXor(12, 10)", 6)
+    })
+    {
+        var xorAst = OresParser.Parse($"fnc main():int{{return {expression};}}");
+        var xorIr = OresIrLowering.Lower(xorAst);
+        Require(xorIr.Instructions.Any(op => op.Opcode == IrOpcode.BitXor),
+            "verified integer XOR opcode: " + expression);
+        Require(OresIrReferenceEvaluator.Evaluate(xorIr) == expected,
+            "integer XOR reference result: " + expression);
+        foreach (bool directAst in new[] { false, true })
+        {
+            var xorPath = Path.Combine(folder, $"OresGenerated.xor.{Guid.NewGuid():N}.dll");
+            if (directAst) CilEmitter.EmitLibrary(xorAst, xorPath);
+            else CilEmitter.EmitLibrary(xorIr, xorPath);
+            using var xorAssembly = AssemblyDefinition.ReadAssembly(xorPath);
+            var xorEntry = xorAssembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+            Require(xorEntry.Body.Instructions.Any(i => i.OpCode.Code == Code.Xor),
+                "actual emitted CIL xor opcode: " + expression);
+            Require(CilReferenceEvaluator.Evaluate(xorEntry) == expected,
+                "emitted CIL reference result: " + expression);
+        }
+    }
+    foreach (string invalid in new[] {
+        "return 12 ^ 10;", "return 12 ^ ^ 10;",
+        "return 12 ^/* gap */^ 10;", "return 12 ^^= 10;",
+        "return true ^^ false;", "return 12 ^^ true;",
+        "let int x = 12; x ^^= 10; return x;",
+        "val int x = 12; x ^^= 10; return x;"
+    })
+        Reject(() => OresParser.Parse($"fnc main():int{{{invalid}}}"),
+            "unsupported scalar XOR source: " + invalid);
 
     // Compare the independent IR reference interpreter with the emitted CIL
     // for normal arithmetic, divide-by-zero and signed overflow.

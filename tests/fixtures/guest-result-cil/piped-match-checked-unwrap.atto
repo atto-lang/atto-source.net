@@ -1,0 +1,39 @@
+fnc optional(bool present): Option<int> {
+    if present { return Some(7); }
+    return None;
+}
+
+fnc choose(bool present): int {
+    val Option<int> x = optional(present);
+    return trap! x.unwrap() |> match<int> over
+        on Ok(n): int -> n,
+        on Err(): int -> 42,
+    end;
+}
+
+fnc observe(Option<int> x): int {
+    return trap! x.unwrap() |> match<int> over
+        on Ok(n): int -> n,
+        on Err(e): int -> e is OptionUnwrapError ? 42 : 1,
+    end;
+}
+
+fnc downstream(): int {
+    throw! new Error("downstream");
+}
+
+fnc arm_failure(): int {
+    val Option<int> x = None;
+    return trap! x.unwrap() |> match<int> over
+        on Ok(n): int -> n,
+        on Err(): int -> downstream(),
+    end;
+}
+
+pub fnc main(): int {
+    guard choose(true) eq 7, choose(false) eq 42 { return 1; }
+    guard observe(None) eq 42, observe(Some(7)) eq 7 { return 2; }
+    val caught = trap! arm_failure();
+    guard caught.is_err() { return 3; }
+    return 42;
+}

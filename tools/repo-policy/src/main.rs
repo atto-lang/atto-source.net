@@ -69,6 +69,7 @@ fn upstreams(repository: &str) -> Option<&'static [&'static str]> {
         "oreslang-source.hdl" => Some(&["oreslang-common-source", "oreslang-target-profiles"]),
         "oreslang-source.forge" => Some(&["oreslang-common-source", "oreslang-target-profiles"]),
         "oreslang-source.net" => Some(&["oreslang-common-source", "oreslang-target-profiles"]),
+        "atto-source.net" => Some(&["atto-common-source", "atto-target-profiles"]),
         _ => None,
     }
 }
@@ -106,9 +107,13 @@ fn verify_bytes(raw: &[u8], repository_name: &str) -> Result<BTreeMap<String, Va
         Some(Value::String(protocol)) if protocol == PROTOCOL => {}
         _ => return Err(invalid("unsupported protocol")),
     }
+    // The migrated .NET repository has a distinct exact declaration identity.
+    // Keep legacy fixtures valid only under their legacy physical root names.
+    let owner = if repository_name == "atto-source.net" { "atto-lang" }
+        else { "ores-truffle-oreslang" };
     match value.get("repository") {
         Some(Value::String(repository))
-            if repository == &format!("ores-truffle-oreslang/{repository_name}") => {}
+            if repository == &format!("{owner}/{repository_name}") => {}
         _ => return Err(invalid("repository identity mismatch")),
     }
     match value.get("role") {
@@ -372,6 +377,23 @@ mod tests {
         for repo in repos {
             let verified = verify_bytes(&valid(repo), repo).unwrap();
             assert_eq!(verified["evidence"], Value::String("not-attested".into()));
+        }
+    }
+
+    #[test]
+    fn migrated_net_identity_rejects_legacy_and_cross_repository_authority() {
+        let raw = include_bytes!("../../../.oreslang/integration.json");
+        assert!(verify_bytes(raw, "atto-source.net").is_ok());
+        assert!(verify_bytes(raw, "oreslang-source.net").is_err());
+        assert!(verify_bytes(raw, "atto-source.java").is_err());
+        assert!(verify_bytes(&valid("oreslang-source.net"), "atto-source.net").is_err());
+        let text = std::str::from_utf8(raw).unwrap();
+        for bad in [
+            text.replace("atto-lang/atto-source.net", "other-org/atto-source.net"),
+            text.replace("atto-common-source", "oreslang-common-source"),
+            text.replace("not-attested", "passed"),
+        ] {
+            assert!(verify_bytes(bad.as_bytes(), "atto-source.net").is_err());
         }
     }
 

@@ -1,0 +1,3 @@
+pub fnc main(): int {
+    return sync task<int> { return copy! 42; };
+}
