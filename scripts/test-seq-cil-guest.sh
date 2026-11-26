@@ -26,7 +26,7 @@ run_expected() {
   }
   echo "SEQ_EXECUTED $label exit=$rc"
 }
-for name in seq-nested seq-call-args seq-singleton seq-pipeline-tail seq-pipeline-result seq-bare-return; do
+for name in seq-nested seq-call-args seq-singleton seq-pipeline-tail seq-pipeline-result seq-bare-return seq-bare-call-argument; do
   compile "fixtures/cil/$name.atto"
   replay="$work/$name.dll"
   dotnet run --no-build -c Release --project "$compiler" -- "fixtures/cil/$name.atto" "$replay"
@@ -49,7 +49,7 @@ reject() {
   }
   echo "SEQ_REJECTED $src $code"
 }
-for entry in seq-empty:E_SEQ_EMPTY seq-leading:E_SEQ_COMMA seq-trailing:E_SEQ_COMMA seq-semicolon:E_PARSE seq-tuple:E_PARSE seq-too-many:E_LIMIT seq-bare-empty:E_SEQ_EMPTY seq-bare-trailing:E_SEQ_COMMA seq-bare-argument:E_PARSE; do
+for entry in seq-empty:E_SEQ_EMPTY seq-leading:E_SEQ_COMMA seq-trailing:E_SEQ_COMMA seq-semicolon:E_PARSE seq-tuple:E_PARSE seq-too-many:E_LIMIT seq-bare-empty:E_SEQ_EMPTY seq-bare-trailing:E_SEQ_COMMA seq-bare-argument:E_SEQ_COMMA seq-bare-argument-arity:E_ARITY; do
   reject "fixtures/cil/negative/${entry%%:*}.atto" "${entry#*:}"
 done
 reject fixtures/cil/seq-prefix-divzero.atto E_I64_DIVISION_BY_ZERO
@@ -66,4 +66,4 @@ rc=$?
 set -e
 test "$rc" -ne 0 && test "$rc" -ne 42 && test ! -s "$work/stdout" && grep -Fq OverflowException "$work/stderr"
 echo 'SEQ_PREFIX_OVERFLOW_CORECLR_PASS'
-echo 'ATTO_DIRECT_CIL_SEQ_INTEGRATED_PASS positive_sources=6 native_executions=6 managed_executions=6 negative_sources=13 prefix_overflow_coreclr=1'
+echo 'ATTO_DIRECT_CIL_SEQ_INTEGRATED_PASS positive_sources=7 native_executions=7 managed_executions=7 negative_sources=14 prefix_overflow_coreclr=1'

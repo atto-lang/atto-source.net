@@ -199,20 +199,35 @@ internal sealed class Parser
     private List<Expression> Arguments(int depth)
     {
         Require("(");
+        return ArgumentsAfterOpen(depth);
+    }
+
+    private bool StartsBareSequence() => Peek == "seq" && _tokens[_position + 1] != "(";
+
+    // A bare sequence consumes the remaining comma list as one final argument.
+    // Grouped seq remains an ordinary expression at any argument position.
+    private List<Expression> ArgumentsAfterOpen(int depth)
+    {
         List<Expression> args = [];
         if (Peek != ")") do
         {
+            if (args.Count >= 8) throw new CompilerError("E_LIMIT", "8 call arguments");
+            if (StartsBareSequence())
+            {
+                _position++;
+                args.Add(ParseSequenceItems(depth + 1));
+                return args; // ParseSequenceItems consumed the call's close.
+            }
             args.Add(ParseExpr(0, depth + 1));
-            if (args.Count > 8) throw new CompilerError("E_LIMIT", "8 call arguments");
         } while (Eat(","));
         Require(")");
         return args;
     }
 
-    // Bare seq is a return-context production. Nested call commas stay in ParseExpr.
+    // Return-position bare seq owns commas until the semicolon.
     private Expression ParseReturnExpr()
     {
-        if (Peek == "seq" && _tokens[_position + 1] != "(")
+        if (StartsBareSequence())
         {
             _position++;
             return ParseSequenceItems(0, bareReturn: true);
@@ -273,14 +288,7 @@ internal sealed class Parser
             var name = Name();
             if (Eat("("))
             {
-                List<Expression> args = [];
-                if (Peek != ")") do
-                {
-                    args.Add(ParseExpr(0, depth + 1));
-                    if (args.Count > 8) throw new CompilerError("E_LIMIT", "8 call argument limit");
-                } while (Eat(","));
-                Require(")");
-                left = new Call(name, args);
+                left = new Call(name, ArgumentsAfterOpen(depth));
             }
             else left = new Arg(name);
         }
