@@ -324,6 +324,17 @@ public static class OresIrLowering
                         results.Push(EmitBinary(opcode, left, right));
                         break;
                     }
+                    case QuantityAttachment attachment:
+                    {
+                        var value = results.Pop();
+                        if (!value.Unit.IsScalar)
+                            throw new FormatException("E_UNIT_ATTACHMENT: unit attachment requires dimensionless scale one");
+                        results.Push(new Operand(value.Id, attachment.Unit));
+                        break;
+                    }
+                    case QuantityScalarCast:
+                        results.Peek().RequireScalar();
+                        break;
                     case QuantityDivision:
                     {
                         var right = results.Pop();
@@ -367,6 +378,14 @@ public static class OresIrLowering
                         break;
                     case QuantityLiteral literal:
                         results.Push(Constant(literal.Value, literal.Unit));
+                        break;
+                    case QuantityAttachment attachment:
+                        pending.Push(new Pending(node, true));
+                        pending.Push(new Pending(attachment.Value, false));
+                        break;
+                    case QuantityScalarCast cast:
+                        pending.Push(new Pending(node, true));
+                        pending.Push(new Pending(cast.Value, false));
                         break;
                     case QuantityDivision quotient:
                         pending.Push(new Pending(node, true));

@@ -1095,8 +1095,9 @@ public static partial class OresParser
             Expect("<");
             var unit = ReadUnit();
             Expect(">");
-            if (Take("."))
+            if (Current.Text == "." && tokens[_index + 1].Text != "<")
             {
+                _index++;
                 Expect("to_unit");
                 Expect("<");
                 var target = ReadUnit();
@@ -1258,6 +1259,12 @@ public static partial class OresParser
                 _index++;
                 left = new Binary(op, left, ParseMul(depth + 1));
             }
+            int casts = 0;
+            while (Take("as"))
+            {
+                CheckDepth(depth + ++casts);
+                left = ApplyScalarCastOrUnit(left, ReadQuantityName(), unitOnly: false, legacyUnit: true);
+            }
             if (Current.Text is "|>" or "<|")
                 throw new FormatException(
                     $"Value pipeline requires named callable lowering; unsupported in .NET i64 bootstrap at offset {Current.Offset}");
@@ -1286,9 +1293,56 @@ public static partial class OresParser
             return left;
         }
 
+        private Expression ApplyScalarCastOrUnit(Expression value, string target, bool unitOnly, bool legacyUnit)
+        {
+            if (unitOnly || (legacyUnit && _units.ContainsKey(target)))
+            {
+                if (!_units.TryGetValue(target, out var unit) || target is "int" or "i64" or "i32")
+                    throw new FormatException("E_UNIT_NAME: unknown or ambiguous unit");
+                // Literal attachment can use the existing exact literal conversion path.
+                if (value is Literal number) return new QuantityLiteral(number.Value, unit);
+                return new QuantityAttachment(value, unit);
+            }
+            if (target is not ("int" or "i64"))
+                throw new FormatException("E_UNSUPPORTED_CAST: only signed-i64 identity casts are admitted in the scalar profile");
+            return new QuantityScalarCast(value);
+        }
+
         private Expression ParseUnary(int depth)
         {
+            var value = ParseUnaryBase(depth);
+            int links = 0;
+            while ((Current.Text == "::" || Current.Text == ".") &&
+                   _index + 1 < tokens.Count && tokens[_index + 1].Text == "<")
+            {
+                CheckDepth(depth + ++links);
+                bool unitOnly = Take(".");
+                if (!unitOnly) Expect("::");
+                Expect("<");
+                string target = ReadQuantityName();
+                Expect(">");
+                value = ApplyScalarCastOrUnit(value, target, unitOnly, legacyUnit: true);
+            }
+            if (value is QuantityLiteral quantity && Current.Text == "." &&
+                    _index + 1 < tokens.Count && tokens[_index + 1].Text == "to_unit")
+            {
+                Expect("."); Expect("to_unit"); Expect("<");
+                var target = ReadUnit();
+                Expect(">"); Expect("("); Expect(")");
+                value = new QuantityLiteral(quantity.Unit.ConvertExact(quantity.Value, target), target);
+            }
+            return value;
+        }
+
+        private Expression ParseUnaryBase(int depth)
+        {
             CheckDepth(depth);
+            if (Take("<"))
+            {
+                string target = ReadQuantityName();
+                Expect(">");
+                return ApplyScalarCastOrUnit(ParseUnary(depth + 1), target, unitOnly: false, legacyUnit: false);
+            }
             if (Current.Text.Length > 0 && Current.Text[0] is '\'' or '"' or '\u0060')
                 throw new FormatException(
                     $"STRING_BACKEND_UNSUPPORTED: quoted strings and template interpolation require typed String CIL/NativeAOT lowering at offset {Current.Offset}");

@@ -363,6 +363,39 @@ public static partial class OresParser
             throw new FormatException("E_REFINEMENT_EXPORT: verified source requires a public main");
         }
 
+        private QuantityTerm AttachVerifiedUnit(QuantityTerm term, string name)
+        {
+            if (!_units.TryGetValue(name, out var unit))
+                throw new FormatException("E_UNIT_NAME: unknown unit");
+            if (refinementAliases.ContainsKey(name) || name is "int" or "i64" or "i32")
+                throw new FormatException("E_UNIT_NAME: ambiguous unit and type target");
+            if (!term.Type.Unit.IsScalar)
+                throw new FormatException("E_UNIT_ATTACHMENT: unit attachment requires dimensionless scale one");
+            CheckDepth(term.Height + 1);
+            return new QuantityTerm(term.Expression, term.Type with { Unit = unit }, term.Height + 1);
+        }
+
+        private QuantityTerm ApplyVerifiedCast(int at, QuantityTerm term, RefinedQuantity target)
+        {
+            if (target.Unit.IsScalar && !term.Type.Unit.IsScalar)
+                throw new FormatException("E_UNIT_ERASURE: scalar cast cannot erase units");
+            target.Unit.RequireCompatible(term.Type.Unit);
+            if (term.Height + 1 >= MaxDepth)
+                throw new FormatException("E_UNIT_LIMIT: quantity expression is too deep");
+            var range = term.Type.Range.OnNormalResultWithin(target.Range);
+            return new QuantityTerm(
+                new StructuredCheckRefinement(at, term.Expression, target.Range.Minimum, target.Range.Maximum),
+                target with { Range = range }, term.Height + 1, term.UpperBounds);
+        }
+
+        private RefinedQuantity ReadVerifiedCastTarget() => Take("i64") ? RefinedQuantity.Scalar : ReadRefinedType();
+
+        private QuantityTerm ReadAndApplyVerifiedCast(int at, QuantityTerm term)
+        {
+            if (_units.ContainsKey(Current.Text)) return AttachVerifiedUnit(term, ReadQuantityName());
+            return ApplyVerifiedCast(at, term, ReadVerifiedCastTarget());
+        }
+
         private QuantityTerm VerifiedExpression(int depth)
         {
             var term = VerifiedSum(depth);
@@ -372,14 +405,7 @@ public static partial class OresParser
                 _index++;
                 if (Current.Text == "?")
                     throw new FormatException("E_REFINEMENT_CAST: optional refinement casts are unsupported");
-                var target = ReadRefinedType();
-                target.Unit.RequireCompatible(term.Type.Unit);
-                if (term.Height + 1 >= MaxDepth)
-                    throw new FormatException("E_UNIT_LIMIT: quantity expression is too deep");
-                var range = term.Type.Range.OnNormalResultWithin(target.Range);
-                term = new QuantityTerm(
-                    new StructuredCheckRefinement(at, term.Expression, target.Range.Minimum, target.Range.Maximum),
-                    target with { Range = range }, term.Height + 1, term.UpperBounds);
+                term = ReadAndApplyVerifiedCast(at, term);
             }
             return term;
         }
@@ -449,7 +475,30 @@ public static partial class OresParser
 
         private QuantityTerm VerifiedAtom(int depth)
         {
+            var term = VerifiedAtomBase(depth);
+            while (Current.Text is "." or "::" && _index + 1 < tokens.Count && tokens[_index + 1].Text == "<")
+            {
+                int at = Current.Offset;
+                bool unitOnly = Take(".");
+                if (!unitOnly) Expect("::");
+                Expect("<");
+                term = unitOnly ? AttachVerifiedUnit(term, ReadQuantityName()) : ReadAndApplyVerifiedCast(at, term);
+                Expect(">");
+            }
+            return term;
+        }
+
+        private QuantityTerm VerifiedAtomBase(int depth)
+        {
             CheckDepth(depth);
+            if (Current.Text == "<")
+            {
+                int offset = Current.Offset;
+                _index++;
+                var target = ReadVerifiedCastTarget();
+                Expect(">");
+                return ApplyVerifiedCast(offset, VerifiedAtom(depth + 1), target);
+            }
             if (Take("("))
             {
                 var term = VerifiedExpression(depth + 1);
@@ -482,8 +531,9 @@ public static partial class OresParser
             {
                 unit = ReadUnit();
                 Expect(">");
-                if (Take("."))
+                if (Current.Text == "." && tokens[_index + 1].Text != "<")
                 {
+                    _index++;
                     Expect("to_unit");
                     Expect("<");
                     var target = ReadUnit();
