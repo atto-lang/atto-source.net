@@ -1,0 +1,24 @@
+fnc quotient(int numerator, int denominator): int {
+  return numerator / denominator;
+}
+
+fnc checked_value(bool enabled): int {
+  guard enabled { return 1; }
+  val int value = sync task<int> {
+    val success = trap! quotient(84, 2);
+    val failure = trap quotient(1, 0);
+    return match failure over
+      on Err(error) -> { return success.unwrap(); }
+      on Ok(n) -> { return 0; }
+    end;
+  };
+  guard value eq 42 else
+    ^ 2;
+  end
+  return value;
+}
+
+pub fnc main(): int {
+  guard checked_value(false) eq 1 { return 3; }
+  return checked_value(true);
+}

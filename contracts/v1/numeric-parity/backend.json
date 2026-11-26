@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0.0",
+  "backend": "net",
+  "reference_fixture_git_blob_sha": "80436f21a95816e2d5e40274daba9b923b3bcec9",
+  "capabilities": {
+    "source_i64": "implemented_unverified",
+    "checked_i64_overflow": "implemented_unverified",
+    "binary64_ordering": "unsupported_explicit",
+    "binary32_arithmetic": "unsupported_explicit",
+    "bigint_exact": "unsupported_explicit",
+    "decimal_exact": "unsupported_explicit",
+    "complex_binary64": "unsupported_explicit",
+    "decimal_matrix": "unsupported_explicit",
+    "source_division_to_float": "unsupported_explicit"
+  },
+  "evidence": {
+    "source_i64": {},
+    "checked_i64_overflow": {},
+    "binary64_ordering": {},
+    "binary32_arithmetic": {},
+    "bigint_exact": {},
+    "decimal_exact": {},
+    "complex_binary64": {},
+    "decimal_matrix": {},
+    "source_division_to_float": {}
+  },
+  "source_i64_fixture_git_blob_sha": "bbc319c19ecd007109d33592e210091eb267e5a2",
+  "source_i64_overflow_fixture_git_blob_sha": "2ce0b0ff5c52e54a788280fd64d67fa8dc32614a"
+}

@@ -1,0 +1,2 @@
+fnc fails(): int throws Error { throw Error("bad input"); }
+pub fnc main(): Result<int,Error> { return trap fails(); }

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Ores.Net.Fence.Tests</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../runtime/Ores.Net.Runtime/SelectContinuationFence.cs"
+             Link="SelectContinuationFence.cs" />
+    <Compile Include="../Ores.Net.Tests/SelectContinuationFenceSelfTest.cs"
+             Link="SelectContinuationFenceSelfTest.cs" />
+  </ItemGroup>
+</Project>

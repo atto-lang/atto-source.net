@@ -1,0 +1,8 @@
+fnc check(Option<int> value): int {
+    guard value.is_some() else return 0; end
+    return value.unwrap_or(1);
+}
+
+pub fnc main(): int {
+    return check(42);
+}

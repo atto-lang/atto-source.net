@@ -1,0 +1,12 @@
+// expect-exit: 42
+// .NET int/bool slice of core/num, core/cmp and core/mem (no Option<int>).
+import module num from "atto.core/num";
+import module cmp from "atto.core/cmp";
+import module mem from "atto.core/mem";
+pub fnc main(): int {
+  val int a = num.abs(0 - 5) + num.signum(0 - 9) + num.min(3, 9) + num.max(3, 9);
+  val int b = (num.saturating_add(num.max_value(), 1) - num.max_value()) + num.clamp(100, 0, 10);
+  val int c = num.pow(2, 3) + (num.saturating_sub(num.min_value(), 1) - num.min_value());
+  val int d = (mem.is_power_of_two(64) ? 1 : 0) + (mem.is_power_of_two(0) ? 10 : 0) + mem.log2_floor(1024);
+  return a + b + c + d + cmp.compare(1, 2) - 2;
+}

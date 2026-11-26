@@ -1,0 +1,425 @@
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+
+namespace Ores.Net.Compiler;
+
+/// <summary>
+/// Build-time lowering of a verified typed CFG to CIL. No guest code runs
+/// during compilation, and all control-flow destinations are predeclared.
+/// </summary>
+internal static class CfgCilEmitter
+{
+    internal static readonly TypeDefinitionHandle OptionResultType = MetadataTokens.TypeDefinitionHandle(3);
+    private static readonly FieldDefinitionHandle OptionTag = MetadataTokens.FieldDefinitionHandle(1);
+    private static readonly FieldDefinitionHandle OptionPayload = MetadataTokens.FieldDefinitionHandle(2);
+
+    internal static bool UsesOptionResult(VerifiedCfgFunction graph) =>
+        graph.ResultType == IrValueType.OptionI64 || graph.Blocks.Any(block =>
+            block.Instructions.Any(op => op.Type == IrValueType.OptionI64));
+
+    internal static void DefineOptionResult(MetadataBuilder metadata, AssemblyReferenceHandle runtime,
+        int methodCount)
+    {
+        var valueType = metadata.AddTypeReference(runtime, metadata.GetOrAddString("System"),
+            metadata.GetOrAddString("ValueType"));
+        var tag = new BlobBuilder();
+        new BlobEncoder(tag).FieldSignature().Boolean();
+        var payload = new BlobBuilder();
+        new BlobEncoder(payload).FieldSignature().Int64();
+        if (metadata.AddFieldDefinition(FieldAttributes.Assembly, metadata.GetOrAddString("HasValue"),
+                metadata.GetOrAddBlob(tag)) != OptionTag ||
+            metadata.AddFieldDefinition(FieldAttributes.Assembly, metadata.GetOrAddString("Value"),
+                metadata.GetOrAddBlob(payload)) != OptionPayload ||
+            metadata.AddTypeDefinition(TypeAttributes.NotPublic | TypeAttributes.SequentialLayout |
+                    TypeAttributes.Sealed | TypeAttributes.BeforeFieldInit,
+                metadata.GetOrAddString("Oreslang.Generated"), metadata.GetOrAddString("OptionI64Result"),
+                valueType, OptionTag, MetadataTokens.MethodDefinitionHandle(methodCount + 1)) != OptionResultType)
+            throw new FormatException("CFG Option<int> ABI metadata mismatch");
+    }
+
+    public static void EmitLibrary(VerifiedCfgFunction graph, string outputFile)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
+        if (graph.Parameters.Count != 0 || graph.ResultType != IrValueType.I64)
+            throw new FormatException("Standalone CFG CIL requires parameterless i64 Run entry");
+        if (UsesOptionResult(graph))
+            throw new FormatException("Tagged callable results require module CIL emission");
+        if (CfgGuestResultEmitter.Uses(graph))
+            throw new FormatException("Guest Result requires module CIL emission");
+        CilEmitter.EmitLibraryCore(outputFile, (metadata, bodies) =>
+            WriteMethod(graph, metadata, bodies, null, null));
+    }
+
+    public static void EmitLibrary(VerifiedCfgModule module, string outputFile)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
+        CilEmitter.EmitLibraryModuleCore(outputFile, module,
+            (graph, metadata, bodies, handles, guest) =>
+                WriteMethod(graph, metadata, bodies, handles, guest));
+    }
+
+    private static (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals) WriteMethod(
+        VerifiedCfgFunction graph, MetadataBuilder metadata,
+        MethodBodyStreamEncoder bodies,
+        IReadOnlyDictionary<string, MethodDefinitionHandle>? handles, CfgGuestResultEmitter? guest)
+    {
+            var blocks = graph.Blocks;
+            int valueCount = blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
+            int scratchCount = blocks.Sum(b => b.Parameters.Count);
+            if ((valueCount == 0 && graph.ResultType != IrValueType.Void) ||
+                valueCount > OresCfgVerifier.MaxValues ||
+                scratchCount > OresCfgVerifier.MaxValues)
+                throw new FormatException("CFG CIL local slot budget exceeded");
+
+            // First part of the local table is indexed by global dense SSA ID.
+            // The second part reserves *target-typed* edge scratch slots.
+            // Capturing all source values before touching block parameters
+            // makes edge assignments simultaneous, including swaps.
+            var types = new IrValueType[valueCount + scratchCount];
+            var targetScratch = new Dictionary<string, int[]>(StringComparer.Ordinal);
+            var targetParameters = new Dictionary<string, IReadOnlyList<CfgParameter>>(
+                StringComparer.Ordinal);
+            int nextScratch = valueCount;
+            foreach (var block in blocks)
+            {
+                foreach (var parameter in block.Parameters)
+                    types[parameter.Id] = parameter.Type;
+                foreach (var op in block.Instructions)
+                    types[op.ResultId] = op.Type;
+
+                var slots = new int[block.Parameters.Count];
+                for (int i = 0; i < slots.Length; i++)
+                {
+                    slots[i] = nextScratch;
+                    types[nextScratch++] = block.Parameters[i].Type;
+                }
+                targetScratch.Add(block.Name, slots);
+                targetParameters.Add(block.Name, block.Parameters);
+            }
+            if (nextScratch != types.Length)
+                throw new FormatException("CFG local layout is inconsistent");
+
+            var signatureBlob = new BlobBuilder();
+            var locals = new BlobEncoder(signatureBlob).LocalVariableSignature(types.Length);
+            foreach (var type in types)
+            {
+                var encoded = locals.AddVariable().Type();
+                switch (type)
+                {
+                    case IrValueType.I64: encoded.Int64(); break;
+                    case IrValueType.Bool: encoded.Boolean(); break;
+                    case IrValueType.OptionI64: encoded.Type(OptionResultType, isValueType: true); break;
+                    case IrValueType.GuestError:
+                    case IrValueType.GuestText:
+                    case IrValueType.ResultI64:
+                    case IrValueType.ResultOptionI64:
+                    case IrValueType.ResultI64Text:
+                    case IrValueType.ResultI64TextOrError:
+                        if (guest is null) throw new FormatException("Missing guest Result metadata");
+                        guest.Encode(encoded, type);
+                        break;
+                    default: throw new FormatException("Unsupported CFG local type");
+                }
+            }
+            var signature = metadata.AddStandaloneSignature(
+                metadata.GetOrAddBlob(signatureBlob));
+
+            var code = new BlobBuilder();
+            var flow = new ControlFlowBuilder();
+            var il = new InstructionEncoder(code, flow);
+            var labels = new Dictionary<string, LabelHandle>(StringComparer.Ordinal);
+            MemberReferenceHandle cooperate = default;
+            foreach (var block in blocks)
+                labels.Add(block.Name, il.DefineLabel());
+
+            // The input list is not required to put its entry block first.
+            // A jump to the entry is explicit; there is no implicit fallthrough.
+            il.Branch(ILOpCode.Br, labels[graph.Entry]);
+
+            void Transfer(string destination, IReadOnlyList<int> arguments)
+            {
+                var scratch = targetScratch[destination];
+                var destinationParameters = targetParameters[destination];
+                if (scratch.Length != arguments.Count)
+                    throw new FormatException("Unverified CFG edge arity");
+
+                // Stage all incoming values before clobbering any destination.
+                for (int i = 0; i < arguments.Count; i++)
+                {
+                    il.LoadLocal(arguments[i]);
+                    il.StoreLocal(scratch[i]);
+                }
+                for (int i = 0; i < arguments.Count; i++)
+                {
+                    il.LoadLocal(scratch[i]);
+                    il.StoreLocal(destinationParameters[i].Id);
+                }
+                il.Branch(ILOpCode.Br, labels[destination]);
+            }
+
+            foreach (var block in blocks)
+            {
+                il.MarkLabel(labels[block.Name]);
+                foreach (var op in block.Instructions)
+                {
+                    switch (op.Opcode)
+                    {
+                        case CfgOpcode.Argument:
+                            il.LoadArgument(checked((int)op.I64Constant!.Value));
+                            break;
+                        case CfgOpcode.Call:
+                        case CfgOpcode.TrapCall:
+                            if (handles is null || op.Target is null ||
+                                !handles.TryGetValue(op.Target, out var callee) ||
+                                op.Arguments is null)
+                                throw new FormatException("Unlinked CFG native static method call");
+                            if (op.Opcode == CfgOpcode.TrapCall)
+                            {
+                                if (guest is null) throw new FormatException("Missing typed trap metadata");
+                                guest.WriteTrap(il, flow, callee, op.Arguments, op.ResultId);
+                                continue;
+                            }
+                            foreach (int argument in op.Arguments)
+                                il.LoadLocal(argument);
+                            il.Call(callee);
+                            break;
+                        case CfgOpcode.ConstantI64:
+                            il.LoadConstantI8(op.I64Constant!.Value);
+                            break;
+                        case CfgOpcode.ConstantBool:
+                            il.LoadConstantI4(op.BoolConstant!.Value ? 1 : 0);
+                            break;
+                        case CfgOpcode.InlineCooperate:
+                            if (cooperate.IsNil)
+                            {
+                                var runtime = metadata.AddAssemblyReference(metadata.GetOrAddString("Ores.Net.Runtime"),
+                                    new Version(1, 0, 0, 0), default, default, default, default);
+                                var owner = metadata.AddTypeReference(runtime, metadata.GetOrAddString("Ores.Net.Runtime"),
+                                    metadata.GetOrAddString("RootInlineCooperation"));
+                                var cooperateSignature = new BlobBuilder();
+                                new BlobEncoder(cooperateSignature).MethodSignature().Parameters(0,
+                                    result => result.Type().Boolean(), _ => { });
+                                cooperate = metadata.AddMemberReference(owner, metadata.GetOrAddString("Yield"),
+                                    metadata.GetOrAddBlob(cooperateSignature));
+                            }
+                            il.Call(cooperate);
+                            break;
+                        case CfgOpcode.PackOptionI64:
+                            il.LoadLocalAddress(op.ResultId);
+                            il.LoadLocal(op.Left!.Value);
+                            il.OpCode(ILOpCode.Stfld);
+                            il.Token(OptionTag);
+                            il.LoadLocalAddress(op.ResultId);
+                            il.LoadLocal(op.Right!.Value);
+                            il.OpCode(ILOpCode.Stfld);
+                            il.Token(OptionPayload);
+                            continue;
+                        case CfgOpcode.ReadOptionI64Tag:
+                        case CfgOpcode.ReadOptionI64Payload:
+                            il.LoadLocalAddress(op.Left!.Value);
+                            il.OpCode(ILOpCode.Ldfld);
+                            il.Token(op.Opcode == CfgOpcode.ReadOptionI64Tag ? OptionTag : OptionPayload);
+                            break;
+                        case CfgOpcode.ArrayIndexValidI64:
+                        {
+                            // Exactly 0 <= signed index < fixed length, with
+                            // no unchecked address calculation or arithmetic
+                            // overflow. Both branches have empty IL stacks.
+                            var invalid = il.DefineLabel();
+                            var finish = il.DefineLabel();
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadConstantI8(0);
+                            il.OpCode(ILOpCode.Clt);
+                            il.Branch(ILOpCode.Brtrue, invalid);
+                            il.LoadLocal(op.Left.Value);
+                            il.LoadConstantI8(op.I64Constant!.Value);
+                            il.OpCode(ILOpCode.Clt);
+                            il.StoreLocal(op.ResultId);
+                            il.Branch(ILOpCode.Br, finish);
+                            il.MarkLabel(invalid);
+                            il.LoadConstantI4(0);
+                            il.StoreLocal(op.ResultId);
+                            il.MarkLabel(finish);
+                            continue;
+                        }
+                        case CfgOpcode.OptionEqualI64:
+                        {
+                            // Short circuit on tags. Never inspect a None's
+                            // (inactive) payload, even if a hostile lowerer
+                            // has provided arbitrary data in that SSA slot.
+                            // No boxed values, reflection or runtime dispatch.
+                            var sameTag = il.DefineLabel();
+                            var bothSome = il.DefineLabel();
+                            var end = il.DefineLabel();
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadLocal(op.Arguments![0]);
+                            il.OpCode(ILOpCode.Ceq);
+                            il.Branch(ILOpCode.Brtrue, sameTag);
+                            il.LoadConstantI4(0);
+                            il.StoreLocal(op.ResultId);
+                            il.Branch(ILOpCode.Br, end);
+                            il.MarkLabel(sameTag);
+                            il.LoadLocal(op.Left.Value);
+                            il.Branch(ILOpCode.Brtrue, bothSome);
+                            il.LoadConstantI4(1);
+                            il.StoreLocal(op.ResultId);
+                            il.Branch(ILOpCode.Br, end);
+                            il.MarkLabel(bothSome);
+                            il.LoadLocal(op.Right!.Value);
+                            il.LoadLocal(op.Arguments[1]);
+                            il.OpCode(ILOpCode.Ceq);
+                            il.StoreLocal(op.ResultId);
+                            il.MarkLabel(end);
+                            continue;
+                        }
+                        case CfgOpcode.BoolNot:
+                            // The verifier proves Left is a bool SSA value.
+                            // Comparing to zero emits a normalized Boolean.
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadConstantI4(0);
+                            il.OpCode(ILOpCode.Ceq);
+                            break;
+                        case CfgOpcode.OptionOrI64:
+                        {
+                            // All three operands were type/SSA/dominance checked.
+                            // On both paths, store exactly one i64 result with
+                            // an empty evaluation stack at the join label.
+                            var some = il.DefineLabel();
+                            var end = il.DefineLabel();
+                            il.LoadLocal(op.Left!.Value);
+                            il.Branch(ILOpCode.Brtrue, some);
+                            il.LoadLocal(op.Arguments![0]);
+                            il.StoreLocal(op.ResultId);
+                            il.Branch(ILOpCode.Br, end);
+                            il.MarkLabel(some);
+                            il.LoadLocal(op.Right!.Value);
+                            il.StoreLocal(op.ResultId);
+                            il.MarkLabel(end);
+                            continue;
+                        }
+                        case CfgOpcode.ShiftLeftI64:
+                        case CfgOpcode.ShiftRightLogicalI64:
+                        case CfgOpcode.ShiftRightArithmeticI64:
+                            // Distance guard without any MemberRef: 63 - d as
+                            // unsigned overflows exactly when d is outside
+                            // 0..63 (negative d is a huge unsigned value), and
+                            // raises the same checked OverflowException as the
+                            // checked arithmetic opcodes.
+                            il.LoadConstantI8(63);
+                            il.LoadLocal(op.Right!.Value);
+                            il.OpCode(ILOpCode.Sub_ovf_un);
+                            il.OpCode(ILOpCode.Pop);
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadLocal(op.Right!.Value);
+                            // CIL shift amounts are int32; the guard proved 0..63.
+                            il.OpCode(ILOpCode.Conv_i4);
+                            il.OpCode(op.Opcode switch
+                            {
+                                CfgOpcode.ShiftLeftI64 => ILOpCode.Shl,
+                                CfgOpcode.ShiftRightLogicalI64 => ILOpCode.Shr_un,
+                                _ => ILOpCode.Shr
+                            });
+                            break;
+                        case CfgOpcode.CheckedAdd:
+                        case CfgOpcode.CheckedSubtract:
+                        case CfgOpcode.CheckedMultiply:
+                        case CfgOpcode.CheckedDivide:
+                        case CfgOpcode.EqualI64:
+                        case CfgOpcode.NotEqualI64:
+                        case CfgOpcode.LessThanI64:
+                        case CfgOpcode.GreaterThanI64:
+                        case CfgOpcode.LessThanOrEqualI64:
+                        case CfgOpcode.GreaterThanOrEqualI64:
+                        case CfgOpcode.EqualBool:
+                        case CfgOpcode.NotEqualBool:
+                        case CfgOpcode.XorBool:
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadLocal(op.Right!.Value);
+                            il.OpCode(op.Opcode switch
+                            {
+                                CfgOpcode.CheckedAdd => ILOpCode.Add_ovf,
+                                CfgOpcode.CheckedSubtract => ILOpCode.Sub_ovf,
+                                CfgOpcode.CheckedMultiply => ILOpCode.Mul_ovf,
+                                CfgOpcode.CheckedDivide => ILOpCode.Div,
+                                CfgOpcode.EqualI64 => ILOpCode.Ceq,
+                                CfgOpcode.NotEqualI64 => ILOpCode.Ceq,
+                                CfgOpcode.LessThanI64 => ILOpCode.Clt,
+                                CfgOpcode.GreaterThanI64 => ILOpCode.Cgt,
+                                CfgOpcode.LessThanOrEqualI64 => ILOpCode.Cgt,
+                                CfgOpcode.GreaterThanOrEqualI64 => ILOpCode.Clt,
+                                CfgOpcode.EqualBool => ILOpCode.Ceq,
+                                CfgOpcode.NotEqualBool => ILOpCode.Ceq,
+                                CfgOpcode.XorBool => ILOpCode.Xor,
+                                _ => throw new FormatException("Unverified CFG opcode")
+                            });
+                            if (op.Opcode is CfgOpcode.NotEqualI64 or CfgOpcode.NotEqualBool or
+                                CfgOpcode.LessThanOrEqualI64 or
+                                CfgOpcode.GreaterThanOrEqualI64)
+                            {
+                                // ceq/clt/cgt return int32; compare with false to invert it.
+                                // This is deterministic, verifiable CIL without a
+                                // branch, dynamic dispatch or helper call.
+                                il.LoadConstantI4(0);
+                                il.OpCode(ILOpCode.Ceq);
+                            }
+                            break;
+                        default:
+                            if (guest is not null && guest.WriteOperation(il, op)) break;
+                            throw new FormatException("Unverified CFG instruction");
+                    }
+                    il.StoreLocal(op.ResultId);
+                }
+
+                switch (block.Terminator)
+                {
+                    case CfgReturn returned:
+                        il.LoadLocal(returned.ValueId);
+                        il.OpCode(ILOpCode.Ret);
+                        break;
+                    case CfgReturnVoid:
+                        // Void MethodDef signature and empty evaluation stack.
+                        il.OpCode(ILOpCode.Ret);
+                        break;
+                    case CfgSignal signal:
+                        if (guest is null) throw new FormatException("Missing guest effect metadata");
+                        guest.WriteSignal(il, signal);
+                        break;
+                    case CfgJump jump:
+                        Transfer(jump.Target, jump.Arguments);
+                        break;
+                    case CfgBranch conditional:
+                        // brtrue consumes the condition and leaves an empty
+                        // stack at BOTH successor transfer sequences.
+                        var trueEdge = il.DefineLabel();
+                        il.LoadLocal(conditional.Condition);
+                        il.Branch(ILOpCode.Brtrue, trueEdge);
+                        Transfer(conditional.FalseTarget, conditional.FalseArguments);
+                        il.MarkLabel(trueEdge);
+                        Transfer(conditional.TrueTarget, conditional.TrueArguments);
+                        break;
+                    default:
+                        throw new FormatException("Unverified CFG terminator");
+                }
+            }
+
+            // An explicit byte budget keeps CIL assembly serialization
+            // bounded even when the verifier allows many large edge payloads.
+            const int maxMethodCodeBytes = 4 * 1024 * 1024;
+            if (code.Count > maxMethodCodeBytes)
+                throw new FormatException("CFG CIL bytecode budget exceeded");
+
+            // Every block is entered with an empty stack, each instruction
+            // stores its result immediately, and the maximum temporary depth
+            // is two (binary operation); control-flow edges never merge stacks.
+            int maxStack = Math.Max(2, blocks.SelectMany(b => b.Instructions)
+                .Where(op => op.Opcode is CfgOpcode.Call or CfgOpcode.TrapCall)
+                .Select(op => op.Arguments!.Count).DefaultIfEmpty(0).Max());
+            int offset = bodies.AddMethodBody(il, maxStack: maxStack,
+                localVariablesSignature: signature,
+                attributes: MethodBodyAttributes.InitLocals);
+            return (offset, code, signatureBlob);
+    }
+}

@@ -1,0 +1,1 @@
+pub fnc main():int { return Record.of(left: 1, left: 2).left; }
