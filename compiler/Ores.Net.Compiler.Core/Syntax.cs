@@ -1503,7 +1503,10 @@ public static partial class OresParser
                 _index++;
             }
             Expect(",");
-            long second = ReadPureI64Literal();
+            // The static Pair key is effect-free. Preserve the second
+            // expression in the real checked scalar IR. Entry still requires
+            // pure literals because either operand may be discarded.
+            Expression second = isEntry ? new Literal(ReadPureI64Literal()) : ParseAdd(depth + 1);
             Expect(")");
             if (!Take("."))
                 throw new FormatException(
@@ -1514,12 +1517,12 @@ public static partial class OresParser
             if (isEntry)
             {
                 if (field == "key") return new Literal(first);
-                if (field == "value") return new Literal(second);
+                if (field == "value") return second;
                 throw new FormatException($"E_ENTRY_FIELD: only key/value projections are supported at offset {fieldAt}");
             }
             if (field == "first")
                 throw new FormatException($"E_PAIR_STRING_PROJECTION_UNSUPPORTED: string result needs typed CIL lowering at offset {fieldAt}");
-            if (field == "second") return new Literal(second);
+            if (field == "second") return second;
             throw new FormatException($"E_PAIR_FIELD: only first/second projections are supported at offset {fieldAt}");
         }
 
