@@ -237,7 +237,7 @@ public sealed class ActorPubSub
         {
             ActorRuntime.RequireHostPubSubAuthority(
                 "publish with an unbound ActorRef");
-            return _owner.Publish(GroupId, Name, publisher, value);
+            return _owner.Publish(GroupId, Name, publisher, value, reliableOnly: true);
         }
 
         public bool TryRead(ActorRef subscriber, out T value)
@@ -285,7 +285,7 @@ public sealed class ActorPubSub
         {
             ArgumentNullException.ThrowIfNull(context);
             context.ValidateActiveTurn();
-            return _owner.Publish(GroupId, Name, context.Self, value);
+            return _owner.Publish(GroupId, Name, context.Self, value, reliableOnly: true);
         }
 
         public bool TryRead(ActorContext context, out T value)
@@ -467,7 +467,8 @@ public sealed class ActorPubSub
         ulong groupId,
         string name,
         ActorRef publisher,
-        T value)
+        T value,
+        bool reliableOnly = false)
     {
         lock (_gate)
         {
@@ -477,9 +478,11 @@ public sealed class ActorPubSub
                 throw new InvalidOperationException(
                     "Publication requires live ActorGroup membership");
 
+            TopicState<T> topic = RequireTopicLocked<T>(groupId, name);
+            if (reliableOnly && topic.Policy != ActorTopicDeliveryPolicy.Reliable)
+                throw new InvalidOperationException("TryPublish requires a RELIABLE ActorGroup topic");
             T frozen = Freeze(value);
             int payloadBytes = MeasurePayloadBytes(frozen);
-            TopicState<T> topic = RequireTopicLocked<T>(groupId, name);
             PruneStaleLocked(groupId, topic);
             return topic.Publish(frozen, payloadBytes);
         }
@@ -778,6 +781,11 @@ public sealed class ActorPubSub
 
         private ActorPublishReceipt PublishReliable(T value, int payloadBytes)
         {
+            // Exhaustion is permanent, not retryable Full. Match Java/LLVM.
+            // Check before any queue or byte-credit preflight, but allocate
+            // the sequence only after every recipient can be admitted.
+            if (_lastSequence == ulong.MaxValue)
+                throw new InvalidOperationException("Actor topic sequence exhausted");
             int count = _subscribers.Count;
             foreach (SubscriptionEdge edge in _subscribers.Values)
             {

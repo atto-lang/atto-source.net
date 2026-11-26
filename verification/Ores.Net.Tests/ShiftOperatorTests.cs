@@ -98,6 +98,21 @@ internal static class ShiftOperatorTests
         Reject("return 1 ashr true;", "Shift requires int operands", "bool distance");
         Reject("const int x = 1 <<< 64;return x;", "outside 0..63", "const distance 64");
 
-        Console.WriteLine("PASS ShiftOperatorTests: <<<, >>>, ashr on the real CLR with 0..63 guard; << and >> rejected");
+        // Compile actual structured source and invoke its emitted PE on the
+        // CLR. The separate CIL interpreter cannot prove CLR stack validity.
+        Expect("let int a=12;let int b=10;return a ^^ b;", 6, "BW-003 runtime XOR");
+        Expect("let int a=-9223372036854775808;let int b=-1;a ^^=b;return a;", long.MaxValue, "compound MIN/MAX");
+        Expect("let int a=9223372036854775807;a ^^= -1;return a;", long.MinValue, "compound MAX/MIN");
+        Expect("let int a=-9223372036854775808;a ^^=a;return a;", 0, "compound self XOR");
+        Expect("let int a=9007199254740993;a ^^=9007199254740992;return a;", 1, "compound wide precision");
+        Expect("let int a=12;if true {a ^^=10;} return a;", 6, "compound branch SSA join");
+        Expect("let int a=12;let int n=0;while n<2 {a ^^=10;n=n+1;}return a;", 12, "compound loop SSA backedge");
+        Expect("return Xor(true,false) ? 42 : 0;", 42, "named Boolean XOR");
+        ExpectTrap("let int a=9223372036854775807;a ^^=a+1;return a;", "compound checked RHS overflow");
+        Reject("return true ^^ false ? 1 : 0;", "Integer XOR requires int operands", "Boolean punctuation XOR");
+        Reject("let bool a=true;a ^^=false;return 0;", "Compound XOR requires a mutable int local", "Boolean compound XOR");
+        Reject("val int a=12;a ^^=10;return a;", "E_IMMUTABLE_REBIND", "immutable compound XOR");
+
+        Console.WriteLine("PASS ShiftOperatorTests: checked shifts and canonical integer/compound XOR on the real CLR");
     }
 }

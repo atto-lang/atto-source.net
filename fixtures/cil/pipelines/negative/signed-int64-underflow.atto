@@ -1,0 +1,2 @@
+// positive magnitude outside 64-bit signed range cannot be negated into i64
+pub fnc main(): int -> -9223372036854775809;
