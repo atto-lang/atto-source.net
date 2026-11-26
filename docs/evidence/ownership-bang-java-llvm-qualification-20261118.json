@@ -1,0 +1,455 @@
+{
+  "schema": "oreslang-ownership-bang-source-local-qualification-v1",
+  "prepared_utc": "2026-11-19",
+  "classification": "PREPARATION_ONLY_NOT_EXECUTED",
+  "export_authorized": false,
+  "source_org_runner_admission": "UNRESOLVED",
+  "governance_issue": "https://github.com/ores-truffle-oreslang/oreslang-source.net/issues/260",
+  "runner_issue": "https://github.com/ores-truffle-oreslang/oreslang-source.net/issues/427",
+  "candidate_carrier": {
+    "repository": "quaestor-ledger-test/atto-ci",
+    "immutable_repository_id": 1458333874,
+    "authorization": "NOT_APPROVED",
+    "infrastructure_only": true,
+    "source_free_run_id": 44212748860,
+    "attempt": 2,
+    "job_id": 135231411544,
+    "job_conclusion": "success",
+    "substantive_steps_successful": 4,
+    "node_tests_passed": 2,
+    "artifact_id": 14483897425,
+    "artifact_name": "source-free-net560-canary-44212748860-2",
+    "artifact_zip_bytes": 611,
+    "artifact_zip_sha256": "436e090c4a1865a034debb13c9141a398e8c06ffb222c35977713e17e6938186"
+  },
+  "source_governance_readback": {
+    "policy_path": ".github/private-ci-independent-reviewer.json",
+    "independent_reviewer_enabled": false,
+    "independent_reviewer": null,
+    "disallowed_reviewer_ids": [
+      11139560,
+      2148448
+    ],
+    "active_destination_entries": 0,
+    "active_snapshot_entries": 0,
+    "protected_main_verified": false,
+    "approval_required": true
+  },
+  "targets": [
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.llvm",
+      "repository_id": 1410897874,
+      "pr": 1831,
+      "head_sha": "94c682798e6272c94174478a805deb1a5362c568",
+      "source_root_tree_sha": "5d4b50dd759bf5c5552feaec1e2272cc5ae8e8fb",
+      "tree_provenance": "historic source-local 2026-11-16 ledger for SAME commit SHA; must independently verify before any export",
+      "pr_merged": true,
+      "current_compiler_evidence": "NOT_EXECUTED",
+      "build_commands": [
+        "cmake -S . -B build -DBUILD_TESTING=ON",
+        "cmake --build build --target oreslang-llvmc oreslang-native-ownership-bang-aliases-test --parallel 2",
+        "ctest --test-dir build --output-on-failure -R '^native_ownership_bang_'"
+      ],
+      "required_test_groups": [
+        "native_ownership_bang_aliases_parser_and_checker",
+        "native_ownership_bang_*_guest",
+        "native_ownership_bang_*_O0",
+        "native_ownership_bang_*_O2",
+        "native_ownership_bang_*_reject",
+        "native_ownership_bang_*_sanitizer_runtime_smoke"
+      ],
+      "requirements": [
+        "CMake registered tests enumerated and selected count reconciled",
+        "all required cases executed; fail when disabled/missing",
+        "real emitted LLVM IR linked with Clang and actual guest runs where labeled guest",
+        "compiler-negative cases fail without emitted IR",
+        "fixture Git blob hashes checked",
+        "sanitizer-runtime smoke is not proof of instrumented Oreslang IR"
+      ]
+    },
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.java",
+      "repository_id": 1400792274,
+      "pr": 3112,
+      "head_sha": "e52172a7acd489d70ae10a62bcf47816b3e7cf32",
+      "source_root_tree_sha": null,
+      "tree_provenance": "NOT_AVAILABLE from current connector response; independent Git tree API readback mandatory before approval",
+      "pr_merged": true,
+      "current_compiler_evidence": "NOT_EXECUTED",
+      "build_commands": [
+        "mvn -B -ntp -Dtest=OwnershipBangAliasesTest,OwnershipBangGuestTest test"
+      ],
+      "required_test_groups": [
+        "OwnershipBangAliasesTest",
+        "OwnershipBangGuestTest"
+      ],
+      "requirements": [
+        "prove JUnit test counts and fixture SHA validation",
+        "execute actual Java/Truffle guest; expect stdout exactly 42 for each of compact/spaced/legacy",
+        ".atto guest execution is NOT Graal Native Image AOT",
+        "explicitly resolve borrow! mut canonical disagreement with spec before parity certification",
+        "checked handle aliases ref!/deref!/unref! need separate typed/runtime evidence or fail closed"
+      ]
+    }
+  ],
+  "cross_repo_spec": {
+    "repository": "ores-truffle-oreslang/attolang-language-spec.md",
+    "pr": 67,
+    "head_sha": "676b35a07f68436960c07281aee4f86fae8b3abc",
+    "canonical_mutable_borrow": "borrow! mut value",
+    "checked_handle_prefixes": [
+      "ref!",
+      "deref!",
+      "unref!"
+    ],
+    "status": "TARGET_NOT_CERTIFIED"
+  },
+  "admission_gate": [
+    "re-read current source PR SHA and independently resolve immutable root-tree SHA",
+    "require source-local trusted runner admission OR independent protected review and active exact SHA/tree/destination/test-plan authorization",
+    "require nonempty completed executable steps assigned to a runner for required jobs",
+    "reject cancelled, zero-step, skipped, missing, or ambiguous jobs",
+    "verify run attempt, expected workflow, test counts, exact guest behavior and downloaded artifact SHA256",
+    "never treat source-free carrier success as compiler parity",
+    "never mirror source or merge on this packet alone"
+  ],
+  "baseline_target_interpretation": "targets[] records merged baseline PRs, NOT the current correction PRs. Current correction heads are in current_followup_pr_targets[]; source root trees must be independently verified before any approval.",
+  "current_followup_pr_targets": [
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.java",
+      "repository_id": 1400792274,
+      "pr": 3186,
+      "head_sha": "176694acbbc09c365f434e906e7ed3c035a95193",
+      "source_root_tree_sha": "a4402e1967e0ed63fe39d26931ece935c341e820",
+      "draft": false,
+      "merged": true,
+      "mergeability_last_observed": null,
+      "root_tree_status": "READ_BACK_FROM_SOURCE_GIT_COMMIT_OBJECT",
+      "compiler_execution": "NOT_EXECUTED",
+      "tests": [
+        "OwnershipBangAliasesTest",
+        "OwnershipBangGuestTest"
+      ],
+      "planned_command": "mvn -B -ntp -Dtest=OwnershipBangAliasesTest,OwnershipBangGuestTest test",
+      "reviewed_fixture_blobs": {
+        "mut-canonical.atto": "a518f08a495763f349c7ab21baa5d61d0cfc7769",
+        "mut-compact.atto": "a7e3b55ebd128a671cdb48ede3557aee6dc1b2b0",
+        "mut-rt-tail.atto": "b1e982f0ca85291a5e9924e3c6ff571ba13efebe"
+      },
+      "notes": "GitHub reports source PR #3186 merged (not by this monitor); checked merged commit contains canonical parser and pinned fixtures. Post-merge source-free run 44435049581 job 135261692611 and report-checker run 44435049521 job 135261692072 failed zero-step/no artifacts. No JUnit/Truffle executed evidence. Source-local recovery CI proposal #3191 is separate, disabled and unexecuted.",
+      "merged_commit_sha": "1f6d48e2cb7f76dfe4fec3ad357319f17277439a",
+      "source_under_test_sha": "1f6d48e2cb7f76dfe4fec3ad357319f17277439a"
+    },
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.llvm",
+      "repository_id": 1410897874,
+      "pr": 1903,
+      "head_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c",
+      "source_root_tree_sha": "74aed6c4fa17b372b181886147b4594325458ed4",
+      "draft": true,
+      "merged": false,
+      "mergeability_last_observed": true,
+      "root_tree_status": "DIRECT_SOURCE_GIT_COMMIT_READBACK",
+      "compiler_execution": "NOT_EXECUTED",
+      "tests": [
+        "native_ownership_bang_aliases_parser_and_checker",
+        "native_ownership_bang_rt_borrow_mut_guest",
+        "native_ownership_bang_rt_borrow_mut_O0",
+        "native_ownership_bang_rt_borrow_mut_O2"
+      ],
+      "planned_command": "cmake -S . -B build -DBUILD_TESTING=ON && cmake --build build --target oreslang-llvmc oreslang-native-ownership-bang-aliases-test --parallel 2 && ctest --test-dir build --output-on-failure -R '^native_ownership_bang_'",
+      "reviewed_fixture_blobs": {
+        "rt-borrow-mut-native.atto": "e7b2cb178c266262a94df18dd88c46ae9d32632b"
+      },
+      "notes": "Current source #1903 was reconciled via a two-parent commit atop newer main, incorporating the previous ownership-bang feature head. Source parser, guest fixture immutable blob e7b2cb..., and all 24 native ownership-bang CTest registrations were read back at this exact SHA. Source LLVM workflows #44455440518, #44455440406 and #44455440517 finished with 0 executable steps/0 artifacts. Executed compiler and native guest evidence remains NOT_EXECUTED.",
+      "source_under_test_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c"
+    }
+  ],
+  "admission_probe_observations": [
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.java",
+      "run_id": 44430114082,
+      "job_id": 135247159045,
+      "source_head_sha": "bf020ce7c90e0cce21c25b8c3700780eaf6d41f0",
+      "superseded": true,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "logs": "404 BlobNotFound"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.llvm",
+      "run_id": 44429270289,
+      "job_id": 135247173762,
+      "source_head_sha": "d8291593d94d7cf5f73eebe3a755d4ede3c4604a",
+      "superseded": true,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "logs": "404 BlobNotFound"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.java",
+      "run_id": 44431180090,
+      "job_id": 135248641371,
+      "source_head_sha": "176694acbbc09c365f434e906e7ed3c035a95193",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "synthetic-smoke"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.java",
+      "run_id": 44431180451,
+      "job_id": 135248642487,
+      "source_head_sha": "176694acbbc09c365f434e906e7ed3c035a95193",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "copy-policy-junit"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.java",
+      "run_id": 44431180572,
+      "job_id": 135248644205,
+      "source_head_sha": "176694acbbc09c365f434e906e7ed3c035a95193",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "test"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.java",
+      "run_id": 44435049581,
+      "job_id": 135261692611,
+      "source_head_sha": "1f6d48e2cb7f76dfe4fec3ad357319f17277439a",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "physical-source"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.java",
+      "run_id": 44435049521,
+      "job_id": 135261692072,
+      "source_head_sha": "1f6d48e2cb7f76dfe4fec3ad357319f17277439a",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "receipt-checker-self-tests"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.llvm",
+      "run_id": 44455440518,
+      "job_id": 135329203080,
+      "source_head_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "real-llvm-guest"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.llvm",
+      "run_id": 44455440406,
+      "job_id": 135329202603,
+      "source_head_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "native-admission"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.llvm",
+      "run_id": 44455440517,
+      "job_id": 135329203352,
+      "source_head_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "llvm-native-ownership"
+    }
+  ],
+  "source_local_runner_recovery": {
+    "status": "ADMIN_REGISTRATION_REQUIRED_OFF_BY_DEFAULT",
+    "cross_org_source_export_permitted": false,
+    "admin_actions_completed": false,
+    "candidates": [
+      {
+        "repository": "ores-truffle-oreslang/oreslang-source.java",
+        "ci_pr": 3191,
+        "ci_workflow_head_sha": "0dbb0b7d3222435926383733dbab15cf035c0cea",
+        "source_under_test_sha": "1f6d48e2cb7f76dfe4fec3ad357319f17277439a",
+        "runner_label": "oreslang-bang-java-isolated",
+        "approved": false,
+        "enabled": false,
+        "executed": false,
+        "workflow_path": ".github/workflows/ownership-bang-source-local.yml",
+        "ci_workflow_root_tree_sha": "58b9e4c8f0e4a80cf46c69a93475e4dee9e655ad",
+        "source_under_test_tree_sha": "a4402e1967e0ed63fe39d26931ece935c341e820",
+        "mergeability_last_observed": true
+      },
+      {
+        "repository": "ores-truffle-oreslang/oreslang-source.llvm",
+        "ci_pr": 1904,
+        "ci_workflow_head_sha": "1dc6087f734694cfb794a00169b4170fe1a63f29",
+        "source_under_test_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c",
+        "runner_label": "oreslang-bang-llvm-isolated",
+        "approved": false,
+        "enabled": false,
+        "executed": false,
+        "workflow_path": ".github/workflows/ownership-bang-source-local.yml",
+        "ci_workflow_root_tree_sha": "ba1cf5e8549d82ace8036ce6c4bf3b09cae10d66",
+        "source_under_test_tree_sha": "74aed6c4fa17b372b181886147b4594325458ed4",
+        "mergeability_last_observed": true
+      }
+    ],
+    "must_check": [
+      "owner Actions general policy billing and runner-group eligibility",
+      "selfhosted ephemeral runner registered to source repository only",
+      "explicit review of source SHA and CI-only workflow PR SHA",
+      "same-repository checkout only; no cross-org private Git object transfer",
+      "enabled nonsecret vars and approval label only after review",
+      "real nonempty completed steps and artifact ZIP integrity verified after executing tests"
+    ],
+    "current_observation": "A 24-case source-free CMake/CTest admission script with seven adversarial invalid-result denials was added to private alternate carrier PR #7 and verified locally under CMake/CTest 3.31.6; the new carrier Actions attempts #44556389528, #44556419524, and #44556468321 all FAILED BEFORE ANY STEPS (latest job 135674161704; zero artifacts). Historical alternate success #44444480481 cannot confirm current hosted-runner capacity. No source Git objects were transferred. Source-org Java and LLVM Actions also continue zero-step. Export stays DENY and no compiler code executed.",
+    "llvm_inventory_metadata_gate_20261119": {
+      "status": "SYNTHETIC_LOCAL_VALIDATION_ONLY",
+      "exact_case_count": 24,
+      "valid_24_accepted": true,
+      "one_substituted_name_denied": true,
+      "wrong_total_denied": true,
+      "ctest_source_compile_executed": false,
+      "approved": false,
+      "workflow_head": "b1e6066e59c322ac2df895c698ace1d73b651da0"
+    },
+    "llvm_execution_proof_hardening_20261119": {
+      "current_ci_head_sha": "1dc6087f734694cfb794a00169b4170fe1a63f29",
+      "test_registration_count_required": 24,
+      "test_execution_count_required": 24,
+      "requires_100_percent_real_ctest_execution": true,
+      "compiler_binary_uploaded_on_success_to_source_repo": true,
+      "sha256_manifest_includes_compiler_binary": true,
+      "source_free_local_synthetic_ctest_executions": 24,
+      "metadata_gate_accepts_correct_summary": true,
+      "metadata_gate_rejects_wrong_execution_count": true,
+      "metadata_gate_rejects_partial_success": true,
+      "private_source_compiler_executed": false,
+      "runner_approved": false,
+      "private_source_export_authorized": false
+    }
+  },
+  "source_free_alternate_evidence_20261119": {
+    "carrier_repository": "quaestor-ledger-test/atto-ci",
+    "carrier_repository_id": 1458333874,
+    "original_source_free_canary": {
+      "run_id": 44212748860,
+      "attempt": 3,
+      "job_id": 135291055347,
+      "executed_steps_successful": 6,
+      "artifact_id": 14491444377,
+      "digest_sha256": "bd069c78bf6d9d99854e04b7656805ee0c2abb6805f28d8b71ce4384a8f73781"
+    },
+    "synthetic_evidence_gate": {
+      "pr": 7,
+      "source_free_carrier_head_sha": "fd38c58897147d8bfb7c293f14730c1053c25d05",
+      "run_id": 44444480481,
+      "run_attempt": 1,
+      "job_id": 135293163894,
+      "tests_completed": 22,
+      "tests_passed": 22,
+      "tests_failed": 0,
+      "negative_cases_rejected": 21,
+      "positive_cases_accepted": 1,
+      "job_status": "completed",
+      "job_conclusion": "success",
+      "job_steps_completed_successful": 8,
+      "artifact_id": 14492467767,
+      "artifact_zip_size_bytes": 1449,
+      "artifact_zip_sha256": "3b7f3af32c725ece8255458ef1aea1fab3454dec69b86afdebbe4ad3845c4f8f",
+      "artifact_digest_independently_verified": true,
+      "artifact_internal_checksums_verified": true,
+      "source_contents_transferred": false,
+      "compiler_guest_executed": false,
+      "scope": "SYNTHETIC_EVIDENCE_VALIDATOR_ONLY"
+    },
+    "private_source_export_authorized": false,
+    "source_org_runner_admission_restored": false,
+    "budget_exact_remaining_unknown": true,
+    "latest_reattempt_utc_20261119": {
+      "carrier_repository": "quaestor-ledger-test/atto-ci",
+      "carrier_pr": 7,
+      "carrier_head": "ad2efb8bced1ae7f4dedc54035cb50711867f594",
+      "relevant_source_free_changes": [
+        "source-free/ctest-admission.sh",
+        ".github/workflows/source-free-evidence-gate-20261119.yml"
+      ],
+      "latest_run_id": 44556468321,
+      "latest_job_id": 135674161704,
+      "latest_status": "completed",
+      "latest_conclusion": "failure",
+      "executed_steps": 0,
+      "uploaded_artifacts": 0,
+      "prior_failures": [
+        {
+          "run": 44556389528,
+          "steps": 0
+        },
+        {
+          "run": 44556419524,
+          "steps": 0
+        }
+      ],
+      "previous_success_run": 44444480481,
+      "previous_success_is_historical": true,
+      "local_source_free_ctest": {
+        "executed": 24,
+        "passed": 24,
+        "adversarial_mutations_denied": 7,
+        "compiler_source_exported": false,
+        "compiler_compiled": false,
+        "cmake_version": "3.31.6",
+        "ctest_version": "3.31.6",
+        "sha256_zip": "8b80320ea4e0b8fd305eac0efaff9e8c51bb7a1cd6e4b691487460c2324abe22",
+        "local_only": true
+      },
+      "remote_24_ctest_run_confirmed": false,
+      "runner_capacity_currently_confirmed": false,
+      "private_source_export_authorized": false,
+      "source_compiler_executed": false
+    }
+  },
+  "governance_identity_conflict_20261119": {
+    "status": "CONFIRMED_SOURCE_EXPORT_REVIEW_BLOCKER",
+    "github_account": "ORESoftware",
+    "immutable_account_id": 11139560,
+    "account_type": "User",
+    "identity_evidence": "https://api.github.com/repos/ORESoftware/flags-2-env (owner.login, owner.id, owner.type)",
+    "excluded_independent_reviewers": [
+      11139560,
+      2148448
+    ],
+    "assignments_confirmed_at": [
+      "ores-truffle-oreslang/oreslang-source.java/.github/CODEOWNERS",
+      "ores-truffle-oreslang/oreslang-source.llvm/.github/CODEOWNERS",
+      "ores-truffle-oreslang/oreslang-source.net/.github/CODEOWNERS"
+    ],
+    "critical_workflow_path_owner": "@ORESoftware",
+    "source_main_protection_checked_20261119": {
+      "ores-truffle-oreslang/oreslang-source.java": false,
+      "ores-truffle-oreslang/oreslang-source.llvm": false,
+      "ores-truffle-oreslang/oreslang-source.net": false
+    },
+    "reason": "@ORESoftware maps to immutable GitHub user ID 11139560, explicitly excluded from independent source-export review; same CODEOWNER review cannot certify independence.",
+    "required_action": "An authorized source org administrator must designate an eligible distinct reviewer with source write access, establish enforceable protected-main and independent CODEOWNER review, and authorize exact reviewed source/tree/destination/retention tuple before a private cross-org export.",
+    "source_local_ci_independent_review_status": "NOT_APPROVED: source-local CI PRs have zero review submissions; no runner provisioned or label applied",
+    "no_export_until_resolved": true
+  }
+}

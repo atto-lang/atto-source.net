@@ -1,0 +1,7 @@
+// FAIL-CLOSED: a float subject has no verified i64 pattern comparison ABI.
+pub fnc main(): int {
+  return match 5 / 2 over
+    on 2 -> 42,
+    on _ -> 0,
+  end
+}

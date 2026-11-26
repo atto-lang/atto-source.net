@@ -1,0 +1,2 @@
+// Source actor graph requires typed endpoints and runtime graph lowering.
+pub fnc main(): int { return 4 rpipe 2; }

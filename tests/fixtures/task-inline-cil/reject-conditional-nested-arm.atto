@@ -1,0 +1,8 @@
+pub fnc main(): int {
+    let int count = 0;
+    val int result = if true then 1 + sync task<int> {
+        count = 2;
+        return 39;
+    } else 40 fi;
+    return result + count;
+}

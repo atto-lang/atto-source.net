@@ -1,0 +1,83 @@
+name: Atto direct CIL floating division admission (exact-head guest)
+on:
+  pull_request:
+    paths:
+      - 'compiler/Atto.Cil.Compiler/Program.cs'
+      - 'fixtures/cil/**'
+      - 'tests/Atto.Cil.Float.Guest.Host/**'
+      - 'scripts/test-cil-guest.sh'
+      - "scripts/verify-direct-cil-integration.sh"
+      - "scripts/test-direct-cil-integrity-harness.sh"
+      - "verification/direct-cil-integration-blobs.tsv"
+      - '.github/workflows/direct-cil-float-division-admission.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  direct-cil-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact PR head without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Authenticate source HEAD, tree and fixture blobs
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"
+          for file in \
+            compiler/Atto.Cil.Compiler/Program.cs \
+            scripts/test-cil-guest.sh \
+            fixtures/cil/negative/int-division-float-required.atto \
+            fixtures/cil/negative/int-division-in-helper.atto \
+            fixtures/cil/negative/int-division-nested.atto \
+            fixtures/cil/signed-min-boundary.atto \
+            fixtures/cil/negative/signed-min-underflow.atto \
+            fixtures/cil/float-division.atto \
+            fixtures/cil/negative/float-result-in-int-return.atto \
+            fixtures/cil/negative/float-result-as-int-arg.atto \
+            fixtures/cil/negative/unsupported-float-addition.atto \
+            tests/Atto.Cil.Float.Guest.Host/Atto.Cil.Float.Guest.Host.csproj \
+            tests/Atto.Cil.Float.Guest.Host/Program.cs; do
+            test "$(git hash-object --no-filters "$file")" = "$(git rev-parse "HEAD:$file")"
+          done
+          echo "PINNED_HEAD=$EXPECTED_HEAD TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Exercise synthetic exact-Git-blob attack regression suite
+        shell: bash
+        run: bash scripts/test-direct-cil-integrity-harness.sh
+      - name: Verify exact-source integration blob manifest before compilation
+        shell: bash
+        run: bash scripts/verify-direct-cil-integration.sh
+      - name: Install pinned .NET 10 SDK and .NET 8 target runtime
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Verify global.json-selected SDK and both runtimes
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet --version | grep -E '^10\.'
+          dotnet --list-runtimes | grep -F 'Microsoft.NETCore.App 8.'
+          dotnet --list-runtimes | grep -F 'Microsoft.NETCore.App 10.'
+      - name: Ensure NativeAOT Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
+      - name: Execute checked compiler, negative no-artifact matrix and actual CLR/NativeAOT guests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/test-cil-guest.sh
+          test -s artifacts/AttoGuest.dll
+          sha256sum artifacts/AttoGuest.dll
+          echo "ATTO_DIRECT_CIL_GUEST_TESTS_EXECUTED=1"

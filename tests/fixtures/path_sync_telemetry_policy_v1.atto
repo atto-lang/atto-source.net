@@ -1,0 +1,77 @@
+// .NET NativeAOT guest behavior candidate. Must be compiled and executed,
+// not counted as passing from source-only inspection.
+import path from "../../stdlib/path.atto";
+import sync from "../../stdlib/sync.atto";
+import Telemetry from "../../stdlib/telemetry.atto";
+
+pub fnc main(): int {
+  if path.normalized_windows_depth("a/./b/../c") != 2 then return 1; fi
+  if path.normalized_windows_depth("a/../../b") != -1 then return 2; fi
+  if path.normalized_windows_depth("CON.txt") != -1 then return 3; fi
+  if path.normalized_windows_depth("NUL") != -1 then return 4; fi
+  if path.normalized_windows_depth("C:/a") != -1 then return 5; fi
+  if path.is_canonical_windows_relative("a/../b") then return 6; fi
+  if !path.is_portable_relative("data/jobs_01") then return 7; fi
+  if sync.mutex_acquire_admissible(false, false, 1, 10) then return 8; fi
+  if !sync.mutex_acquire_admissible(false, false, 0, 10) then return 9; fi
+  if sync.rw_read_admissible(0, false, 1, 8) then return 10; fi
+  if !sync.rw_write_admissible(0, false) then return 11; fi
+  if sync.semaphore_release_admissible(4, 2, 5, false) then return 12; fi
+  if !sync.semaphore_release_admissible(3, 2, 5, false) then return 13; fi
+  if sync.generation_successor_admissible(2147483647, 0) then return 14; fi
+  if !Telemetry.traceparent_v00_header_valid("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01") then return 15; fi
+  if Telemetry.traceparent_v00_header_valid("00-0123456789abcdef0123456789abcdef-0000000000000000-01") then return 16; fi
+  if Telemetry.traceparent_v00_header_valid("00-0123456789abcdef0123456789abcdef-0123456789ABCDEF-01") then return 17; fi
+  if Telemetry.traceparent_v00_header_valid("ff-0123456789abcdef0123456789abcdef-0123456789abcdef-01") then return 18; fi
+  if path.is_portable_relative("safe\\\\child") then return 19; fi
+  if !sync.semaphore_release_admissible(3, 2, 5, true) then return 20; fi
+  if path.normalized_component_start("a/./b/../c", true, 1) != 9 then return 21; fi
+  if path.normalized_component_length("a/./b/../c", true, 1) != 1 then return 22; fi
+  if path.normalized_component_scalar("a/./b/../c", true, 1, 0) != 99 then return 23; fi
+  if path.normalized_component_start("a/..", true, 0) != -1 then return 24; fi
+  if path.file_name_start("a/./b/../c", true) != 9 then return 25; fi
+  if path.file_name_length("archive.tar.gz", true) != 14 then return 26; fi
+  if path.extension_start("archive.tar.gz", true) != 12 then return 27; fi
+  if path.file_stem_length("archive.tar.gz", true) != 11 then return 28; fi
+  if path.extension_start("files/.env", true) != -1 then return 29; fi
+  if path.file_stem_length("files/.env", true) != 4 then return 30; fi
+  if path.parent_depth("a/./b/../c", true) != 1 then return 31; fi
+  if path.file_name_start("a/..", true) != -1 then return 32; fi
+  if !path.join_admissible("logs", "2026/events.json", true) then return 33; fi
+  if path.join_admissible("logs", "../escape", true) then return 34; fi
+  if path.join_admissible("CON", "file", true) then return 35; fi
+  if path.normalized_component_scalar("a/./b/../c", true, 1, 1) != -1 then return 36; fi
+  if path.is_portable_relative("a/..") then return 37; fi
+  if !path.join_admissible("a", "b", true) then return 38; fi
+  if !sync.mutex_release_receipt_admissible(true, 8, 8, 3, 3, false) then return 39; fi
+  if sync.mutex_release_receipt_admissible(true, 8, 9, 3, 3, false) then return 40; fi
+  if sync.mutex_release_receipt_admissible(true, 8, 8, 3, 2, false) then return 41; fi
+  if sync.mutex_release_receipt_admissible(true, 8, 8, 3, 3, true) then return 42; fi
+  if !sync.rw_upgrade_admissible(1, false, 0, true) then return 43; fi
+  if sync.rw_upgrade_admissible(2, false, 0, true) then return 44; fi
+  if path.normalized_depth("ñ/café", false) != 2 then return 45; fi
+  if path.normalized_depth("ñ/café", true) != -1 then return 46; fi
+  if path.is_portable_relative("ñ") != false then return 47; fi
+  if path.normalized_component_scalar("ñ/café", false, 1, 3) != 233 then return 48; fi
+  if path.normalized_component_length("ñ/café", false, 1) != 4 then return 49; fi
+  // Fully native Atto Path value; no ambient .NET filesystem access.
+  val item = path.relative_path("a/./b/../c", false);
+  if item.component_count() != 2 then return 50; fi
+  if item.component_start(1) != 9 then return 51; fi
+  if item.component_length(1) != 1 then return 52; fi
+  if item.component_scalar(1, 0) != 99 then return 53; fi
+  if item.file_name_offset() != 9 then return 54; fi
+  if item.file_name_size() != 1 then return 55; fi
+  if item.extension_offset() != -1 then return 56; fi
+  if item.stem_length() != 1 then return 57; fi
+  if item.parent_component_count() != 1 then return 58; fi
+  if item.is_canonical() != false then return 59; fi
+  if item.is_portable() != false then return 60; fi
+  if item.can_join("deep/file.txt") != false then return 61; fi
+  val clean = path.relative_path("archive.tar.gz", true);
+  if clean.extension_offset() != 12 then return 62; fi
+  if clean.stem_length() != 11 then return 63; fi
+  if clean.is_canonical() != true then return 64; fi
+  if clean.can_join("parts") != true then return 65; fi
+  return 0;
+}

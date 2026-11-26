@@ -1,0 +1,7 @@
+fnc success(): int {
+  return 42;
+}
+
+pub fnc main(): Result<int,Error> {
+  return trap! success();
+}

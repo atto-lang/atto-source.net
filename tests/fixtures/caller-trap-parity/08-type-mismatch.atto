@@ -1,0 +1,5 @@
+// ATTO-TRAP-V1-08: compile-time type failure, trap never unwraps implicitly.
+pub fnc main(): int {
+  val int value = trap (40 + 2);
+  return value;
+}

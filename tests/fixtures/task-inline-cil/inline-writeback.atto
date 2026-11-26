@@ -1,0 +1,33 @@
+fnc branch(bool first): int {
+  let int count = 0;
+  let Option<int> state = None;
+  val int result = sync task<int> {
+    if first {
+      count = 2;
+      state = Some(10);
+      return 30;
+    } fi
+    count = 5;
+    state = Some(7);
+    ^ 30;
+  };
+  return result + count + state.unwrap();
+}
+
+fnc nested(): int {
+  let int count = 0;
+  val Option<int> result = sync task<Option<int>> {
+    do sync task<void> { count = 1; }
+    val int inner = sync task<int> {
+      count = count + 1;
+      return 40;
+    };
+    return Some(inner);
+  };
+  return result.unwrap() + count;
+}
+
+pub fnc main(): int {
+  guard branch(true) eq 42, branch(false) eq 42 { return 1; }
+  return nested();
+}

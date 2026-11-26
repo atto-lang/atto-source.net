@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj" />
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
+    <!-- Existing verified bounded test-only interpreter, not production fallback. -->
+    <Compile Include="../Ores.Net.Tests/CfgCilTestInterpreter.cs"
+             Link="CfgCilTestInterpreter.cs" />
+  </ItemGroup>
+</Project>

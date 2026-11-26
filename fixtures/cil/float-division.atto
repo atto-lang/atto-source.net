@@ -1,0 +1,16 @@
+// Actual signed-i64 -> binary64 division in generated CIL.
+fnc quotient(int numerator, int denominator): float {
+    return numerator / denominator;
+}
+
+fnc passthrough(int numerator, int denominator): float {
+    return quotient(numerator, denominator);
+}
+
+fnc checked_before_division(int numerator, int denominator): float {
+    return (numerator + 1) / denominator;
+}
+
+pub fnc main(): int {
+    return 42;
+}
