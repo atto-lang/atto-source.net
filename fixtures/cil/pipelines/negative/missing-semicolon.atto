@@ -1,0 +1,2 @@
+fnc double(int x): int -> x * 2
+pub fnc main(): int { return double(21); }
