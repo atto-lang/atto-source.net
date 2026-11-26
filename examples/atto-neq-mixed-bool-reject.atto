@@ -1,0 +1,5 @@
+// Negative: the typed i64-only structured compiler must reject int/bool equality.
+fnc main():int {
+    if 7 !eq true { return 1; }
+    return 0;
+}

@@ -1,0 +1,777 @@
+namespace Ores.Net.Compiler;
+
+// Experimental typed CFG/CIL path is exposed only through opt-in oresnet
+// check-structured / compile-structured. Production scalar CLI remains
+// independent; verified functions and call operands are never runtime JIT.
+public enum CfgOpcode
+{
+    ConstantI64,
+    ConstantBool,
+    CheckedAdd,
+    CheckedSubtract,
+    CheckedMultiply,
+    CheckedDivide,
+    EqualI64,
+    LessThanI64,
+    Argument,
+    Call,
+    NotEqualI64,
+    GreaterThanI64,
+    LessThanOrEqualI64,
+    GreaterThanOrEqualI64,
+    EqualBool,
+    NotEqualBool,
+    XorBool,
+    // Two-word source Option<int>, selected from verified bool tag/i64
+    // payload and an eagerly evaluated i64 fallback. Not an opaque pointer.
+    OptionOrI64,
+    // Bounds proof for a fixed-size inline i64 array. Signed comparison
+    // only, no guest/native pointer operations. Returns exact Bool.
+    ArrayIndexValidI64,
+    // Verified Boolean negation, used by the closed Option<int>.is_none() query.
+    BoolNot,
+    // Closed Option<int> equality: tags (Bool) and active payloads (I64).
+    // All four operands must be verified SSA values in evaluation order.
+    OptionEqualI64,
+    // atto-spec bitwise-and-stream-operators-v1 i64 shifts. The distance must
+    // be 0..63; anything else raises the checked OverflowException before a
+    // shift instruction runs (CIL shifts by >= 64 are unspecified).
+    ShiftLeftI64,
+    ShiftRightLogicalI64,
+    ShiftRightArithmeticI64,
+    PackOptionI64,
+    ReadOptionI64Tag,
+    ReadOptionI64Payload,
+    TrapCall,
+    GuestErrorLiteral,
+    GuestErrorIsType,
+    GuestErrorHasMessage,
+    GuestErrorEqual,
+    GuestErrorNotEqual,
+    ResultOk,
+    ResultOkOption,
+    ResultErr,
+    ResultIsOk,
+    ResultIsErr,
+    ResultUnwrap,
+    ResultUnwrapOptionTag,
+    ResultUnwrapOptionPayload,
+    ResultUnwrapOr,
+    ResultUnwrapErr,
+    OptionUnwrap,
+    GuestTextLiteral,
+    GuestTextEqual,
+    GuestTextNotEqual,
+    ResultWiden,
+    ResultErrText,
+    ResultUnwrapTextErr,
+    CheckedRemainder,
+    CheckedModulo,
+    InlineCooperate
+}
+
+public readonly record struct CfgParameter(int Id, IrValueType Type);
+
+public sealed record CfgInstruction(
+    int ResultId, CfgOpcode Opcode, IrValueType Type,
+    int? Left = null, int? Right = null,
+    long? I64Constant = null, bool? BoolConstant = null,
+    string? Target = null, IReadOnlyList<int>? Arguments = null, string? TextOperand = null);
+
+public abstract record CfgTerminator;
+public sealed record CfgReturn(int ValueId) : CfgTerminator;
+public sealed record CfgReturnVoid : CfgTerminator;
+public enum CfgGuestEffect { Throw, Panic, Raise }
+public sealed record CfgSignal(int Error, CfgGuestEffect Effect) : CfgTerminator;
+public sealed record CfgJump(string Target, IReadOnlyList<int> Arguments) : CfgTerminator;
+public sealed record CfgBranch(
+    int Condition,
+    string TrueTarget, IReadOnlyList<int> TrueArguments,
+    string FalseTarget, IReadOnlyList<int> FalseArguments) : CfgTerminator;
+
+public sealed record CfgBlock(
+    string Name, IReadOnlyList<CfgParameter> Parameters,
+    IReadOnlyList<CfgInstruction> Instructions, CfgTerminator Terminator,
+    // Optional guest arithmetic-overflow edge. This is verifier-visible and
+    // lowers only to a CLR OverflowException handler; host exception identity
+    // is never exposed to source.
+    string? OverflowTarget = null);
+
+public sealed record CfgFunction(
+    string Name, IrValueType ResultType, string Entry,
+    IReadOnlyList<CfgBlock> Blocks,
+    IReadOnlyList<IrValueType>? Parameters = null);
+
+public sealed class VerifiedCfgFunction
+{
+    internal VerifiedCfgFunction(string name, IrValueType resultType,
+        string entry, IReadOnlyList<CfgBlock> blocks,
+        IReadOnlyList<IrValueType>? parameters = null)
+    {
+        Name = name;
+        ResultType = resultType;
+        Entry = entry;
+        Blocks = blocks;
+        Parameters = parameters ?? Array.Empty<IrValueType>();
+    }
+
+    public IReadOnlyList<IrValueType> Parameters { get; }
+    public string Name { get; }
+    public IrValueType ResultType { get; }
+    public string Entry { get; }
+    public IReadOnlyList<CfgBlock> Blocks { get; }
+}
+
+/// <summary>
+/// Fail-closed structural and SSA verifier for the first control-flow IR.
+/// Blocks can loop by passing typed block parameters on each control-flow edge;
+/// no unchecked phi instructions or implicit fallthrough are allowed.
+/// </summary>
+// Verified CFG module is admitted only after each source-defined helper has
+// independently verified SSA and all call targets have exact typed signatures.
+public sealed class VerifiedCfgModule
+{
+    internal VerifiedCfgModule(VerifiedCfgFunction main,
+        IReadOnlyList<VerifiedCfgFunction> helpers)
+    {
+        Main = main;
+        Helpers = helpers;
+    }
+    public VerifiedCfgFunction Main { get; }
+    public IReadOnlyList<VerifiedCfgFunction> Helpers { get; }
+}
+
+public sealed record CfgCallSignature(IrValueType ResultType,
+    IReadOnlyList<IrValueType> ParameterTypes);
+
+public static class OresCfgVerifier
+{
+    public const int MaxBlocks = 128;
+    internal const int MaxMethodParameters = 16;
+    public const int MaxValues = OresIrVerifier.MaxInstructions;
+    // Edge payloads are not SSA definitions, so they need a separate global
+    // bound before copying any untrusted list into the immutable proof.
+    public const int MaxEdgeArguments = 2 * MaxValues;
+    // Bounds the inline immutable Array<int> SSA expansion and code size.
+    public const int MaxFixedArrayElements = 8;
+
+    private readonly record struct Definition(int Block, int Instruction, IrValueType Type);
+
+    public static VerifiedCfgFunction Verify(CfgFunction function,
+        IReadOnlyDictionary<string, CfgCallSignature>? callees = null)
+    {
+        ArgumentNullException.ThrowIfNull(function);
+        if (!Identifier(function.Name) ||
+            !(IsValueType(function.ResultType) || function.ResultType is IrValueType.Void or IrValueType.OptionI64) ||
+            !Identifier(function.Entry))
+            throw new FormatException("Invalid CFG function signature");
+
+        var parameters = function.Parameters ?? Array.Empty<IrValueType>();
+        int methodParameterCount = parameters.Count;
+        if (methodParameterCount < 0 || methodParameterCount > MaxMethodParameters)
+            throw new FormatException("Invalid CFG method signature");
+        // Never enumerate an untrusted IReadOnlyList supplied to a verifier:
+        // its Count can be bounded while its iterator is infinite.
+        var frozenParameters = CopyIndexed(parameters, methodParameterCount);
+        for (int i = 0; i < frozenParameters.Count; i++)
+            if (!IsValueType(frozenParameters[i]))
+                throw new FormatException("Invalid CFG method signature");
+        var sourceBlocks = function.Blocks ??
+            throw new FormatException("Missing CFG blocks");
+        int blockCount = sourceBlocks.Count;
+        if (blockCount <= 0 || blockCount > MaxBlocks)
+            throw new FormatException("Invalid CFG block count");
+
+        // Deep-copy every caller-provided collection BEFORE analyzing it.
+        // A verified CFG cannot be changed through an alias to input lists.
+        var blocks = new CfgBlock[blockCount];
+        long totalDefinitions = 0;
+        long totalEdgeArguments = 0;
+        long totalTextLength = 0;
+
+        IReadOnlyList<int> FreezeArguments(IReadOnlyList<int>? arguments)
+        {
+            if (arguments is null)
+                throw new FormatException("Missing CFG edge arguments");
+            // Check before ToArray: a single malicious edge can otherwise
+            // allocate far beyond the i64 SSA/local resource limit.
+            int count = arguments.Count;
+            if (count < 0 || count > MaxValues ||
+                totalEdgeArguments + count > MaxEdgeArguments)
+                throw new FormatException("CFG edge argument budget exceeded");
+            totalEdgeArguments += count;
+            // IReadOnlyList.Count does not constrain IEnumerable enumeration.
+            // Copy the admitted number of elements by index, never via
+            // LINQ ToArray (which can enumerate unbounded custom inputs).
+            return CopyIndexed(arguments, count);
+        }
+
+        for (int i = 0; i < blocks.Length; i++)
+        {
+            var original = sourceBlocks[i] ??
+                throw new FormatException("Null CFG block");
+            if (!Identifier(original.Name))
+                throw new FormatException("Invalid CFG block name");
+            var blockParameters = original.Parameters ??
+                throw new FormatException("Missing CFG block parameters");
+            var instructions = original.Instructions ??
+                throw new FormatException("Missing CFG block instructions");
+            var terminator = original.Terminator ??
+                throw new FormatException("Missing CFG terminator");
+            // Capture each caller-controlled Count exactly once. Re-reading
+            // a mutable/adversarial Count after admission could bypass the
+            // budget when allocating the snapshot.
+            int parameterCount = blockParameters.Count;
+            int instructionCount = instructions.Count;
+            if (parameterCount < 0 || instructionCount < 0 ||
+                totalDefinitions + parameterCount + (long)instructionCount > MaxValues)
+                throw new FormatException("CFG SSA value budget exceeded");
+            totalDefinitions += parameterCount + (long)instructionCount;
+            CfgTerminator frozenTerminator = terminator switch
+            {
+                CfgReturn r => new CfgReturn(r.ValueId),
+                CfgReturnVoid => new CfgReturnVoid(),
+                CfgSignal signal => new CfgSignal(signal.Error, signal.Effect),
+                CfgJump j => new CfgJump(j.Target, FreezeArguments(j.Arguments)),
+                CfgBranch c => new CfgBranch(c.Condition, c.TrueTarget,
+                    FreezeArguments(c.TrueArguments),
+                    c.FalseTarget, FreezeArguments(c.FalseArguments)),
+                _ => throw new FormatException("Unsupported CFG terminator")
+            };
+            blocks[i] = new CfgBlock(original.Name,
+                CopyIndexed(blockParameters, parameterCount),
+                Array.AsReadOnly(CopyIndexed(instructions, instructionCount).Select(op =>
+                {
+                    if (op is null) throw new FormatException("Null CFG instruction");
+                    if (op.TextOperand is { } text &&
+                        (text.Length > 16_384 || (totalTextLength += text.Length) > 1_048_576))
+                        throw new FormatException("CFG guest text budget exceeded");
+                    return op with
+                    {
+                        Arguments = op.Arguments is null ? null : FreezeArguments(op.Arguments)
+                    };
+                }).ToArray()),
+                frozenTerminator, original.OverflowTarget);
+        }
+
+        var indexes = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (int i = 0; i < blocks.Length; i++)
+            if (!indexes.TryAdd(blocks[i].Name, i))
+                throw new FormatException("Duplicate CFG block");
+        if (!indexes.TryGetValue(function.Entry, out int entry))
+            throw new FormatException("CFG entry block not found");
+        if (blocks[entry].Parameters.Count != 0)
+            throw new FormatException("CFG entry block cannot require arguments");
+
+        var definitions = new Dictionary<int, Definition>();
+        foreach (var (block, blockIndex) in blocks.Select((b, i) => (b, i)))
+        {
+            foreach (var parameter in block.Parameters)
+                AddDefinition(parameter.Id, parameter.Type, blockIndex, -1);
+            for (int instructionIndex = 0; instructionIndex < block.Instructions.Count;
+                instructionIndex++)
+            {
+                var op = block.Instructions[instructionIndex] ??
+                    throw new FormatException("Null CFG instruction");
+                AddDefinition(op.ResultId, op.Type, blockIndex, instructionIndex);
+            }
+        }
+        // An empty void helper has no SSA values: its sole terminator is
+        // the independently verified CfgReturnVoid, not a fabricated 0.
+        if ((definitions.Count == 0 && function.ResultType != IrValueType.Void) ||
+            definitions.Count > MaxValues)
+            throw new FormatException("CFG SSA value budget exceeded");
+        // Dense IDs prevent accidental giant lookup allocations during later
+        // local-register assignment, and reject gaps and negative definitions.
+        for (int i = 0; i < definitions.Count; i++)
+            if (!definitions.ContainsKey(i))
+                throw new FormatException("CFG SSA IDs must be dense");
+
+        var successors = new List<int>[blocks.Length];
+        var predecessors = new List<int>[blocks.Length];
+        for (int i = 0; i < blocks.Length; i++)
+        {
+            successors[i] = new List<int>();
+            predecessors[i] = new List<int>();
+        }
+
+        int overflowRegionCount = 0;
+        for (int i = 0; i < blocks.Length; i++)
+        {
+            var block = blocks[i];
+            switch (block.Terminator)
+            {
+                case CfgReturn: break;
+                case CfgReturnVoid: break;
+                case CfgSignal: break;
+                case CfgJump jump:
+                    RegisterEdge(i, jump.Target, jump.Arguments);
+                    break;
+                case CfgBranch branch:
+                    RegisterEdge(i, branch.TrueTarget, branch.TrueArguments);
+                    RegisterEdge(i, branch.FalseTarget, branch.FalseArguments);
+                    break;
+                default: throw new FormatException("Unsupported CFG terminator");
+            }
+
+            if (block.OverflowTarget is not null)
+            {
+                if (++overflowRegionCount > 1 ||
+                    block.Terminator is not CfgJump protectedExit ||
+                    !indexes.TryGetValue(block.OverflowTarget, out int handlerIndex) ||
+                    handlerIndex != i + 1 ||
+                    block.OverflowTarget == protectedExit.Target)
+                    throw new FormatException("Invalid CFG arithmetic-overflow region");
+
+                var handler = blocks[handlerIndex];
+                if (handler.Parameters.Count != 0 ||
+                    handler.OverflowTarget is not null ||
+                    handler.Instructions.Count != 1 ||
+                    handler.Instructions[0].Opcode != CfgOpcode.ConstantI64 ||
+                    handler.Terminator is not CfgJump handlerExit ||
+                    handlerExit.Target != protectedExit.Target ||
+                    handlerExit.Arguments.Count != 1 ||
+                    handlerExit.Arguments[0] != handler.Instructions[0].ResultId ||
+                    !indexes.TryGetValue(protectedExit.Target, out int joinIndex) ||
+                    blocks[joinIndex].Parameters.Count != 1 ||
+                    blocks[joinIndex].Parameters[0].Type != IrValueType.I64)
+                    throw new FormatException("Malformed CFG arithmetic-overflow handler");
+
+                if (!block.Instructions.Any(op =>
+                    op.Opcode is CfgOpcode.CheckedAdd or
+                        CfgOpcode.CheckedSubtract or
+                        CfgOpcode.CheckedMultiply or
+                        CfgOpcode.ShiftLeftI64 or
+                        CfgOpcode.ShiftRightLogicalI64 or
+                        CfgOpcode.ShiftRightArithmeticI64 or
+                        CfgOpcode.Call))
+                    throw new FormatException(
+                        "Arithmetic-overflow region has no fallible numeric operation");
+
+                // The CLR exception object is an internal transport detail and
+                // carries no SSA value into the guest handler.
+                RegisterEdge(i, block.OverflowTarget, Array.Empty<int>());
+            }
+        }
+
+        var visited = new bool[blocks.Length];
+        var queue = new Queue<int>();
+        visited[entry] = true;
+        queue.Enqueue(entry);
+        while (queue.Count != 0)
+        {
+            int current = queue.Dequeue();
+            foreach (int target in successors[current])
+                if (!visited[target])
+                {
+                    visited[target] = true;
+                    queue.Enqueue(target);
+                }
+        }
+        if (visited.Any(v => !v))
+            throw new FormatException("Unreachable CFG block");
+
+        // Forward dominator fixed point. Valid for loops, diamonds, and
+        // arbitrary reachable CFGs, unlike block order as a dominance proxy.
+        var dominators = new HashSet<int>[blocks.Length];
+        for (int i = 0; i < blocks.Length; i++)
+            dominators[i] = i == entry
+                ? new HashSet<int> { entry }
+                : new HashSet<int>(Enumerable.Range(0, blocks.Length));
+
+        bool changed;
+        do
+        {
+            changed = false;
+            for (int i = 0; i < blocks.Length; i++)
+            {
+                if (i == entry) continue;
+                var intersection = new HashSet<int>(dominators[predecessors[i][0]]);
+                foreach (int parent in predecessors[i].Skip(1))
+                    intersection.IntersectWith(dominators[parent]);
+                intersection.Add(i);
+                if (!dominators[i].SetEquals(intersection))
+                {
+                    dominators[i] = intersection;
+                    changed = true;
+                }
+            }
+        } while (changed);
+
+        for (int i = 0; i < blocks.Length; i++)
+        {
+            var block = blocks[i];
+            for (int opIndex = 0; opIndex < block.Instructions.Count; opIndex++)
+            {
+                var op = block.Instructions[opIndex];
+                if (op.TextOperand is not null && op.Opcode is not
+                    (CfgOpcode.GuestErrorLiteral or CfgOpcode.GuestTextLiteral or CfgOpcode.GuestErrorIsType or CfgOpcode.GuestErrorHasMessage))
+                    throw new FormatException("Unexpected text in CFG instruction");
+                switch (op.Opcode)
+                {
+                    case CfgOpcode.Argument:
+                        if (op.I64Constant is null || op.I64Constant < 0 ||
+                            op.I64Constant >= frozenParameters.Count ||
+                            op.Type != frozenParameters[(int)op.I64Constant.Value] ||
+                            op.BoolConstant is not null || op.Left is not null ||
+                            op.Right is not null || op.Target is not null ||
+                            op.Arguments is not null)
+                            throw new FormatException("Malformed CFG argument load");
+                        break;
+                    case CfgOpcode.Call:
+                    case CfgOpcode.TrapCall:
+                    {
+                        if (op.Type == IrValueType.Void)
+                            throw new FormatException("Void CFG call requires effect-only lowering");
+                        if (op.Target is null || op.Arguments is null ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Left is not null || op.Right is not null ||
+                            callees is null || !callees.TryGetValue(op.Target, out var callee) ||
+                            op.Arguments.Count != callee.ParameterTypes.Count ||
+                            op.Type != callee.ResultType || op.Opcode == CfgOpcode.TrapCall && !op.Type.HasError())
+                            throw new FormatException("Unverified CFG static call");
+                        for (int arg = 0; arg < op.Arguments.Count; arg++)
+                            Use(i, opIndex, op.Arguments[arg], callee.ParameterTypes[arg]);
+                        break;
+                    }
+                    case CfgOpcode.GuestErrorLiteral:
+                    case CfgOpcode.GuestTextLiteral:
+                        RequireType(op.Type, op.Opcode == CfgOpcode.GuestErrorLiteral
+                            ? IrValueType.GuestError : IrValueType.GuestText);
+                        CheckGuestOp(op, left: false);
+                        if (op.TextOperand is null || op.TextOperand.Length > 16_384)
+                            throw new FormatException("Invalid guest Error literal");
+                        break;
+                    case CfgOpcode.GuestErrorIsType:
+                    case CfgOpcode.GuestErrorHasMessage:
+                        RequireType(op.Type, IrValueType.Bool);
+                        CheckGuestOp(op);
+                        if (op.TextOperand is null || op.TextOperand.Length > 16_384 ||
+                            op.Opcode == CfgOpcode.GuestErrorIsType && op.TextOperand is not
+                                ("Error" or "ArithmeticOverflowError" or "DivisionByZeroError"))
+                            throw new FormatException("Invalid guest Error comparison");
+                        Use(i, opIndex, op.Left!.Value, IrValueType.GuestError);
+                        break;
+                    case CfgOpcode.GuestErrorEqual:
+                    case CfgOpcode.GuestErrorNotEqual:
+                    case CfgOpcode.GuestTextEqual:
+                    case CfgOpcode.GuestTextNotEqual:
+                    {
+                        RequireType(op.Type, IrValueType.Bool);
+                        CheckGuestOp(op, right: true);
+                        var type = op.Opcode is CfgOpcode.GuestTextEqual or CfgOpcode.GuestTextNotEqual
+                            ? IrValueType.GuestText : IrValueType.GuestError;
+                        Use(i, opIndex, op.Left!.Value, type);
+                        Use(i, opIndex, op.Right!.Value, type);
+                        break;
+                    }
+                    case CfgOpcode.ResultOk:
+                        if (!op.Type.IsResult() || op.Type.Payload() != IrValueType.I64)
+                            throw new FormatException("Result scalar success requires a verified scalar Result layout");
+                        CheckGuestOp(op);
+                        Use(i, opIndex, op.Left!.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.ResultOkOption:
+                    case CfgOpcode.OptionUnwrap:
+                        RequireType(op.Type, op.Opcode == CfgOpcode.ResultOkOption
+                            ? IrValueType.ResultOptionI64 : IrValueType.I64);
+                        CheckGuestOp(op, right: true);
+                        Use(i, opIndex, op.Left!.Value, IrValueType.Bool);
+                        Use(i, opIndex, op.Right!.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.ResultErr:
+                        if (!op.Type.HasError()) throw new FormatException("Result cannot hold a guest Error");
+                        CheckGuestOp(op);
+                        Use(i, opIndex, op.Left!.Value, IrValueType.GuestError);
+                        break;
+                    case CfgOpcode.ResultErrText:
+                        if (!op.Type.HasTextError()) throw new FormatException("Result cannot hold an error string");
+                        CheckGuestOp(op);
+                        Use(i, opIndex, op.Left!.Value, IrValueType.GuestText);
+                        break;
+                    case CfgOpcode.ResultUnwrapTextErr:
+                        RequireType(op.Type, IrValueType.GuestText);
+                        CheckGuestOp(op);
+                        Use(i, opIndex, op.Left!.Value, IrValueType.ResultI64Text);
+                        break;
+                    case CfgOpcode.ResultWiden:
+                        RequireType(op.Type, IrValueType.ResultI64TextOrError);
+                        CheckGuestOp(op);
+                        Use(i, opIndex, op.Left!.Value, IrValueType.ResultI64Text);
+                        break;
+                    case CfgOpcode.CheckedRemainder:
+                    case CfgOpcode.CheckedModulo:
+                        RequireType(op.Type, IrValueType.I64);
+                        CheckGuestOp(op, right: true);
+                        Use(i, opIndex, op.Left!.Value, IrValueType.I64);
+                        Use(i, opIndex, op.Right!.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.ResultIsOk:
+                    case CfgOpcode.ResultIsErr:
+                    case CfgOpcode.ResultUnwrapErr:
+                        RequireType(op.Type, op.Opcode == CfgOpcode.ResultUnwrapErr
+                            ? IrValueType.GuestError : IrValueType.Bool);
+                        CheckGuestOp(op);
+                        if (!definitions.TryGetValue(op.Left!.Value, out var source) || !source.Type.IsResult())
+                            throw new FormatException("Result projection requires a verified Result operand");
+                        if (op.Opcode == CfgOpcode.ResultUnwrapErr &&
+                            source.Type is not (IrValueType.ResultI64 or IrValueType.ResultOptionI64))
+                            throw new FormatException("Result error projection needs a proven Error layout");
+                        Use(i, opIndex, op.Left.Value, source.Type);
+                        break;
+                    case CfgOpcode.ResultUnwrap:
+                    case CfgOpcode.ResultUnwrapOr:
+                    case CfgOpcode.ResultUnwrapOptionTag:
+                    case CfgOpcode.ResultUnwrapOptionPayload:
+                        RequireType(op.Type, op.Opcode == CfgOpcode.ResultUnwrapOptionTag ? IrValueType.Bool : IrValueType.I64);
+                        CheckGuestOp(op, right: op.Opcode == CfgOpcode.ResultUnwrapOr);
+                        var requiredPayload = op.Opcode is CfgOpcode.ResultUnwrapOptionTag or CfgOpcode.ResultUnwrapOptionPayload
+                            ? IrValueType.OptionI64 : IrValueType.I64;
+                        if (!definitions.TryGetValue(op.Left!.Value, out var operand) || !operand.Type.IsResult() ||
+                            operand.Type.Payload() != requiredPayload)
+                            throw new FormatException("Result projection has the wrong success payload");
+                        Use(i, opIndex, op.Left.Value, operand.Type);
+                        if (op.Opcode == CfgOpcode.ResultUnwrapOr)
+                            Use(i, opIndex, op.Right!.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.InlineCooperate:
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is not null || op.Right is not null || op.I64Constant is not null ||
+                            op.BoolConstant is not null || op.Target is not null || op.Arguments is not null ||
+                            op.TextOperand is not null)
+                            throw new FormatException("Malformed CFG inline cooperation");
+                        break;
+                    case CfgOpcode.PackOptionI64:
+                        RequireType(op.Type, IrValueType.OptionI64);
+                        if (op.Left is not int tag || op.Right is not int payload ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG Option<int> result");
+                        Use(i, opIndex, tag, IrValueType.Bool);
+                        Use(i, opIndex, payload, IrValueType.I64);
+                        break;
+                    case CfgOpcode.ReadOptionI64Tag:
+                    case CfgOpcode.ReadOptionI64Payload:
+                        RequireType(op.Type, op.Opcode == CfgOpcode.ReadOptionI64Tag
+                            ? IrValueType.Bool : IrValueType.I64);
+                        if (op.Left is not int option || op.Right is not null ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG Option<int> result projection");
+                        Use(i, opIndex, option, IrValueType.OptionI64);
+                        break;
+                    case CfgOpcode.ArrayIndexValidI64:
+                    {
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.I64Constant is null ||
+                            op.I64Constant < 0 ||
+                            op.I64Constant > MaxFixedArrayElements ||
+                            op.Right is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("E_ARRAY_BOUNDS_IR: forged inline array length or index");
+                        Use(i, opIndex, op.Left.Value, IrValueType.I64);
+                        break;
+                    }
+                    case CfgOpcode.OptionEqualI64:
+                    {
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.Right is null ||
+                            op.Arguments is null || op.Arguments.Count != 2 ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null)
+                            throw new FormatException("Malformed CFG Option<int> equality");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
+                        Use(i, opIndex, op.Right.Value, IrValueType.I64);
+                        Use(i, opIndex, op.Arguments[0], IrValueType.Bool);
+                        Use(i, opIndex, op.Arguments[1], IrValueType.I64);
+                        break;
+                    }
+                    case CfgOpcode.BoolNot:
+                    {
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.Right is not null ||
+                            op.Arguments is not null || op.Target is not null ||
+                            op.I64Constant is not null || op.BoolConstant is not null)
+                            throw new FormatException("Malformed CFG Boolean negation");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
+                        break;
+                    }
+                    case CfgOpcode.OptionOrI64:
+                    {
+                        RequireType(op.Type, IrValueType.I64);
+                        if (op.Left is null || op.Right is null ||
+                            op.Arguments is null || op.Arguments.Count != 1 ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null)
+                            throw new FormatException("Malformed CFG Option<int> selection");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
+                        Use(i, opIndex, op.Right.Value, IrValueType.I64);
+                        Use(i, opIndex, op.Arguments[0], IrValueType.I64);
+                        break;
+                    }
+                    case CfgOpcode.ConstantI64:
+                        RequireType(op.Type, IrValueType.I64);
+                        if (op.I64Constant is null || op.BoolConstant is not null ||
+                            op.Left is not null || op.Right is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG i64 constant");
+                        break;
+                    case CfgOpcode.ConstantBool:
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.BoolConstant is null || op.I64Constant is not null ||
+                            op.Left is not null || op.Right is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG bool constant");
+                        break;
+                    case CfgOpcode.CheckedAdd:
+                    case CfgOpcode.CheckedSubtract:
+                    case CfgOpcode.CheckedMultiply:
+                    case CfgOpcode.CheckedDivide:
+                    case CfgOpcode.ShiftLeftI64:
+                    case CfgOpcode.ShiftRightLogicalI64:
+                    case CfgOpcode.ShiftRightArithmeticI64:
+                    case CfgOpcode.EqualI64:
+                    case CfgOpcode.NotEqualI64:
+                    case CfgOpcode.LessThanI64:
+                    case CfgOpcode.GreaterThanI64:
+                    case CfgOpcode.LessThanOrEqualI64:
+                    case CfgOpcode.GreaterThanOrEqualI64:
+                        RequireType(op.Type,
+                            op.Opcode is CfgOpcode.EqualI64 or CfgOpcode.NotEqualI64 or
+                                CfgOpcode.LessThanI64 or CfgOpcode.GreaterThanI64 or
+                                CfgOpcode.LessThanOrEqualI64 or CfgOpcode.GreaterThanOrEqualI64
+                                ? IrValueType.Bool : IrValueType.I64);
+                        if (op.Left is null || op.Right is null ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG binary operation");
+                        Use(i, opIndex, op.Left.Value, IrValueType.I64);
+                        Use(i, opIndex, op.Right.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.EqualBool:
+                    case CfgOpcode.NotEqualBool:
+                    case CfgOpcode.XorBool:
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.Right is null ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG bool operation");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
+                        Use(i, opIndex, op.Right.Value, IrValueType.Bool);
+                        break;
+                    default:
+                        throw new FormatException("Unknown CFG opcode");
+                }
+            }
+
+            int termIndex = block.Instructions.Count;
+            switch (block.Terminator)
+            {
+                case CfgReturn returned:
+                    if (function.ResultType == IrValueType.Void)
+                        throw new FormatException("Void CFG method cannot return a value");
+                    Use(i, termIndex, returned.ValueId, function.ResultType);
+                    break;
+                case CfgReturnVoid:
+                    if (function.ResultType != IrValueType.Void)
+                        throw new FormatException("Non-void CFG method requires explicit return value");
+                    break;
+                case CfgSignal signal:
+                    if (!Enum.IsDefined(signal.Effect)) throw new FormatException("Unknown guest control effect");
+                    Use(i, termIndex, signal.Error, IrValueType.GuestError);
+                    break;
+                case CfgJump jump:
+                    VerifyEdgeValues(i, termIndex, jump.Target, jump.Arguments);
+                    break;
+                case CfgBranch condition:
+                    Use(i, termIndex, condition.Condition, IrValueType.Bool);
+                    VerifyEdgeValues(i, termIndex, condition.TrueTarget, condition.TrueArguments);
+                    VerifyEdgeValues(i, termIndex, condition.FalseTarget, condition.FalseArguments);
+                    break;
+            }
+        }
+
+        return new VerifiedCfgFunction(function.Name, function.ResultType,
+            function.Entry, Array.AsReadOnly(blocks), frozenParameters);
+
+        void AddDefinition(int id, IrValueType type, int block, int instruction)
+        {
+            if (id < 0 || (!IsValueType(type) &&
+                           (type != IrValueType.OptionI64 || instruction < 0)) ||
+                !definitions.TryAdd(id, new Definition(block, instruction, type)))
+                throw new FormatException("Invalid or duplicate CFG SSA definition");
+            if (definitions.Count > MaxValues)
+                throw new FormatException("CFG SSA value budget exceeded");
+        }
+
+        void RegisterEdge(int from, string targetName, IReadOnlyList<int> args)
+        {
+            if (!Identifier(targetName) || !indexes.TryGetValue(targetName, out int target))
+                throw new FormatException("Invalid or missing CFG jump target");
+            if (args.Count != blocks[target].Parameters.Count)
+                throw new FormatException("CFG block argument arity mismatch");
+            successors[from].Add(target);
+            predecessors[target].Add(from);
+        }
+
+        void Use(int block, int atInstruction, int id, IrValueType required)
+        {
+            if (!definitions.TryGetValue(id, out var definition) || definition.Type != required)
+                throw new FormatException("Undefined or mistyped CFG SSA use");
+            if (definition.Block == block)
+            {
+                if (definition.Instruction >= atInstruction)
+                    throw new FormatException("CFG SSA use precedes definition");
+            }
+            else if (!dominators[block].Contains(definition.Block))
+                throw new FormatException("CFG SSA use not dominated by definition");
+        }
+
+        void VerifyEdgeValues(int from, int at, string targetName, IReadOnlyList<int> args)
+        {
+            int target = indexes[targetName];
+            for (int i = 0; i < args.Count; i++)
+                Use(from, at, args[i], blocks[target].Parameters[i].Type);
+        }
+    }
+
+    private static bool IsValueType(IrValueType type) =>
+        type is IrValueType.I64 or IrValueType.Bool or IrValueType.GuestError or IrValueType.GuestText || type.IsResult();
+
+    private static void CheckGuestOp(CfgInstruction op, bool left = true, bool right = false)
+    {
+        if (op.Left.HasValue != left || op.Right.HasValue != right || op.I64Constant is not null ||
+            op.BoolConstant is not null || op.Target is not null || op.Arguments is not null)
+            throw new FormatException("Malformed guest Result or Error instruction");
+    }
+
+    // The caller's IReadOnlyList implementation is untrusted. Explicitly
+    // indexed snapshots enforce the admitted Count bound even if its
+    // IEnumerable enumerator yields infinitely many values. Never enumerate.
+    private static IReadOnlyList<T> CopyIndexed<T>(IReadOnlyList<T> source, int count)
+    {
+        var copy = new T[count];
+        for (int i = 0; i < count; i++)
+            copy[i] = source[i];
+        return Array.AsReadOnly(copy);
+    }
+
+    private static void RequireType(IrValueType actual, IrValueType expected)
+    {
+        if (actual != expected) throw new FormatException("CFG result type mismatch");
+    }
+
+    private static bool Identifier(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 128)
+            return false;
+        if (!Alpha(value[0]) && value[0] != '_') return false;
+        foreach (char c in value.AsSpan(1))
+            if (!Alpha(c) && c != '_' && c is not (>= '0' and <= '9'))
+                return false;
+        return true;
+    }
+
+    private static bool Alpha(char c) =>
+        c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z');
+}

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <StripSymbols>true</StripSymbols>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime.Http/Ores.Net.Runtime.Http.csproj" />
+    <Compile Include="$(GeneratedHttpActors)" Link="HttpActors.g.cs" Condition="'$(GeneratedHttpActors)' != ''" />
+  </ItemGroup>
+  <Target Name="RequireCompiledAttoSource" BeforeTargets="CoreCompile" Condition="!Exists('$(GeneratedHttpActors)')">
+    <Error Text="Set GeneratedHttpActors to the source emitted by oresnet emit-http-actors-csharp." />
+  </Target>
+</Project>

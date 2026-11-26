@@ -1,0 +1,10 @@
+fnc main():int {
+    const int answer = 6 * 7;
+    const bool enabled = answer == 42;
+    val int limit = answer;
+    let int current = 0;
+    while current < limit {
+        current = current + 1;
+    }
+    if enabled { return current; } else { return 0; }
+}

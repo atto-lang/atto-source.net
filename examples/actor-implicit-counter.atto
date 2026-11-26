@@ -1,0 +1,12 @@
+define isolated actor MessageCounter as
+    state {
+        count: int = 0;
+    }
+
+    pub increment(int incoming): int using state.read, state.write {
+        return handle_state(critical-write |s| -> {
+            s.count = s.count + incoming;
+            return s.count;
+        });
+    }
+end

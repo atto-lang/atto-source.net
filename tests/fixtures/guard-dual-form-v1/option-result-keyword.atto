@@ -1,0 +1,17 @@
+fnc optional_port(bool present): Option<int> {
+  guard present else
+    return None;
+  end
+  return Some(8080);
+}
+
+fnc preserve(int? value): int? { return value; }
+
+pub fnc main(): int {
+  val Option<int> some = preserve(optional_port(true));
+  val Option<int> none = preserve(optional_port(false));
+  val Option<int> minimum = preserve(Some(-9223372036854775808));
+  guard some.is_some() && none.is_none() { return 0; }
+  guard minimum.unwrap_or(0) eq -9223372036854775808 { ^ 0; }
+  ^ some.unwrap_or(0) - 8038;
+}

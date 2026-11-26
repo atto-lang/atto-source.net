@@ -5,8 +5,6 @@ compiler=compiler/Atto.Cil.Compiler/Atto.Cil.Compiler.csproj
 host=tests/Atto.Cil.Guest.Host/Atto.Cil.Guest.Host.csproj
 guest=artifacts/AttoGuest.dll
 mkdir -p artifacts
-# The compiler now intentionally refuses all DLL overwrites; test harness
-# removes only its own known output before deliberate new compilations.
 rm -f "$guest"
 
 expect_42() {
@@ -37,8 +35,16 @@ for case in \
   unknown-parameter:E_SYMBOL \
   no-return:E_PARSE \
   duplicate-parameter:E_DUP_PARAM \
-  bool-unsupported:E_PARSE \
-  no-main:E_ENTRY; do
+  bool-unsupported:E_RETURN_TYPE \
+  no-main:E_ENTRY \
+  checked-i64-division-zero:E_I64_DIVISION_BY_ZERO \
+  checked-i64-division-overflow:E_I64_DIVISION_OVERFLOW \
+  checked-i64-division-unproven:E_I64_DIVISION_UNVERIFIED \
+  checked-i64-division-min-unproven:E_I64_DIVISION_UNVERIFIED \
+  signed-min-underflow:E_LITERAL \
+  float-result-in-int-return:E_RETURN_TYPE \
+  float-result-as-int-arg:E_RETURN_TYPE \
+  unsupported-float-addition:E_RETURN_TYPE; do
   name="$(echo "$case" | cut -d: -f1)"
   diagnostic="$(echo "$case" | cut -d: -f2)"
   rm -f artifacts/Rejected.dll
@@ -54,7 +60,7 @@ for case in \
   }
   test ! -e artifacts/Rejected.dll || { echo "NEGATIVE_ARTIFACT_LEAK case=$name"; exit 1; }
 done
-echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=12"
+echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=20"
 dotnet build "$host" -c Release
 expect_42 CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
@@ -63,13 +69,23 @@ test -x /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 expect_42 NATIVEAOT_GUEST /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 
 # Additional genuine CIL guest executions; neither calculation is in C#.
-for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto; do
+for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto fixtures/cil/signed-min-boundary.atto fixtures/cil/checked-i64-division.atto; do
   rm -f "$guest"
   dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$guest"
   dotnet build "$host" -c Release
   expect_42 EXTRA_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
+  case "$fixture" in
+    fixtures/cil/signed-min-boundary.atto|fixtures/cil/checked-i64-division.atto)
+      name="$(basename "$fixture" .atto)"
+      artifact_dir="/tmp/atto-cil-$name-nativeaot"
+      dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
+        --self-contained true -o "$artifact_dir"
+      test -x "$artifact_dir/Atto.Cil.Guest.Host"
+      expect_42 "${name}_NATIVEAOT_GUEST" "$artifact_dir/Atto.Cil.Guest.Host"
+      ;;
+  esac
 done
-echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=3"
+echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=5"
 
 # Functional pipeline conformance is compiled from .atto source, not evaluated
 # in shell/C#/Python. The same produced CIL is executed under CoreCLR and,
@@ -348,3 +364,29 @@ for name in sync task yield; do
   done
 done
 echo 'ATTO_CIL_AUTHORITY_WORD_MATRIX=9_NO_GUEST_OUTPUT'
+
+# Exact comparator source, host grant is required, both execution modes.
+test "$(git hash-object fixtures/cil/pipelines/comparator-function-pipeline.atto)" = a29743b5ca5c415fd5896186cdeb88e2eb406dcf
+rm -f "$guest"
+set +e
+dotnet run --no-build -c Release --project "$compiler" -- fixtures/cil/pipelines/comparator-function-pipeline.atto "$guest" >/tmp/atto-comparator-denied.out 2>/tmp/atto-comparator-denied.err
+rc=$?
+set -e
+test "$rc" -eq 2 && test ! -e "$guest" && grep -Fq E_PERMISSION: /tmp/atto-comparator-denied.err
+dotnet run --no-build -c Release --project "$compiler" -- fixtures/cil/pipelines/comparator-function-pipeline.atto "$guest" --allow-stdio
+printf '121\n' >/tmp/atto-comparator-expected.out
+dotnet build "$host" -c Release -t:Rebuild
+expect_pipeline_exit comparator-CORECLR 121 dotnet run --no-build -c Release --project "$host" >/tmp/atto-comparator-managed.out 2>/tmp/atto-comparator-managed.err
+# Capture guest output independently of the shell helper's status message.
+set +e
+dotnet run --no-build -c Release --project "$host" >/tmp/atto-comparator-managed.out 2>/tmp/atto-comparator-managed.err
+rc=$?
+set -e
+test "$rc" -eq 121 && cmp /tmp/atto-comparator-expected.out /tmp/atto-comparator-managed.out && test ! -s /tmp/atto-comparator-managed.err
+dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true --self-contained true -o /tmp/atto-comparator-aot
+set +e
+/tmp/atto-comparator-aot/Atto.Cil.Guest.Host >/tmp/atto-comparator-native.out 2>/tmp/atto-comparator-native.err
+rc=$?
+set -e
+test "$rc" -eq 121 && cmp /tmp/atto-comparator-expected.out /tmp/atto-comparator-native.out && test ! -s /tmp/atto-comparator-native.err
+echo ATTO_COMPARATOR_PIPELINE_CORECLR_NATIVEAOT_PASS

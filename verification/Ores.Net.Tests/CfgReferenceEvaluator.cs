@@ -1,0 +1,111 @@
+using Ores.Net.Compiler;
+
+// Managed verification-only CFG interpreter; never shipped by the compiler.
+internal static class CfgReferenceEvaluator
+{
+    public static long Evaluate(VerifiedCfgFunction function, int maxSteps = 100_000)
+    {
+        ArgumentNullException.ThrowIfNull(function);
+        if (maxSteps <= 0) throw new ArgumentOutOfRangeException(nameof(maxSteps));
+        var blocks = function.Blocks.ToDictionary(b => b.Name, StringComparer.Ordinal);
+        var values = new Dictionary<int, object>();
+        string currentName = function.Entry;
+        object[] arguments = Array.Empty<object>();
+
+        for (int step = 0; step < maxSteps; step++)
+        {
+            var block = blocks[currentName];
+            if (block.Parameters.Count != arguments.Length)
+                throw new InvalidOperationException("Invalid verified block argument arity");
+            for (int i = 0; i < arguments.Length; i++)
+                values[block.Parameters[i].Id] = arguments[i];
+
+            foreach (var op in block.Instructions)
+            {
+                long Left() => (long)values[op.Left!.Value];
+                long Right() => (long)values[op.Right!.Value];
+                bool BoolLeft() => (bool)values[op.Left!.Value];
+                bool BoolRight() => (bool)values[op.Right!.Value];
+                bool OptionEqualI64()
+                {
+                    // Keep the test-only interpreter independent of emitted
+                    // CIL, but enforce identical tagged semantics. Inactive
+                    // None payload slots must never participate in equality.
+                    bool leftPresent = (bool)values[op.Left!.Value];
+                    bool rightPresent = (bool)values[op.Arguments![0]];
+                    if (leftPresent != rightPresent) return false;
+                    return !leftPresent ||
+                        (long)values[op.Right!.Value] ==
+                        (long)values[op.Arguments[1]];
+                }
+                values[op.ResultId] = op.Opcode switch
+                {
+                    CfgOpcode.ConstantI64 => op.I64Constant!.Value,
+                    CfgOpcode.ConstantBool => op.BoolConstant!.Value,
+                    CfgOpcode.CheckedAdd => checked(Left() + Right()),
+                    CfgOpcode.CheckedSubtract => checked(Left() - Right()),
+                    CfgOpcode.CheckedMultiply => checked(Left() * Right()),
+                    CfgOpcode.ShiftLeftI64 => Left() << ShiftDistance(Right()),
+                    CfgOpcode.ShiftRightLogicalI64 => (long)((ulong)Left() >> ShiftDistance(Right())),
+                    CfgOpcode.ShiftRightArithmeticI64 => Left() >> ShiftDistance(Right()),
+                    CfgOpcode.CheckedDivide => DivideChecked(Left(), Right()),
+                    CfgOpcode.EqualI64 => Left() == Right(),
+                    CfgOpcode.NotEqualI64 => Left() != Right(),
+                    CfgOpcode.LessThanI64 => Left() < Right(),
+                    CfgOpcode.ArrayIndexValidI64 =>
+                        Left() >= 0 && Left() < op.I64Constant!.Value,
+                    CfgOpcode.EqualBool => BoolLeft() == BoolRight(),
+                    CfgOpcode.NotEqualBool => BoolLeft() != BoolRight(),
+                    CfgOpcode.XorBool => BoolLeft() ^ BoolRight(),
+                    CfgOpcode.GreaterThanI64 => Left() > Right(),
+                    CfgOpcode.LessThanOrEqualI64 => Left() <= Right(),
+                    CfgOpcode.GreaterThanOrEqualI64 => Left() >= Right(),
+                    CfgOpcode.BoolNot => !(bool)values[op.Left!.Value],
+                    CfgOpcode.OptionEqualI64 => OptionEqualI64(),
+                    CfgOpcode.OptionOrI64 =>
+                        (bool)values[op.Left!.Value]
+                            ? (long)values[op.Right!.Value]
+                            : (long)values[op.Arguments![0]],
+                    _ => throw new InvalidOperationException("Unexpected CFG opcode")
+                };
+            }
+
+            switch (block.Terminator)
+            {
+                case CfgReturn returned:
+                {
+                    // A verified CFG may also return Bool. The test-only
+                    // evaluator exposes the canonical 0/1 projection so
+                    // the same oracle can exercise tagged equality directly.
+                    object result = values[returned.ValueId];
+                    return result is bool boolean ? (boolean ? 1L : 0L) : (long)result;
+                }
+                case CfgJump jump:
+                    arguments = jump.Arguments.Select(id => values[id]).ToArray();
+                    currentName = jump.Target;
+                    break;
+                case CfgBranch branch:
+                    bool condition = (bool)values[branch.Condition];
+                    arguments = (condition ? branch.TrueArguments : branch.FalseArguments)
+                        .Select(id => values[id]).ToArray();
+                    currentName = condition ? branch.TrueTarget : branch.FalseTarget;
+                    break;
+                default:
+                    throw new InvalidOperationException("Unexpected CFG terminator");
+            }
+        }
+
+        throw new InvalidOperationException("CFG execution exceeded finite step budget");
+    }
+
+    // Same contract as the emitted guard: 0..63, else the checked OverflowException.
+    private static int ShiftDistance(long distance) =>
+        distance is >= 0 and <= 63 ? (int)distance : throw new OverflowException();
+
+    private static long DivideChecked(long left, long right)
+    {
+        if (right == 0) throw new DivideByZeroException();
+        if (left == long.MinValue && right == -1) throw new OverflowException();
+        return left / right;
+    }
+}

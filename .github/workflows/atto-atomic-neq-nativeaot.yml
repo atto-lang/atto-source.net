@@ -1,0 +1,56 @@
+name: AttoLang atomic neq NativeAOT proof (candidate)
+on:
+  pull_request:
+    paths:
+      - 'compiler/Ores.Net.Compiler.Core/StructuredSource.cs'
+      - 'examples/atto-neq-*.atto'
+      - 'verification/Ores.Net.Tests/**'
+      - 'verification/assert-atto-equality-native-aot.sh'
+      - '.github/workflows/atto-atomic-neq-nativeaot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  atto-neq-real-aot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact head, tree and guest fixture blobs
+        shell: bash
+        env:
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          tree="$(git rev-parse HEAD^{tree})"
+          [[ "$tree" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD:examples/atto-neq-nativeaot.atto)" = 0e69c04a8a15c3da924183656da10ab7dcdeb9bd
+          for p in examples/atto-neq-nativeaot.atto examples/atto-neq-mixed-bool-reject.atto examples/atto-neq-split-reject.atto examples/atto-neq-suffix-reject.atto; do
+            test "$(git hash-object --no-filters "$p")" = "$(git rev-parse "HEAD:$p")"
+          done
+          echo "ATTO_OPERATOR_SOURCE_PINNED head=$SOURCE_HEAD tree=$tree"
+      - name: Install .NET SDK 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install NativeAOT system toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev binutils file
+      - name: Validate script and run CIL/CFG regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n verification/assert-atto-equality-native-aot.sh
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Execute real compiled AttoLang operators through NativeAOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash verification/assert-atto-equality-native-aot.sh
+          echo "ATTO_LANG_EQ_NEQ_ATOMIC_NATIVEAOT_EXECUTED"

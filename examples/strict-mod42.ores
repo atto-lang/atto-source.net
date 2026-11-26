@@ -1,0 +1,4 @@
+// Euclidean modulus of a negative dividend yields a nonnegative 3.
+define pub fnc main(): int {
+    return Integer.mod(-9, 4) + 39;
+}

@@ -1,0 +1,4 @@
+// expect-error: E_PARSE
+pub fnc main(): int {
+  stdio.println(7);
+}

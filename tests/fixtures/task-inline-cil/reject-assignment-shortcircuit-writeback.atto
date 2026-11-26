@@ -1,0 +1,6 @@
+pub fnc main(): int {
+    let bool result = false;
+    let int count = 0;
+    result = true && (false && sync task<bool> { count = 42; return true; });
+    return count;
+}

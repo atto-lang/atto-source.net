@@ -1,0 +1,8 @@
+pub fnc main(): int {
+  do sync task<void> {
+    guard false else
+      throw! new Error("guard must return");
+    end
+  }
+  return 42;
+}

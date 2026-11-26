@@ -1,0 +1,4 @@
+// The lexer recognizes '=' only to distinguish syntax diagnostics;
+// expression-position assignment must remain rejected, not lowered.
+// expect-error: E_PARSE
+pub fnc main(): int { return 1 = 2; }
