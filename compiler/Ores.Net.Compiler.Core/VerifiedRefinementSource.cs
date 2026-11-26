@@ -269,6 +269,19 @@ public static partial class OresParser
             while (Current.Text.Length != 0)
             {
                 if (functions.Count >= 64) throw new FormatException("E_REFINEMENT_LIMIT: too many verified functions");
+                var annotations = new List<(int Start,int End,bool Requires)>();
+                while(Take("@")) {
+                    if(annotations.Count>=16)throw new FormatException("E_REFINEMENT_CONTRACT: contract budget");
+                    bool requires=Take("requires");
+                    if(!requires&&!Take("ensures"))throw new FormatException("E_REFINEMENT_CONTRACT: unsupported annotation");
+                    Expect("(");int start=_index;
+                    while(Current.Text!=")") {
+                        if(Current.Text.Length==0||_index-start>=32||Current.Text is ("(" or "{" or "}" or ";" or "@"))
+                            throw new FormatException("E_REFINEMENT_CONTRACT: invalid bounded annotation predicate");
+                        _index++;
+                    }
+                    annotations.Add((start,_index,requires));Expect(")");
+                }
                 bool isPublic = Take("pub");
                 if (!isPublic) Take("private");
                 Expect("fnc");
@@ -301,20 +314,38 @@ public static partial class OresParser
                 if (main && (parameters.Count != 0 || !declared.Unit.IsScalar
                         || !declared.Range.Includes(VerifiedI64Range.Full)))
                     throw new FormatException("E_REFINEMENT_EXPORT: main must have signature () -> int");
-                int contractStart = _index;
-                while (Take("requires"))
-                {
+                int contractStart = _index, clauseCount=annotations.Count;
+                if(main&&clauseCount!=0)throw new FormatException("E_REFINEMENT_CONTRACT: entrypoint annotations");
+                var requireSpans=annotations.Where(a=>a.Requires).ToArray();
+                int nextRequires=0;
+                while(true) {
+                    int resume=_index;
+                    bool annotated=nextRequires<requireSpans.Length;
+                    var span=annotated?requireSpans[nextRequires++]:default;
+                    if(annotated)_index=span.Start;
+                    else {if(!Take("requires"))break;if(++clauseCount>16)throw new FormatException("E_REFINEMENT_CONTRACT: contract budget");}
                     if (main) throw new FormatException("E_REFINEMENT_EXPORT: main cannot require caller facts");
                     string param = ReadVerifiedName();
                     if (!verifiedLocals.TryGetValue(param, out var type))
                         throw new FormatException("E_REFINEMENT_NAME: requires must name a parameter");
-                    verifiedLocals[param] = ReadVerifiedBound(type, ReadQuantityComparison());
+                    string comparison;
+                    if (Take("!=")) comparison = "!=";
+                    else if(Current.Text == "!" && _index+1<tokens.Count && tokens[_index+1].Text=="=" && tokens[_index+1].Offset==Current.Offset+1) { _index+=2; comparison="!="; }
+                    else comparison=ReadQuantityComparison();
+                    verifiedLocals[param] = ReadVerifiedBound(type, comparison);
+                    if(annotated){if(_index!=span.End)throw new FormatException("E_REFINEMENT_CONTRACT: trailing annotation tokens");_index=resume;}
                 }
                 var required = parameters.Select(param => verifiedLocals[param.Name]).ToArray();
                 var guaranteed = declared;
                 var upperParameters = new List<int>();
-                while (Take("ensures"))
-                {
+                var ensureSpans=annotations.Where(a=>!a.Requires).ToArray();
+                int nextEnsures=0;
+                while(true) {
+                    int resume=_index;
+                    bool annotated=nextEnsures<ensureSpans.Length;
+                    var span=annotated?ensureSpans[nextEnsures++]:default;
+                    if(annotated)_index=span.Start;
+                    else {if(!Take("ensures"))break;if(++clauseCount>16)throw new FormatException("E_REFINEMENT_CONTRACT: contract budget");}
                     Expect("result");
                     var op = ReadQuantityComparison();
                     if (op == "<=" && IsSourceIdentifier(Current.Text))
@@ -330,8 +361,9 @@ public static partial class OresParser
                     {
                         guaranteed = ReadVerifiedBound(guaranteed, op);
                     }
+                    if(annotated){if(_index!=span.End)throw new FormatException("E_REFINEMENT_CONTRACT: trailing annotation tokens");_index=resume;}
                 }
-                bool contracted = _index != contractStart;
+                bool contracted = annotations.Count != 0 || _index != contractStart;
                 string closer = "}";
                 if (!Take("{"))
                 {
