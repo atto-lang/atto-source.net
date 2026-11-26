@@ -519,7 +519,7 @@ public static partial class OresParser
     }
     private readonly record struct Token(string Text, int Offset);
 
-    private sealed class Lexer(string text, bool allowCaretReturn, bool strictBoolean = false)
+    private sealed class Lexer(string text, bool allowCaretReturn, bool strictBoolean = false, bool strictFixedArrays = false)
     {
         private int _i;
         private bool previousWasWith;
