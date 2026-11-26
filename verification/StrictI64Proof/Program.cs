@@ -1,0 +1,1 @@
+StrictI64ProofTests.Run();
