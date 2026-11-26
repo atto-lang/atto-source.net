@@ -2692,8 +2692,13 @@ public static partial class OresStructuredParser
                 index++;
                 if (++forwards > 64)
                     throw Error("E_VALUE_PIPE_BUDGET: forward application exceeds 64 stages");
-                string name = Name();
-                value = ApplyValueStage(name, at, value);
+                if (Take("match"))
+                    value = ReadMatchValue(at, depth + 1, value);
+                else
+                {
+                    string name = Name();
+                    value = ApplyValueStage(name, at, value);
+                }
             }
             if (Current.Text == "<|")
                 throw Error("E_VALUE_PIPE_DIRECTION: parenthesize mixed |> and <| applications");
