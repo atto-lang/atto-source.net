@@ -15,12 +15,12 @@ internal static class HeapContainerSourceBoundaryTests
         // checked scalar OresIR and emitted as CIL. A Tuple value is permitted
         // only when an immediate constant-index projection proves it cannot
         // escape: no unverified owning heap representation is manufactured.
-        // Tuple constant-index projections (`Tuple.of(..)[i]`) stay out: main's
-        // SafeCollectionSourceAdmission rejects every bracket until checked
-        // bounds / Option results / ref32 lowering exists.
+        // The scalar-only bracket exception is restricted to an immediate
+        // constant-index Tuple.of projection. All general indexing stays denied.
         var closedProducts = new (string Source, long Expected)[]
         {
-            ("pub fnc main():int{return Record.of(low: 11, high: 23).high + 19;}", 42),
+            ("pub fnc main():int{return Tuple.of<int,int>(11,42)[1];}", 42),
+            ("pub fnc main():int{return Tuple.of(42,-1)[0];}", 42),
             ("pub fnc main():int{return Record.of(low: 11, high: 23).high + 19;}", 42),
             ("pub fnc main():int{return Record.of(a: -9223372036854775808, b: 42).b;}", 42),
             ("pub fnc main():int{return Entry.of(11, 23).value + 19;}", 42),
@@ -65,6 +65,13 @@ internal static class HeapContainerSourceBoundaryTests
             "Tuple.of<int>(1,2)[0]",  // wrong witness arity
             "Tuple.of(true,3)[0]",    // scalar i64-only type gate
             "Tuple.of(1,2)[0].foo",   // no dynamic guest object member
+            "Tuple.of(1,2)[0][0]",    // no chained indexing
+            "Tuple.of(1,2)[1+0]",    // no dynamic index expression
+            "Tuple.of(1,2)[0] + [42][0]", // no unrelated bracket admission
+            "Array.of(1,2)[0]",      // no general collection projection
+            "foo.Tuple.of(1,2)[0]",  // no qualified lookalike
+            "Tuple.of(1,2)[0",       // no malformed closer
+            "Tuple.of(1,2)[0]]",     // no extra closer
             "Map.of<string,int>()",   // owned Map remains unsupported
             "Entry.of(1,2)",      // first-class nominal Entry cannot escape
             "Pair.of(\"a\",2)",       // first-class nominal Pair cannot escape
