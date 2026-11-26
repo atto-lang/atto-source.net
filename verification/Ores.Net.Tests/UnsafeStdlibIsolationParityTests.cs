@@ -17,7 +17,10 @@ internal static class UnsafeStdlibIsolationParityTests
             "std/./unsafe/ffi", "std/other/../unsafe/native",
             "ores.std//unsafe/memory",
             "./std/unsafe/ffi", "../ores.std/unsafe/native",
-            "pkg/../std/unsafe/memory"
+            "pkg/../std/unsafe/memory",
+            "atto.std/unsafe", "atto.std.unsafe.ffi", "atto.std:unsafe::ffi",
+            "atto::std::unsafe::ffi", "ores::std::unsafe::ffi", "std::unsafe::ffi",
+            "atto.std/./unsafe/native", "atto.std/other/../unsafe/ffi"
         };
         foreach (var path in denied)
         {
@@ -28,7 +31,8 @@ internal static class UnsafeStdlibIsolationParityTests
             "std/unsafe_tools", "std/unsafe-math", "pkg:unsafe",
             "./unsafe.ores", "ores.std/safe", "std:unsafe_tools",
             "std/./unsafe_tools", "std/other/../safe",
-            "pkg/std/unsafe/memory", "pkg/std/unsafe_tools"
+            "pkg/std/unsafe/memory", "pkg/std/unsafe_tools",
+            "atto.std/unsafe_tools", "atto.std:unsafe-math", "pkg/atto.std/unsafe", "atto.std/safe"
         })
         {
             Require(!UnsafeStdlibImportAdmission.IsReserved(path),
