@@ -17,6 +17,39 @@ internal static class ExecutionCallbackContextTests
             parentExecution: 11,
             continuation: 5);
 
+        // default(struct) does not execute the validating constructor.
+        bool defaultActiveRejected = false;
+        try
+        {
+            var invalid = OresExecutionContexts.EnterActive(default);
+            invalid.Dispose();
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            defaultActiveRejected = true;
+        }
+        Require(defaultActiveRejected && OresExecutionContexts.Active is null,
+            "default active context granted authority");
+
+        using (var validScope = OresExecutionContexts.EnterActive(active))
+        {
+            bool nestedDefaultRejected = false;
+            try
+            {
+                var invalid = OresExecutionContexts.EnterActive(default);
+                invalid.Dispose();
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                nestedDefaultRejected = true;
+            }
+            Require(nestedDefaultRejected &&
+                OresExecutionContexts.Active?.Execution == active.Execution,
+                "rejected nested default context changed active authority");
+        }
+        Require(OresExecutionContexts.Active is null,
+            "default-context rejection leaked execution authority");
+
         OresExecutionCallbackContext captured;
         using (var activeScope = OresExecutionContexts.EnterActive(active))
         {
