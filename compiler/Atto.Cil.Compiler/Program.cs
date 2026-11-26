@@ -84,7 +84,8 @@ internal sealed class Parser
         _position++;
         return name;
     }
-    internal Parser(string source)
+    internal IReadOnlyList<string> CountedTokens => _tokens;
+    internal Parser(string source, bool countedReady = false)
     {
         if (Encoding.UTF8.GetByteCount(source) > 65536)
             throw new CompilerError("E_LIMIT", "64 KiB source limit");
@@ -109,6 +110,8 @@ internal sealed class Parser
                 while (i < source.Length && source[i] is >= '0' and <= '9') i++;
             else if (c == '-' && i < source.Length && source[i] == '>') i++;
             else if (c == '=' && i < source.Length && source[i] == '=') i++;
+            else if (countedReady && i < source.Length && ((c == '&' && source[i] == '&') || (c == '|' && source[i] == '|') || (c is '<' or '>' or '!' && source[i] == '='))) i++;
+            else if (countedReady && c is '[' or ']') { }
             else if (c == '|' && i < source.Length && source[i] == '>') i++;
             else if (c == '<' && i < source.Length && source[i] == '|') i++;
             // Tokenize < so unsupported nominal ADT patterns reach the
@@ -1273,6 +1276,7 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--counted-ready-v1") return CountedReadyCompiler.Run(args[1], args[2]);
         if ((args.Length != 2 && args.Length != 3) ||
             !args[0].EndsWith(".atto", StringComparison.Ordinal) ||
             !args[1].EndsWith(".dll", StringComparison.Ordinal) ||
