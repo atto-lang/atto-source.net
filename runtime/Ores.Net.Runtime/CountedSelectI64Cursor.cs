@@ -27,13 +27,15 @@ public sealed class CountedSelectI64Cursor
     private readonly bool _fair;
     private readonly List<object> _live = new();
     private readonly List<long> _values;
+    private List<Func<long, long>>? _projectors;
     private int _cursor;
     private bool _driving;
     private Round? _round;
     private CursorState _state;
     private Exception? _failure;
 
-    public CountedSelectI64Cursor(int count, IReadOnlyList<object> sources, bool fair = true)
+    public CountedSelectI64Cursor(int count, IReadOnlyList<object> sources, bool fair = true,
+        IReadOnlyList<Func<long, long>>? projectors = null)
     {
         if (count < 0 || count > 1024) throw new ArgumentOutOfRangeException(nameof(count), "SelectCountInvalid");
         _count = count;
@@ -50,6 +52,13 @@ public sealed class CountedSelectI64Cursor
                 throw new ArgumentException("counted source requires trusted i64 channel or Future");
             _live.Add(source);
         }
+        if (projectors is not null)
+        {
+            if (projectors.Count != length) throw new ArgumentException("one counted projector per lexical arm required");
+            _projectors = new(length);
+            for (int i = 0; i < length; i++)
+                _projectors.Add(projectors[i] ?? throw new ArgumentException("counted projector cannot be null"));
+        }
         _state = CursorState.Ready;
     }
     private void Owner()
@@ -63,7 +72,7 @@ public sealed class CountedSelectI64Cursor
 
     private void Fail(Exception error)
     {
-        _round = null; _live.Clear(); _values.Clear();
+        _round = null; _live.Clear(); _projectors = null; _values.Clear();
         _failure = error; _state = CursorState.Failed;
     }
 
@@ -136,7 +145,8 @@ public sealed class CountedSelectI64Cursor
                 round.Arbiter.ThrowIfCleanupFailed();
                 _round = null;
                 if (round.Error is { } error) { Fail(error); return true; }
-                if (!round.Eof) _values.Add(round.Value);
+                // Invoke only on the authenticated owner after the round has drained.
+                if (!round.Eof) _values.Add(_projectors is null ? round.Value : _projectors[i](round.Value));
                 var winner = _live[i];
                 int next = (i + 1) % n;
                 if (round.Eof || winner is SelectableI64Future)
@@ -150,10 +160,16 @@ public sealed class CountedSelectI64Cursor
                     _cursor = 0;
                     for (int j = 0; j < nextIndex; j++)
                         if (!ReferenceEquals(_live[j], winner)) _cursor++;
-                    _live.RemoveAll(source => ReferenceEquals(source, winner));
+                    // Retire all source aliases while preserving lexical projector alignment.
+                    for (int j = n - 1; j >= 0; j--)
+                        if (ReferenceEquals(_live[j], winner))
+                        {
+                            _live.RemoveAt(j);
+                            _projectors?.RemoveAt(j);
+                        }
                 }
                 else _cursor = next;
-                if (_values.Count == _count) { _live.Clear(); _state = CursorState.Success; }
+                if (_values.Count == _count) { _live.Clear(); _projectors = null; _state = CursorState.Success; }
                 else if (_live.Count == 0) Fail(new SelectExhaustedException());
                 else _state = CursorState.Ready;
                 return true;
@@ -176,7 +192,7 @@ public sealed class CountedSelectI64Cursor
         {
             _round?.Arbiter.Cancel();
             _round?.Arbiter.ThrowIfCleanupFailed();
-            _round = null; _values.Clear(); _live.Clear(); _state = CursorState.Cancelled;
+            _round = null; _values.Clear(); _live.Clear(); _projectors = null; _state = CursorState.Cancelled;
             return true;
         }
         catch (Exception error) { Fail(error); throw; }

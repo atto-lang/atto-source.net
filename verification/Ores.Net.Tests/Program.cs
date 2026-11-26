@@ -3,6 +3,13 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+if (args.Length == 1 && args[0] == "--aggregate-factories")
+{
+    HeapContainerSourceBoundaryTests.Run();
+    Console.WriteLine("AGGREGATE_FACTORY_CIL_BOUNDARIES_PASS");
+    return;
+}
+
 if (args.Length == 1 && args[0] == "--directional-value-pipe")
 {
     CriticalSuspendsBoundaryTests.Run();
@@ -1297,6 +1304,51 @@ try
     CilEmitter.EmitLibrary(lowered, irRepro);
     Require(File.ReadAllBytes(irGenerated).AsSpan().SequenceEqual(File.ReadAllBytes(irRepro)),
         "verified IR PE emission is byte-for-byte deterministic");
+
+    // Both spellings must share the verified integer-XOR path. These
+    // reference interpreters and PE inspections are not CLR/NativeAOT runs.
+    foreach (var (expression, expected) in new (string, long)[] {
+        ("12 ^^ 10", 6),
+        ("(-9223372036854775807 - 1) ^^ -1", long.MaxValue),
+        ("9223372036854775807 ^^ -1", long.MinValue),
+        ("-9223372036854775808 ^^ -9223372036854775808", 0),
+        ("4294967296 ^^ 1", 4294967297L),
+        ("9007199254740993 ^^ 9007199254740992", 1),
+        ("5 + 6 ^^ 4", 15),
+        ("11 ^^ 4 ^^ 7", 8),
+        ("(12 ^^ 10) * 7", 42),
+        ("Integer.bitXor(12, 10)", 6)
+    })
+    {
+        var xorAst = OresParser.Parse($"fnc main():int{{return {expression};}}");
+        var xorIr = OresIrLowering.Lower(xorAst);
+        Require(xorIr.Instructions.Any(op => op.Opcode == IrOpcode.BitXor),
+            "verified integer XOR opcode: " + expression);
+        Require(OresIrReferenceEvaluator.Evaluate(xorIr) == expected,
+            "integer XOR reference result: " + expression);
+        foreach (bool directAst in new[] { false, true })
+        {
+            var xorPath = Path.Combine(folder, $"OresGenerated.xor.{Guid.NewGuid():N}.dll");
+            if (directAst) CilEmitter.EmitLibrary(xorAst, xorPath);
+            else CilEmitter.EmitLibrary(xorIr, xorPath);
+            using var xorAssembly = AssemblyDefinition.ReadAssembly(xorPath);
+            var xorEntry = xorAssembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+            Require(xorEntry.Body.Instructions.Any(i => i.OpCode.Code == Code.Xor),
+                "actual emitted CIL xor opcode: " + expression);
+            Require(CilReferenceEvaluator.Evaluate(xorEntry) == expected,
+                "emitted CIL reference result: " + expression);
+        }
+    }
+    foreach (string invalid in new[] {
+        "return 12 ^ 10;", "return 12 ^ ^ 10;",
+        "return 12 ^/* gap */^ 10;", "return 12 ^^= 10;",
+        "return true ^^ false;", "return 12 ^^ true;",
+        "let int x = 12; x ^^= 10; return x;",
+        "val int x = 12; x ^^= 10; return x;"
+    })
+        Reject(() => OresParser.Parse($"fnc main():int{{{invalid}}}"),
+            "unsupported scalar XOR source: " + invalid);
 
     // Compare the independent IR reference interpreter with the emitted CIL
     // for normal arithmetic, divide-by-zero and signed overflow.

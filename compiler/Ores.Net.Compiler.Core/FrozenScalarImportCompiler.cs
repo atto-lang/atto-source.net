@@ -17,7 +17,7 @@ public static partial class OresStructuredParser
 
     // Only private parser-produced typed providers are retained. No caller can
     // supply cached ASTs. Every build lowers and verifies the entire CFG anew.
-    private sealed record CachedProvider(StructuredProgram Program,IReadOnlyList<StaticImportGraph.Export> Exports);
+    private sealed record CachedProvider(StructuredProgram Program,IReadOnlyList<StaticImportGraph.Export> Exports,string Version,string Source,bool ClosedPackage);
     public sealed record FrozenScalarBuild(VerifiedCfgModule Module,
         IReadOnlyList<string> ReparsedProviders,IReadOnlyList<string> ReusedProviders);
 
@@ -109,12 +109,20 @@ public static partial class OresStructuredParser
                 string prefix="frozen_provider_"+closure.ProviderIdentity(identity,ns)+"_";
                 var key=(identity,ns);
                 CachedProvider cached;
-                if(!dirty.Contains(identity)&&cache.TryGetValue(key,out var prior)) {
+                string providerSource=owner.ProviderSource(ns);
+                // A changed package lock is normally a conservative rebuild.
+                // For a dependency-free package, an exact unchanged namespace
+                // source and version are sufficient: parser ownership is the
+                // stable package/namespace prefix and no foreign signatures
+                // can have changed. Dependent packages retain full invalidation.
+                if(cache.TryGetValue(key,out var prior)&&(!dirty.Contains(identity)||
+                    (prior.ClosedPackage&&owner.Dependencies.Count==0&&prior.Version==owner.Version&&
+                     string.Equals(prior.Source,providerSource,StringComparison.Ordinal)))) {
                     cached=prior;
                     reused.Add(prefix);
                 } else {
                     var ownExports=new List<StaticImportGraph.Export>();
-                    var unit=ParseCore(owner.ProviderSource(ns),null,ns,ownExports,prefix,(source,member)=>{
+                    var unit=ParseCore(providerSource,null,ns,ownExports,prefix,(source,member)=>{
                     string[] parts=source.Split('/');
                     if(parts.Length<4) throw new FormatException("E_IMPORT_PATH: provider function import requires explicit exported subpath");
                     string dependency=string.Join("/",parts.Take(3));
@@ -145,7 +153,7 @@ public static partial class OresStructuredParser
                             return fn;
                         };
                     });
-                    cached=new CachedProvider(unit.Program,ownExports.AsReadOnly());
+                    cached=new CachedProvider(unit.Program,ownExports.AsReadOnly(),owner.Version,providerSource,owner.Dependencies.Count==0);
                     reparsed.Add(prefix);
                 }
                 staged.Add(key,cached);
@@ -234,7 +242,23 @@ public static partial class OresStructuredParser
         body.Add(new StructuredReturn(0,result));
         var program=new StructuredProgram("main",body.AsReadOnly(),
             new System.Collections.ObjectModel.ReadOnlyDictionary<string,StructuredFunction>(methods),order.AsReadOnly());
+        // Verify every admitted method first, including unreachable providers.
+        // Frozen scalar modules have no dynamic dispatch, exports or init hooks.
+        // Retain only the transitive closure of verified static call targets.
         var verified=OresStructuredCfgLowering.LowerModule(program);
+        var byName=verified.Helpers.ToDictionary(m=>m.Name,StringComparer.Ordinal);
+        var reached=new HashSet<string>(StringComparer.Ordinal);
+        var pending=new Stack<VerifiedCfgFunction>();pending.Push(verified.Main);
+        while(pending.Count!=0){
+            var method=pending.Pop();
+            foreach(var op in method.Blocks.SelectMany(b=>b.Instructions)){
+                if(op.Opcode is not (CfgOpcode.Call or CfgOpcode.TrapCall))continue;
+                if(op.Target is null||!byName.TryGetValue(op.Target,out var target))
+                    throw new FormatException("E_UNBOUND: verified frozen call target missing");
+                if(reached.Add(target.Name))pending.Push(target);
+            }
+        }
+        verified=new VerifiedCfgModule(verified.Main,Array.AsReadOnly(verified.Helpers.Where(m=>reached.Contains(m.Name)).ToArray()));
         nextGraph=closure;next=staged;
         return new FrozenScalarBuild(verified,reparsed.AsReadOnly(),reused.AsReadOnly());
     }
