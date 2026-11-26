@@ -1,7 +1,7 @@
 # Exact 35 original Atto compiler blobs retained from #26/#191 plus 3 new cross-feature negative fixtures.
 # SHA-1 Git object ID TAB repo-relative path. No private-source export approval is implied.
 1dec4dddd18007f6e3691f1192853daac024a8cc	docs/DIRECT_CIL_FLOAT_DIVISION_ADMISSION_V1.md
-e40d030bb5b58734cc0361968ca93a19b8737074	docs/DIRECT_CIL_GUEST_V0.md
+0747494a20214cd9270ea2155ba7f89cac84c099	docs/DIRECT_CIL_GUEST_V0.md
 bcb843ea3c8b68f4cd1fed846cea5a1fe08b2154	fixtures/cil/float-division.atto
 30849fa8e2884772d430cd792877bef3e00a6ef8	fixtures/cil/negative/float-result-as-int-arg.atto
 2dde225d8e0d7defe89826688fd0e27ccce11582	fixtures/cil/negative/float-result-in-int-return.atto

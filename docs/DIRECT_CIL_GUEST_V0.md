@@ -175,3 +175,7 @@ restricted direct-CIL subset, not the production multi-tenant compiler.
 ### Reproducible PE content identity
 
 The emitted DLL's PE content identifier is derived from SHA-256 over the ordered serialization blobs (not a time-based stamp). The existing replay test recompiles identical Atto source to a separate fresh destination and compares complete DLL SHA-256 values. Existing destinations remain protected; this change does not relax output or source admission. Reproducibility is scoped to the pinned compiler/toolchain and options, not a blanket cross-SDK reproducibility guarantee.
+
+## Ordered scalar sequences (stacked PR #20)
+
+`seq(a,b,c)` and `(> a,b,c)` evaluate 1–16 signed-i64 expressions in order; IL `pop` discards each non-tail value, never its execution. All members must be int, including singleton sequences. Existing checked-division admission remains mandatory: a literal zero divisor anywhere, including a discarded prefix, fails before emission. Checked arithmetic overflow in a prefix still traps during actual execution. This branch preserves the parent pipeline, match, stdout and deterministic no-clobber publication implementation. The older sequence PR's 14 pipeline fixtures are byte-identical to the parent; its 13 unique sequence fixtures are retained unchanged. Run `scripts/test-seq-cil-guest.sh` in addition to the three parent suites. No mutable bindings, actor ownership or general task semantics are implied.
