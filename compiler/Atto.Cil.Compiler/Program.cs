@@ -368,7 +368,16 @@ internal sealed class CIL(List<Function> functions)
 
         var builder = new ManagedPEBuilder(
             new PEHeaderBuilder(imageCharacteristics: Characteristics.ExecutableImage | Characteristics.Dll),
-            new MetadataRootBuilder(metadata), ilStream, flags: CorFlags.ILOnly);
+            new MetadataRootBuilder(metadata), ilStream, flags: CorFlags.ILOnly,
+            deterministicIdProvider: static blobs =>
+            {
+                // ManagedPEBuilder's default content ID is time-based. Hash
+                // the actual ordered PE blob bytes instead of a clock or path.
+                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                foreach (var blob in blobs)
+                    hash.AppendData(blob.GetBytes().AsSpan());
+                return BlobContentId.FromHash(hash.GetHashAndReset());
+            });
         var output = new BlobBuilder();
         builder.Serialize(output);
         var finalPath = Path.GetFullPath(destination);

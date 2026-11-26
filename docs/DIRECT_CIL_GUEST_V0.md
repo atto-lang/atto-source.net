@@ -94,3 +94,7 @@ The new CoreCLR and NativeAOT tests have **not executed**. The
 conformance ledger must remain `not_executed` until an exact-head
 runner provides real CLR/NativeAOT guest evidence. This remains a
 restricted direct-CIL subset, not the production multi-tenant compiler.
+
+### Reproducible PE content identity
+
+The emitted DLL's PE content identifier is derived from SHA-256 over the ordered serialization blobs (not a time-based stamp). The existing replay test recompiles identical Atto source to a separate fresh destination and compares complete DLL SHA-256 values. Existing destinations remain protected; this change does not relax output or source admission. Reproducibility is scoped to the pinned compiler/toolchain and options, not a blanket cross-SDK reproducibility guarantee.
