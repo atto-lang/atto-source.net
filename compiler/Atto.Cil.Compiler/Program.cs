@@ -152,7 +152,7 @@ internal sealed class Parser
                     throw new CompilerError("E_LIMIT", "64 function statement limit");
                 if (Eat("return") || Eat("^"))
                 {
-                    var expression = ParseExpr(0, 0);
+                    var expression = ParseReturnExpr();
                     if (!Eat(";") && expression is not ValueMatch)
                         throw new CompilerError("E_PARSE", "expected ; after return");
                     statements.Add(new ReturnStmt(expression));
@@ -209,9 +209,20 @@ internal sealed class Parser
         return args;
     }
 
-    private Expression ParseSequenceItems(int depth)
+    // Bare seq is a return-context production. Nested call commas stay in ParseExpr.
+    private Expression ParseReturnExpr()
     {
-        if (Peek == ")") throw new CompilerError("E_SEQ_EMPTY", "sequence requires an expression");
+        if (Peek == "seq" && _tokens[_position + 1] != "(")
+        {
+            _position++;
+            return ParseSequenceItems(0, bareReturn: true);
+        }
+        return ParseExpr(0, 0);
+    }
+
+    private Expression ParseSequenceItems(int depth, bool bareReturn = false)
+    {
+        if (Peek == ")" || (bareReturn && Peek == ";")) throw new CompilerError("E_SEQ_EMPTY", "sequence requires an expression");
         List<Expression> items = [];
         while (true)
         {
@@ -221,7 +232,8 @@ internal sealed class Parser
             items.Add(ParseExpr(0, depth + 1));
             if (!Eat(",")) break;
         }
-        Require(")");
+        if (!bareReturn) Require(")");
+        else if (Peek != ";") throw new CompilerError("E_PARSE", "bare seq must end at return semicolon");
         return new Sequence(items);
     }
 

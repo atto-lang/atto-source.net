@@ -1,0 +1,2 @@
+fnc id(int n) -> int { return n; }
+pub fnc main() -> int { return id(seq 1,42); }

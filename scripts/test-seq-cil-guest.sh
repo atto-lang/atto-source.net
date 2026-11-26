@@ -26,7 +26,7 @@ run_expected() {
   }
   echo "SEQ_EXECUTED $label exit=$rc"
 }
-for name in seq-nested seq-call-args seq-singleton seq-pipeline-tail seq-pipeline-result; do
+for name in seq-nested seq-call-args seq-singleton seq-pipeline-tail seq-pipeline-result seq-bare-return; do
   compile "fixtures/cil/$name.atto"
   replay="$work/$name.dll"
   dotnet run --no-build -c Release --project "$compiler" -- "fixtures/cil/$name.atto" "$replay"
@@ -49,10 +49,11 @@ reject() {
   }
   echo "SEQ_REJECTED $src $code"
 }
-for entry in seq-empty:E_SEQ_EMPTY seq-leading:E_SEQ_COMMA seq-trailing:E_SEQ_COMMA seq-semicolon:E_PARSE seq-tuple:E_PARSE seq-too-many:E_LIMIT; do
+for entry in seq-empty:E_SEQ_EMPTY seq-leading:E_SEQ_COMMA seq-trailing:E_SEQ_COMMA seq-semicolon:E_PARSE seq-tuple:E_PARSE seq-too-many:E_LIMIT seq-bare-empty:E_SEQ_EMPTY seq-bare-trailing:E_SEQ_COMMA seq-bare-argument:E_PARSE; do
   reject "fixtures/cil/negative/${entry%%:*}.atto" "${entry#*:}"
 done
 reject fixtures/cil/seq-prefix-divzero.atto E_I64_DIVISION_BY_ZERO
+reject fixtures/cil/negative/seq-bare-prefix-divzero.atto E_I64_DIVISION_BY_ZERO
 printf 'pub fnc main(): int { return seq(1 > 0, 42); }\n' >"$work/seq-bool.atto"
 reject "$work/seq-bool.atto" E_TYPE
 printf 'pub fnc main(): int { return seq(missing, 42); }\n' >"$work/seq-missing.atto"
@@ -65,4 +66,4 @@ rc=$?
 set -e
 test "$rc" -ne 0 && test "$rc" -ne 42 && test ! -s "$work/stdout" && grep -Fq OverflowException "$work/stderr"
 echo 'SEQ_PREFIX_OVERFLOW_CORECLR_PASS'
-echo 'ATTO_DIRECT_CIL_SEQ_INTEGRATED_PASS positive_sources=5 native_executions=5 managed_executions=5 negative_sources=9 prefix_overflow_coreclr=1'
+echo 'ATTO_DIRECT_CIL_SEQ_INTEGRATED_PASS positive_sources=6 native_executions=6 managed_executions=6 negative_sources=13 prefix_overflow_coreclr=1'
