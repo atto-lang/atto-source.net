@@ -1,0 +1,7 @@
+// A guard that may fall through must never generate executable IR.
+pub fnc main(): int {
+  guard true else
+    val x = 1;
+  end
+  return 42;
+}

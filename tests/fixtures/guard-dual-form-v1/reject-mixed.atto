@@ -1,0 +1,7 @@
+// A brace guard cannot acquire a second else/end failure body.
+pub fnc main(): int {
+  guard true { return 0; } else
+    return 1;
+  end
+  return 42;
+}

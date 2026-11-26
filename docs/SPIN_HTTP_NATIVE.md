@@ -28,11 +28,31 @@ tracking retains admission until the actor finishes or its deadline retires it.
 This preserves HTTP keep-alive while bounding handlers that omit actor end.
 Shutdown cancels, drains native I/O and actor retirements, then releases resources.
 
-This is **host-provider execution evidence**, not source-level Spin conformance.
-The compiler's shipping and experimental source gates remain unchanged. It does
-not yet lower the real Spin source or expose HTTP capabilities to guest programs.
-The host resolver callback is a compiler integration seam, not an alternative
-implementation of the Oreslang route library.
+The host resolver is an integration seam for compiled routes. The complete
+Spin and router sources still require the general import and ownership work
+below.
+
+## Compiled receive and response continuation
+
+`oresnet emit-http-actors-csharp input.atto --out HttpActors.g.cs` admits a
+closed source profile for shared and isolated HTTP actors. A handler claims
+its exchange, stages response headers, optionally reads the prebuffered
+request body, awaits a single response and ends its actor. Header values can
+come from a string literal or the current exchange's `request_id`. The
+transport validates header names and values, bounds their aggregate size,
+and owns message framing. The emitted source binds statically to Kestrel
+and the actor runtime. Response completion enters the same actor generation
+as a fresh scheduler turn after the physical write releases its arena pin.
+
+Run `bash verification/verify-http-actors-native-aot.sh osx-arm64` with a
+compatible .NET 10 SDK. The probe publishes the generated handler code into
+a Native AOT executable, drives concurrent real HTTP requests and checks
+continuation affinity, admission quiescence and actor arena retirement. An
+exchange loan across the suspension gate must be rejected before emission.
+
+Faulted actors now release their HTTP admission after their terminal receipt.
+The provider allows a request to report a failure and still recover capacity
+after the actor is physically finalized.
 
 ## Reproduce the transport probe
 

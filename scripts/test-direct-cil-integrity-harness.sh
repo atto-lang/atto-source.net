@@ -67,7 +67,9 @@ tail -n 1 "$work/verification/direct-cil-integration-blobs.tsv" \
   >> "$work/verification/direct-cil-integration-blobs.tsv"
 assert_reject 'duplicate-manifest-entry' 'E_INTEGRATION_MANIFEST_DUPLICATE'
 
-sed -i '2d' "$work/verification/direct-cil-integration-blobs.tsv"
+manifest="$work/verification/direct-cil-integration-blobs.tsv"
+sed '2d' "$manifest" > "$manifest.tmp"
+mv "$manifest.tmp" "$manifest"
 assert_reject 'truncated-manifest' 'E_INTEGRATION_MANIFEST_COUNT'
 
 rm "$work/fixtures/synthetic/payload-01.atto"

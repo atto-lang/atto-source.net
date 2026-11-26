@@ -69,6 +69,7 @@ for form in return caret; do
   echo "PASS stdout without grant denied $form, no-artifact"
 
   # The source bytes are unchanged: permission is a host compilation policy.
+  rm -f "$guest"
   dotnet run --no-build -c Release --project "$compiler" -- \
     "$input" "$guest" --allow-stdio
   test -s "$guest"
@@ -90,7 +91,7 @@ for entry in \
   stdio-too-many-arguments:E_STDIO \
   stdio-after-return:E_RETURN \
   stdio-nonint:E_TYPE \
-  float-stdio-nonint:E_TYPE \
+  float-stdio-nonint:E_RETURN_TYPE \
   stdio-missing-return:E_PARSE; do
   name="${entry%%:*}"
   code="${entry#*:}"

@@ -1,0 +1,8 @@
+pub fnc main(): int {
+    if true then
+        guard true { return 7; }
+    else
+        return 9;
+    fi
+    return 42;
+}

@@ -8,6 +8,7 @@ using Ores.Net.Compiler;
 internal static class DisjointFieldPlaceAdmissionTests
 {
     private const string NominalDiagnostic = "NET_NOMINAL_METHODS_UNSUPPORTED";
+    private const string OwnershipDiagnostic = "OWNERSHIP_BANG_BACKEND_UNSUPPORTED: 'borrow!'";
 
     private static void RejectNominal(
         Action parse, string frontend, string fixture, int classOffset)
@@ -21,6 +22,19 @@ internal static class DisjointFieldPlaceAdmissionTests
         }
         throw new Exception("Expected nominal denial at exact class offset " +
             classOffset + " in " + frontend + " for " + fixture);
+    }
+
+    private static void RejectStructuredOwnership(Action parse, string fixture, int loanOffset)
+    {
+        try { parse(); }
+        catch (FormatException ex) when (
+            ex.Message.StartsWith(OwnershipDiagnostic, StringComparison.Ordinal) &&
+            ex.Message.EndsWith("at offset " + loanOffset, StringComparison.Ordinal))
+        {
+            return;
+        }
+        throw new Exception("Expected structured ownership denial at exact borrow offset " +
+            loanOffset + " for " + fixture);
     }
 
     private static string GitBlobSha(byte[] bytes)
@@ -38,6 +52,16 @@ internal static class DisjointFieldPlaceAdmissionTests
         if (OresParser.Parse(accepted) is null ||
             OresStructuredParser.Parse(accepted).Body.Count != 1)
             throw new Exception("Valid scalar control incorrectly denied");
+
+        // The structured lexer rejects ownership before the later nominal
+        // capability pass. Independently prove that a nominal declaration
+        // without ownership syntax still reaches the exact nominal gate.
+        const string nominalOnly =
+            "define class Person as\n  pub let int age = 30;\nend\nfnc main():int{return 42;}";
+        RejectNominal(() => { _ = OresParser.Parse(nominalOnly); },
+            "scalar", "nominal-only-control", 7);
+        RejectNominal(() => { _ = OresStructuredParser.Parse(nominalOnly); },
+            "structured", "nominal-only-control", 7);
 
         var fixtures = new (string Kind, string Filename, string BlobSha)[] {
             ("pass", "two-disjoint-writers.atto", "b22a031b37d9722b8a7d20b48e81136ec4552099"),
@@ -60,8 +84,15 @@ internal static class DisjointFieldPlaceAdmissionTests
             int classOffset = declarationOffset + "define ".Length;
             RejectNominal(() => { _ = OresParser.Parse(source); },
                 "scalar", fixtureName, classOffset);
-            RejectNominal(() => { _ = OresStructuredParser.Parse(source); },
-                "structured", fixtureName, classOffset);
+            // Each SHA-pinned Rust fixture contains an actual borrow! token
+            // after the class declaration. In the structured lane the earlier
+            // lexical ownership gate must reject that exact token; neither
+            // an arbitrary parser error nor nominal acceptance counts.
+            int loanOffset = source.IndexOf("borrow!", classOffset, StringComparison.Ordinal);
+            if (loanOffset < 0)
+                throw new Exception("Rust ownership token missing: " + fixtureName);
+            RejectStructuredOwnership(() => { _ = OresStructuredParser.Parse(source); },
+                fixtureName, loanOffset);
         }
         Console.WriteLine("ATTO_NET_DISJOINT_FIELD_LOAN_ADMISSION_DENIED blobs=4 frontends=2; GUEST=NOT_EXECUTED");
     }

@@ -1,0 +1,9 @@
+pub fnc main(): int {
+    loop {
+        guard false else
+            continue;
+        end
+        return 42;
+    }
+    return 7;
+}
