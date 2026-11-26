@@ -125,8 +125,13 @@ internal sealed class Parser
     {
         // A lexed Pointer token is admitted only by the closed local read-lease profile.
         if (_tokens.Contains("Pointer", StringComparer.Ordinal))
+        {
+            // One private, readonly singleton helper before the closed owner main.
+            if (_tokens.Count > 7 && _tokens[0] == "fnc" && _tokens[2] == "(" &&
+                    _tokens[3] == "Pointer") return ParseOwnedScalarPointer(ParseReadonlyPointerHelper());
             return _tokens.Count > 10 && _tokens[8] == "let" && _tokens[9] == "mut" && _tokens[10] == "Pointer"
                 ? ParseOwnedScalarPointer() : ParseBorrowedLocalPointer();
+        }
         // File-scoped namespace metadata is distinct from a module/import.
         // It may occur exactly once, and only before any declarations.
         bool hasNamespace = false;
@@ -264,11 +269,32 @@ internal sealed class Parser
     // evaluated exactly once into a fresh ordinary CIL local. The owner and
     // its nonescaping cells disappear after source-order lifetime proof.
     // The four-local budget is the existing direct CIL scalar ABI limit.
-    private List<Function> ParseOwnedScalarPointer()
+    private Function ParseReadonlyPointerHelper()
+    {
+        // This is a closed proof of a synchronous, readonly singleton loan.
+        // The only observation is the initialized Copy i64. No identity,
+        // mutation, nested call, suspension, escape or ownership transfer.
+        PointerNeed("fnc"); var name = PointerName();
+        PointerNeed("("); PointerNeed("Pointer"); PointerNeed("<");
+        PointerNeed("int"); PointerNeed(">");
+        var parameter = PointerName();
+        if (name == parameter) throw new CompilerError("E_POINTER_ALIAS", "helper name shadows parameter");
+        PointerNeed(")"); PointerNeed(":"); PointerNeed("int"); PointerNeed("{");
+        PointerNeed("return"); PointerNeed(parameter); PointerNeed(".");
+        PointerNeed("read"); PointerNeed("("); PointerNeed(")");
+        PointerNeed(";"); PointerNeed("}");
+        // Specialize the verified readonly borrow to a Copy scalar CIL argument.
+        // This retains a real function call with no guest pointer wrapper.
+        return new Function(name, ["$borrowed_value"], CheckedType.Int,
+            [new ReturnStmt(new Arg("$borrowed_value"))]);
+    }
+
+    private List<Function> ParseOwnedScalarPointer(Function? helper = null)
     {
         foreach (var token in new[] { "pub", "fnc", "main", "(", ")", ":", "int", "{",
                 "let", "mut", "Pointer", "<", "int", ">" }) PointerNeed(token);
         var owner = PointerName();
+        if (helper?.Name == owner) throw new CompilerError("E_POINTER_ALIAS", "owner shadows borrowed helper");
         PointerNeed("="); PointerNeed("Pointer"); PointerNeed(".");
         var initialized = Eat("alloc_value");
         if (!initialized) PointerNeed("alloc");
@@ -346,7 +372,26 @@ internal sealed class Parser
             else
             {
                 var name = PointerName();
-                if (!scalars.TryGetValue(name, out left))
+                if (helper != null && name == helper.Name)
+                {
+                    RequireLive();
+                    PointerNeed("(");
+                    if (Peek == "borrow")
+                    {
+                        var offset = _offsets[_position];
+                        PointerNeed("borrow");
+                        if (Peek != "!" || _offsets[_position] != offset + "borrow".Length)
+                            throw new CompilerError("E_POINTER_SYNTAX", "borrow! must be contiguous");
+                        PointerNeed("!");
+                    }
+                    PointerNeed(owner, "E_POINTER_AUTHORITY");
+                    PointerNeed(")");
+                    if (count != 1)
+                        throw new CompilerError("E_POINTER_BOUNDS", "readonly helper requires singleton");
+                    var cell = cells[0] ?? throw new CompilerError("E_POINTER_INITIALIZE", "borrowed element uninitialized");
+                    left = (new Call(helper.Name, [cell.Expr]), cell.Known);
+                }
+                else if (!scalars.TryGetValue(name, out left))
                     throw new CompilerError("E_POINTER_ESCAPE", "unknown scalar or unsupported pointer expression");
             }
             while (true)
@@ -378,7 +423,7 @@ internal sealed class Parser
                 if (Eat("val"))
                 {
                     PointerNeed("int"); var name = PointerName();
-                    if (name == owner || scalars.ContainsKey(name))
+                    if (name == owner || name == helper?.Name || scalars.ContainsKey(name))
                         throw new CompilerError("E_POINTER_ALIAS", "duplicate pointer or scalar name");
                     PointerNeed("="); scalars.Add(name, Bind(Value())); PointerNeed(";");
                 }
@@ -426,7 +471,8 @@ internal sealed class Parser
             body.Add(new ReturnStmt(Value().Expr));
             PointerNeed(";"); PointerNeed("}");
             if (Peek != "<eof>") throw new CompilerError("E_POINTER_ESCAPE", "extra declarations not admitted");
-            return [new Function("main", [], CheckedType.Int, body)];
+            var main = new Function("main", [], CheckedType.Int, body);
+            return helper == null ? [main] : [helper, main];
         }
         catch (OverflowException)
         {
