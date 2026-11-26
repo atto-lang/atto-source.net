@@ -51,6 +51,28 @@ internal static class CountedSelectI64CursorSelfTest
         Require(foreign && a.PendingReaders==0,"foreign owner rejected");
         Require(c.Cancel(),"cancel ready");
 
+        // Same mixed lexical-order cases as the Java counted runtime gate.
+        a = new(2); a.TryWrite(20); a.TryWrite(30);
+        f = new(); f.Resolve(10);
+        c = new(2, new object[]{f,a}, false);
+        Round(c); Round(c);
+        Require(c.Result().SequenceEqual(new long[]{10,20}), "mixed lexical priority");
+        Require(a.TryRead(out var remaining) && remaining == 30, "priority preserves unselected payload");
+
+        a = new(2); b = new(2);
+        a.TryWrite(10); a.TryWrite(40); b.TryWrite(30); b.TryWrite(50);
+        f = new(); f.Resolve(20);
+        c = new(4, new object[]{a,f,b,f});
+        Round(c); Round(c); Round(c); Round(c);
+        Require(c.Result().SequenceEqual(new long[]{10,20,30,40}), "mixed FAIR order and Future alias retirement");
+        Require(b.TryRead(out remaining) && remaining == 50 && f.PendingWaiters == 0, "no extra commit or Future waiter");
+        Require(a.PendingReaders + b.PendingReaders == 0, "no channel waiter");
+
+        try { _ = new CountedSelectI64Cursor(1, new object[]{a,new object()}); throw new Exception("unsupported source accepted"); }
+        catch (ArgumentException) {}
+        Require(a.PendingReaders == 0, "unsupported source rejected before registration");
+        Require(new CountedSelectI64Cursor(0, null!).Result().Length == 0, "zero ignores source list");
+
         a = new(1); b = new(2); var d = new SelectableI64Channel(1); f = new(); f.Resolve(99);
         c = new(3,new object[]{a,b,f,b,d}); Round(c);
         a.TryWrite(1); b.TryWrite(2); b.TryWrite(3); d.TryWrite(4);
