@@ -345,6 +345,8 @@ public static partial class OresParser
                     }
                     else throw new FormatException("E_SYNTAX: expected verified callable body opener");
                 }
+                if (closer == "end" && Current.Text is ("begin" or "::" or "{"))
+                    throw new FormatException("E_SYNTAX: combined verified callable body openers");
                 var body = new List<StructuredStmt>();
                 while (Take("val"))
                 {
@@ -397,7 +399,7 @@ public static partial class OresParser
                     Expect(";");
                     body.Add(new StructuredReturn(returnAt, returned.Expression));
                 }
-                Expect(closer);
+                if (!Take(closer)) throw new FormatException("E_SYNTAX: missing or mismatched verified callable closer");
                 if (main)
                 {
                     if (Current.Text.Length != 0)
