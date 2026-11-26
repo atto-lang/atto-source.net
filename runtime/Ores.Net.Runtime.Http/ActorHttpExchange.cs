@@ -206,10 +206,15 @@ internal sealed class HttpExchangeLease
                 throw new ArgumentException("Invalid HTTP response metadata");
             if (Encoding.UTF8.GetByteCount(body) > _maxResponseBytes)
                 throw new ArgumentOutOfRangeException(nameof(body), "HTTP response body limit exceeded");
-            byte[] bytes = Encoding.UTF8.GetBytes(body);
-            var pin = actor.PinLifetime();
-            _pending = true;
-            _physicalOperation = WriteResponseAsync(status, contentType, bytes, pin);
+            // Admit the lifetime pin before copying the response or committing
+            // the exchange. A quota denial leaves the response retryable.
+            Task physical = actor.TrackExternalCompletion(() =>
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(body);
+                _pending = true;
+                return WriteResponseAsync(status, contentType, bytes);
+            });
+            _physicalOperation = PublishResponseCompletionAsync(physical);
         }
     }
 
@@ -242,9 +247,8 @@ internal sealed class HttpExchangeLease
         c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' ||
         "!#$%&'*+-.^_`|~".Contains(c);
 
-    private async Task WriteResponseAsync(int status, string contentType, byte[] bytes, ActorArenaLifetimePin pin)
+    private async Task WriteResponseAsync(int status, string contentType, byte[] bytes)
     {
-        Exception? error = null;
         try
         {
             var http = _http!;
@@ -257,11 +261,18 @@ internal sealed class HttpExchangeLease
                 await http.Response.Body.WriteAsync(bytes, _cancellation).ConfigureAwait(false);
             await http.Response.CompleteAsync().ConfigureAwait(false);
         }
-        catch (Exception failure) { error = failure; }
-        finally { CryptographicOperations.ZeroMemory(bytes); pin.Dispose(); }
-        // Publish only after the physical write relinquishes its arena pin.
-        if (error is null) _completion.TrySetResult();
-        else _completion.TrySetException(error);
+        finally { CryptographicOperations.ZeroMemory(bytes); }
+    }
+
+    private async Task PublishResponseCompletionAsync(Task physical)
+    {
+        // The adapter settles only after the physical write and pin release.
+        try
+        {
+            await physical.ConfigureAwait(false);
+            _completion.TrySetResult();
+        }
+        catch (Exception failure) { _completion.TrySetException(failure); }
     }
 
     internal async Task CloseAsync()

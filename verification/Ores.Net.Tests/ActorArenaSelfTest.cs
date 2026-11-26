@@ -14,6 +14,7 @@ internal static class ActorArenaSelfTest
         ReadLoanFreezesAllocationAcrossTurns();
         PairedLoanAndRetirementLeavePeerWritable();
         LifetimePinDelaysPhysicalReclaim();
+        ActorArenaExternalCompletionSelfTest.Run();
         AggregateBudgetAdmissionIsNeutral();
         RepeatedQuotaDenialPreservesTailAndSibling();
         RuntimeBudgetsAlsoChargeProcessLimit();
