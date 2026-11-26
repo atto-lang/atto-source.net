@@ -3134,6 +3134,8 @@ public static partial class OresStructuredParser
                 throw Error("E_SYNC_TASK_SUSPEND: this suspension lacks a same-thread continuation");
             if (Take("await"))
             {
+                if (Current.Text == "task")
+                    throw Error("E_SUSPENDS_UNSUPPORTED: scheduled task await requires typed continuation lowering");
                 var operand = Unary(depth + 1);
                 Require(operand, IrValueType.I64, "E_SUSPENDS_UNSUPPORTED: immediate await requires int");
                 return operand;
