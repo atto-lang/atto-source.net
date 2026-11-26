@@ -18,9 +18,10 @@ public sealed partial class FrozenImportSnapshot
     public string Name {get;}
     public string Version {get;}
     public string LockDigest {get;}
-    private FrozenImportSnapshot(string name,string version,string digest,Dictionary<string,string> ns,
+    internal string ManifestDigest {get;}
+    private FrozenImportSnapshot(string name,string version,string digest,string manifestDigest,Dictionary<string,string> ns,
         Dictionary<string,string> ex,Dictionary<string,string> src,Dictionary<string,Dependency> dependencies)
-    { Name=name; Version=version; LockDigest=digest; namespaces=ns; exports=ex; sources=src; Dependencies=new System.Collections.ObjectModel.ReadOnlyDictionary<string,Dependency>(dependencies); }
+    { Name=name; Version=version; LockDigest=digest; ManifestDigest=manifestDigest; namespaces=ns; exports=ex; sources=src; Dependencies=new System.Collections.ObjectModel.ReadOnlyDictionary<string,Dependency>(dependencies); }
     private static FormatException Fail(string code,string msg)=>new(code+": "+msg);
     private static bool Digest(string? s)=>s is not null && s.Length==64 && s.All(c=>c is >= '0' and <= '9' or >= 'a' and <= 'f');
     private static string Sha(byte[] b)=>Convert.ToHexString(SHA256.HashData(b)).ToLowerInvariant();
@@ -117,7 +118,7 @@ public sealed partial class FrozenImportSnapshot
                 throw Fail("E_LOCK","invalid dependency identity, version or pin");
             deps.Add(e.Key,new Dependency(e.Value,locked[e.Key]));
         }
-        return new FrozenImportSnapshot(name,version,expectedLock,providers,ex,src,deps);
+        return new FrozenImportSnapshot(name,version,expectedLock,manifestHash,providers,ex,src,deps);
     }
     public string NamespaceForSubpath(string path) {
         if(!Subpath(path)||!exports.TryGetValue(path,out var ns)) throw Fail("E_UNBOUND","undeclared subpath");
