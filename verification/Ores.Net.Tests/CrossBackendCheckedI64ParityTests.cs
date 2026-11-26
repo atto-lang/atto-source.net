@@ -148,15 +148,18 @@ static class CrossBackendCheckedI64ParityTests
             throw new Exception("FAILED: cross-backend checked-i64 overflow did not trap: " + name);
         }
 
-        try
+        foreach (var expression in new[] { "7 / 2", "7 / 0", "-9223372036854775808 / -1" })
         {
-            _ = OresParser.Parse(Header + "define pub fnc main(): int { return 7 / 2; }");
+            try
+            {
+                _ = OresParser.Parse(Header + "define pub fnc main(): int { return " + expression + "; }");
+            }
+            catch (FormatException ex) when (ex.Message.Contains("Checked integer division requires typed guest error lowering", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            throw new Exception("FAILED: scalar division admitted without checked guest error lowering: " + expression);
         }
-        catch (FormatException ex) when (ex.Message.Contains("float result lowering", StringComparison.Ordinal))
-        {
-            return;
-        }
-        throw new Exception("FAILED: int/int division was admitted without float lowering");
     }
 
     private static void OreslanaPortableScalarCilBoundary()
