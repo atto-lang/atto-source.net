@@ -15,44 +15,38 @@ public static class UnsafeStdlibImportAdmission
         // The typed source linker must not see std/./unsafe as an ordinary
         // local package that it then normalizes into a native stdlib import.
         if (HasUnsafeSegments(path)) return true;
-        string[] slash = path.Split('/');
-        string[] head = slash[0].Split(new[] { '.', ':' }, StringSplitOptions.RemoveEmptyEntries);
-        bool vendor = head.Length > 0 && (head[0] == "atto" || head[0] == "ores");
-        int rootDepth = head.Length == 1 && head[0] == "std" ? 1 :
-            vendor && head.Length == 2 && head[1] == "std" ? 1 :
-            vendor && head.Length == 1 && slash.Length > 1 && slash[1] == "std" ? 2 : 0;
-        if (rootDepth != 0)
+        // Canonicalize incrementally, preserving unsafe intermediate identity.
+        var prefix = new System.Collections.Generic.List<string>(3);
+        var stack = new System.Collections.Generic.List<int>();
+        int rootDepth = 0;
+        foreach (string component in path.Split('/'))
         {
-            var parts = new System.Collections.Generic.List<string>();
-            foreach (var part in path.Split('/'))
+            if (component.Length == 0 || component == ".") continue;
+            if (component == "..")
             {
-                if (part.Length == 0 || part == ".") continue;
-                if (part == "..")
+                if (rootDepth != 0 && stack.Count <= rootDepth) return true;
+                if (stack.Count != 0)
                 {
-                    if (parts.Count <= rootDepth) return true; // Reject std root escape.
-                    parts.RemoveAt(parts.Count - 1);
+                    int previous = stack[stack.Count - 1];
+                    stack.RemoveAt(stack.Count - 1);
+                    prefix.RemoveRange(previous, prefix.Count - previous);
                 }
-                else parts.Add(part);
+                continue;
             }
-            path = string.Join("/", parts);
-        }
-        else if (path.Contains('/'))
-        {
-            // Relative source imports may be normalized by a linker after
-            // admission: ./std/unsafe and pkg/../std/unsafe are still reserved.
-            var parts = new System.Collections.Generic.List<string>();
-            foreach (var part in path.Split('/'))
+            stack.Add(prefix.Count);
+            foreach (string segment in component.Split(new[] { '.', ':' }, StringSplitOptions.RemoveEmptyEntries))
             {
-                if (part.Length == 0 || part == ".") continue;
-                if (part == "..")
-                {
-                    if (parts.Count != 0) parts.RemoveAt(parts.Count - 1);
-                }
-                else parts.Add(part);
+                if (prefix.Count == 3) break;
+                prefix.Add(segment);
             }
-            path = string.Join("/", parts);
+            int offset = prefix.Count > 0 && (prefix[0] == "atto" || prefix[0] == "ores") ? 1 : 0;
+            if (prefix.Count > offset && prefix[offset] == "std")
+            {
+                if (rootDepth == 0) rootDepth = stack.Count;
+                if (prefix.Count > offset + 1 && prefix[offset + 1] == "unsafe") return true;
+            }
         }
-        return HasUnsafeSegments(path);
+        return false;
     }
 
     private static bool HasUnsafeSegments(string path)

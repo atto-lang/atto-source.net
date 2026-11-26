@@ -23,7 +23,11 @@ internal static class UnsafeStdlibIsolationParityTests
             "atto.std/./unsafe/native", "atto.std/other/../unsafe/ffi",
             "std/unsafe/../safe", "atto.std/unsafe/../safe", "atto::std/unsafe/../safe",
             "ores:std/unsafe/../safe", "atto::std/../safe", "ores:std/../safe",
-            "atto/std/../safe", "ores/std/../safe"
+            "atto/std/../safe", "ores/std/../safe",
+            "std/other/../unsafe/../safe", "./std/other/../unsafe/../safe",
+            "pkg/../std/other/../unsafe/../safe", "atto//std/../safe", "atto/./std/../safe",
+            "./atto::std/../safe", "pkg/../ores.std/../safe", "atto/std/other/../unsafe/../safe",
+            "atto/:/std/../safe", "std/other/../unsafe::ffi/../safe"
         };
         foreach (var path in denied)
         {
@@ -35,7 +39,9 @@ internal static class UnsafeStdlibIsolationParityTests
             "./unsafe.ores", "ores.std/safe", "std:unsafe_tools",
             "std/./unsafe_tools", "std/other/../safe",
             "pkg/std/unsafe/memory", "pkg/std/unsafe_tools",
-            "atto.std/unsafe_tools", "atto.std:unsafe-math", "pkg/atto.std/unsafe", "atto.std/safe"
+            "atto.std/unsafe_tools", "atto.std:unsafe-math", "pkg/atto.std/unsafe", "atto.std/safe",
+            "./atto::std/other/../safe", "pkg/../std/unsafe_tools/../safe",
+            "pkg/atto.std/unsafe/../safe", "atto/std/other/deeper/../../safe"
         })
         {
             Require(!UnsafeStdlibImportAdmission.IsReserved(path),
