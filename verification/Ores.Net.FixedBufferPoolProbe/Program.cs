@@ -1,7 +1,8 @@
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 using Ores.Net.Runtime;
 
-static void Require(bool ok, string message)
+static void Require([DoesNotReturnIf(false)] bool ok, string message)
 {
     if (!ok) throw new InvalidOperationException(message);
 }
@@ -18,8 +19,8 @@ var receiver = new FixedBufferActorIdentity(1, 11, 2);
 var wrongTenant = new FixedBufferActorIdentity(2, 12, 1);
 var reincarnated = new FixedBufferActorIdentity(1, 10, 2);
 using var pool = new NativeFixedBufferPoolV1(2, 16);
-var first = pool.TryAcquire(sender)!;
-var second = pool.TryAcquire(receiver)!;
+var first = pool.TryAcquire(sender);
+var second = pool.TryAcquire(receiver);
 Require(first != null && second != null && pool.TryAcquire(sender) == null && pool.InUse == 2,
     "fixed capacity must not grow under exhaustion");
 
@@ -126,7 +127,7 @@ pool.Release(second, receiver);
 
 for (int i = 0; i < 100_000; ++i)
 {
-    var lease = pool.TryAcquire(sender)!;
+    var lease = pool.TryAcquire(sender);
     Require(lease != null, "warm loop must have a free slot");
     using (var loan = pool.BorrowWrite(lease, sender))
         pool.WriteByte(loan, 0, (byte)i);
