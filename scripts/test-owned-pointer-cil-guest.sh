@@ -30,6 +30,9 @@ positive() {
 positive singleton 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); p.write(21); val int first = p.read(); p.write(first * 2); val int answer = p.read(); p.close(); return answer; }'
 positive initialized 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(21 * 2); val int answer = p.read(); p.close(); return answer; }'
 positive metadata 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(4); p.write_at(3, 6); val int n = p.len(); val int b = p.size_bytes(); val int x = p.read_at(3); p.close(); return n + b + x; }'
+positive fill 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(3); p.write_at(0, 13); p.fill(p.read_at(0) + 1); val int a = p.read_at(0); val int b = p.read_at(1); p.close(); return a + b + 14; }'
+positive swap 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(2); p.write_at(0, 7); p.write_at(1, 35); p.swap_at(0, 1); val int a = p.read_at(0); val int b = p.read_at(1); p.close(); return a + b + (a - 35); }'
+positive self_swap 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); p.swap_at(0, 0); val int a = p.read(); p.close(); return a; }'
 negative() {
   local name="$1" code="$2" source="$3"
   printf '%s\n' "$source" >"$work/$name.atto"
@@ -51,4 +54,10 @@ negative missing_close E_POINTER_LIFETIME 'pub fnc main(): int { let mut Pointer
 negative self_initializer E_POINTER_LIFETIME 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(p.len()); p.close(); return 0; }'
 negative overflow E_POINTER_OVERFLOW 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(9223372036854775807 + 1); p.close(); return 0; }'
 negative double_close E_POINTER_LIFETIME 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); p.close(); p.close(); return 0; }'
+negative fill_closed E_POINTER_LIFETIME 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(2); p.close(); p.fill(42); return 0; }'
+negative fill_uninitialized E_POINTER_INITIALIZE 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(2); p.fill(p.read_at(0)); p.close(); return 0; }'
+negative fill_overflow E_POINTER_OVERFLOW 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(2); p.fill(9223372036854775807 + 1); p.close(); return 0; }'
+negative swap_uninitialized E_POINTER_INITIALIZE 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(2); p.write_at(0, 42); p.swap_at(0, 1); p.close(); return 0; }'
+negative swap_bounds E_POINTER_BOUNDS 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(2); p.fill(42); p.swap_at(0, 2); p.close(); return 0; }'
+negative swap_closed E_POINTER_LIFETIME 'pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(2); p.fill(42); p.close(); p.swap_at(0, 1); return 0; }'
 echo ATTO_OWNED_POINTER_CIL_NATIVEAOT_PASS
