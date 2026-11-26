@@ -105,7 +105,8 @@ internal static class HeapContainerSourceBoundaryTests
         foreach (string removed in new[] {
             "~tuple(11,23)[1]", "~record(x:11).x", "~entry(11,23).key",
             "~pair(11,23).first", "~map(1 => 2)", "~array(1,2)",
-            "~list(1)", "~vector(1)", "~set(1)"
+            "~list(1)", "~vector(1)", "~set(1)",
+            "~ /* retired */ tuple /* before arguments */ (11,23)[1]"
         })
         {
             try

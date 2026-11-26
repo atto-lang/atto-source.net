@@ -598,6 +598,25 @@ public static partial class OresParser
                 throw new FormatException(
                     $"WITH_BACKEND_UNSUPPORTED: immutable with requires checked rt copy/take, "
                     + $"owned field layout/drop and Native AOT reconstruction at offset {_i}");
+            // Retired named tilde factories are invalid before any later
+            // projection/indexing token can mask their removal diagnostic.
+            // Scan only after quote and trivia handling, and require the
+            // complete factory identifier followed by an opening parenthesis.
+            if (ch == '~')
+            {
+                int nameStart = SkipTrivia(text, start + 1);
+                int nameEnd = nameStart;
+                while (nameEnd < text.Length &&
+                    (char.IsAsciiLetterOrDigit(text[nameEnd]) || text[nameEnd] == '_'))
+                    nameEnd++;
+                string factory = text[nameStart..nameEnd];
+                int next = SkipTrivia(text, nameEnd);
+                if (factory is ("tuple" or "record" or "entry" or "pair" or "map" or
+                                "array" or "list" or "vector" or "set") &&
+                    next < text.Length && text[next] == '(')
+                    throw new FormatException(
+                        $"E_COLLECTION_FACTORY_REMOVED: '~' denotes structural typing, not a collection constructor; use Type.of(...) at offset {start}");
+            }
             // No unchecked array access can enter the shipping scalar CIL path.
             // Exception: the package-scope brackets of a file-level `export pub[pkg]`
             // are export syntax, not collection access (validated by StripFileExports).
