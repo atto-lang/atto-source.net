@@ -18,6 +18,23 @@ public static partial class OresParser
         return OresStructuredCfgLowering.LowerModule(program);
     }
 
+    /// <summary>Opt-in strict signed-i64 source proof; no ordinary fallback.</summary>
+    public static VerifiedCfgModule LowerVerifiedStrict(string source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (source.Length > 1_048_576 || !HasVerifiedRefinementPrefix(source))
+            throw new FormatException("E_VERIFY_UNSUPPORTED: strict refinement profile required");
+        var tokens = Tokenize(source);
+        RejectUnsupportedInvertedClasses(tokens);
+        var reader = new Reader(tokens, DotnetHostImportPolicy.DenyAll, source, null) { StrictI64 = true };
+        var prelude = reader.ParseVerifiedPrelude();
+        if (prelude.Actors.Count != 0 || prelude.Protocols.Count != 0)
+            throw new FormatException("E_VERIFY_UNSUPPORTED: strict protocol effects not established");
+        var program = reader.ParseVerifiedFunctions(prelude);
+        ValidateVerifiedSourceTokens(tokens, prelude.Actors);
+        return OresStructuredCfgLowering.LowerModule(program);
+    }
+
     /// <summary>Try the verified protocol actor profile before the legacy actor emitter.</summary>
     public static string? TryEmitVerifiedProtocolActors(string source)
     {
@@ -98,6 +115,8 @@ public static partial class OresParser
 
     private sealed partial class Reader
     {
+        public bool StrictI64 { get; init; }
+
         private sealed record RefinedQuantity(QuantityUnit Unit, VerifiedI64Range Range, bool I32 = false)
         {
             public static RefinedQuantity Scalar { get; } = new(QuantityUnit.Scalar, VerifiedI64Range.Full);
@@ -145,7 +164,11 @@ public static partial class OresParser
         private RefinedQuantity ReadRefinedType()
         {
             if (Take("int")) return RefinedQuantity.Scalar;
-            if (Take("i32")) return RefinedQuantity.ScalarI32;
+            if (Take("i32"))
+            {
+                if (StrictI64) throw new FormatException("E_VERIFY_UNSUPPORTED: i32 strict proof pending");
+                return RefinedQuantity.ScalarI32;
+            }
             string name = ReadVerifiedName();
             if (!refinementAliases.TryGetValue(name, out var type))
                 throw new FormatException($"E_REFINEMENT_NAME: unknown verified scalar type '{name}'");
@@ -182,6 +205,7 @@ public static partial class OresParser
             string name = ReadVerifiedName();
             Expect("=");
             bool i32 = Take("i32");
+            if (StrictI64 && i32) throw new FormatException("E_VERIFY_UNSUPPORTED: i32 strict proof pending");
             if (!i32) Expect("int");
             Expect("where");
             QuantityUnit? unit = null;
@@ -382,6 +406,8 @@ public static partial class OresParser
             target.Unit.RequireCompatible(term.Type.Unit);
             if (term.Height + 1 >= MaxDepth)
                 throw new FormatException("E_UNIT_LIMIT: quantity expression is too deep");
+            if (StrictI64 && !target.Range.Includes(term.Type.Range))
+                throw new FormatException("E_VERIFY_UNPROVEN: refinement cast may fail");
             var range = term.Type.Range.OnNormalResultWithin(target.Range);
             return new QuantityTerm(
                 new StructuredCheckRefinement(at, term.Expression, target.Range.Minimum, target.Range.Maximum),
@@ -420,6 +446,8 @@ public static partial class OresParser
                 var right = VerifiedProduct(depth);
                 left.Type.Unit.RequireCompatible(right.Type.Unit);
                 bool add = op.Text == "+";
+                if (StrictI64 && !left.Type.Range.ProvesArithmetic(op.Text, right.Type.Range))
+                    throw new FormatException("E_VERIFY_UNPROVEN: signed arithmetic may overflow");
                 var range = add ? left.Type.Range.Add(right.Type.Range) : left.Type.Range.Subtract(right.Type.Range);
                 left = VerifiedBinary(op.Offset, add ? StructuredOperator.Add : StructuredOperator.Subtract,
                     left, right, new(left.Type.Unit, range));
@@ -436,7 +464,9 @@ public static partial class OresParser
                 _index++;
                 var right = VerifiedAtom(depth);
                 bool divide = op.Text == "/";
-                if (divide && !left.Type.I32 && !right.Type.I32
+                if (StrictI64 && !left.Type.Range.ProvesArithmetic(op.Text, right.Type.Range))
+                    throw new FormatException("E_VERIFY_UNPROVEN: signed arithmetic may overflow or divide by zero");
+                if (!StrictI64 && divide && !left.Type.I32 && !right.Type.I32
                         && left.Type.Unit.IsScalar && right.Type.Unit.IsScalar)
                     throw new FormatException("E_UNIT_SCALAR_DIVISION: two plain int operands use ordinary division");
                 var unit = left.Type.Unit.Combine(right.Type.Unit, divide);
@@ -512,6 +542,8 @@ public static partial class OresParser
                 if (Current.Text.Replace("_", "", StringComparison.Ordinal).TrimStart('0') == "9223372036854775808")
                     return VerifiedLiteral(negative: true);
                 var term = VerifiedAtom(depth + 1);
+                if (StrictI64 && !term.Type.Range.ProvesNegation)
+                    throw new FormatException("E_VERIFY_UNPROVEN: signed negation may overflow");
                 if (!term.Type.I32)
                     return new QuantityTerm(new StructuredNegate(at, term.Expression),
                         term.Type with { Range = VerifiedI64Range.Point(0).Subtract(term.Type.Range) }, term.Height + 1);
