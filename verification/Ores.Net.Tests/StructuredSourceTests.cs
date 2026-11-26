@@ -21,9 +21,9 @@ internal static class StructuredSourceTests
         throw new Exception("Structured source incorrectly accepted: " + reason);
     }
 
-    private static void RejectFeature(string source, string expectedDiagnostic)
+    private static void RejectFeature(string source, string expectedDiagnostic, bool strictConditionals = false)
     {
-        try { _ = OresStructuredParser.Parse(source); }
+        try { _ = strictConditionals ? OresStructuredParser.ParseStrictConditionals(source) : OresStructuredParser.Parse(source); }
         catch (FormatException error)
         {
             Require(error.Message.Contains(expectedDiagnostic, StringComparison.OrdinalIgnoreCase),
@@ -89,8 +89,26 @@ internal static class StructuredSourceTests
             "break requires an enclosing loop");
         RejectFeature("fnc main():int{do unless false then continue; fi return 0;}",
             "continue requires an enclosing loop");
-        RejectFeature("fnc main():int{loop{if true then break; fi}return 0;}",
-            "use 'do if'");
+        foreach (string head in new[] { "if", "ifnot", "unless" })
+        {
+            string legacy = "fnc main():int{loop{" + head + " true then break; fi}return 0;}";
+            Require(OresStructuredParser.Parse(legacy).Body.Count == 2,
+                "migration-only keyword statement retained");
+            RejectFeature(legacy, "use 'do if'", strictConditionals: true);
+            Require(OresStructuredParser.ParseStrictConditionals(
+                "fnc main():int{loop{do " + head + " true then break; fi}return 0;}").Body.Count == 2,
+                "strict explicit do statement");
+            Require(OresStructuredParser.ParseStrictConditionals(
+                "fnc main():int{loop{" + head + " true {break;}}return 0;}").Body.Count == 2,
+                "strict brace statement");
+            RejectFeature("fnc main():int{loop{" + head + " true {break;}fi}return 0;}",
+                "brace statements must not end with fi", strictConditionals: true);
+            Require(OresStructuredParser.ParseStrictConditionals(
+                "fnc main():int{return " + head + " true then 42 else 7 fi;}").Body.Count == 1,
+                "strict value conditional");
+        }
+        Require(OresStructuredParser.ParseStrictConditionals(accepted).Body.Count == 3,
+            "strict canonical negated conditional fixture");
         RejectFeature("fnc main():int{return ifnot false then break; else 3 fi;}",
             "must produce a value");
         RejectFeature("fnc main():int{return unless true then 3 fi;}",
