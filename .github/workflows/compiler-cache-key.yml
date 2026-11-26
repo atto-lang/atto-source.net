@@ -8,6 +8,7 @@ on:
       - 'verification/Ores.Net.Tests/CompilerArtifactReceiptSelfTest.cs'
       - 'compiler/Ores.Net.Compiler.Core/CompilerCacheLedger.cs'
       - 'compiler/Ores.Net.Compiler.Core/FrozenCilSession.cs'
+      - 'compiler/Ores.Net.Compiler.Core/PersistentFrozenCilSession.cs'
       - 'compiler/Ores.Net.Compiler.Core/CilEmitter.cs'
       - 'compiler/Ores.Net.Compiler.Core/CfgCilEmitter.cs'
       - 'verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs'
@@ -51,12 +52,15 @@ jobs:
           cmp verification/Ores.Net.Tests/CompilerCacheLedgerSelfTest.cs "$work/CompilerCacheLedgerSelfTest.cs"
           cp verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs "$work/"
           cmp verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs "$work/FrozenDependencyGraphSelfTest.cs"
-          printf '%s\n' 'CompilerCacheKeySelfTest.Run();' 'CompilerArtifactReceiptSelfTest.Run();' 'CompilerCacheLedgerSelfTest.Run();' 'FrozenDependencyGraphSelfTest.EmitCilCacheGuests(args[0]);' > "$work/Program.cs"
+          printf '%s\n' 'CompilerCacheKeySelfTest.Run();' 'CompilerArtifactReceiptSelfTest.Run();' 'CompilerCacheLedgerSelfTest.Run();' 'if(args.Length==1) FrozenDependencyGraphSelfTest.EmitCilCacheGuests(args[0]); else FrozenDependencyGraphSelfTest.EmitPersistentCilGuests(args[0],args[1]);' > "$work/Program.cs"
           dotnet run --project "$work" --configuration Release -- "$work/artifacts"
+          for lane in cold warm edit; do
+            dotnet run --project "$work" --configuration Release --no-build -- "$work/persistent" "$lane"
+          done
           for lane in cold warm edit; do
             host="$work/host-$lane"
             mkdir -p "$host"
-            cp "$work/artifacts/$lane.dll" "$host/OresGenerated.dll"
+            cp "$work/persistent/$lane.dll" "$host/OresGenerated.dll"
             printf '%s\n' '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><PublishAot>true</PublishAot><SelfContained>true</SelfContained><InvariantGlobalization>true</InvariantGlobalization></PropertyGroup><ItemGroup><Reference Include="OresGenerated"><HintPath>OresGenerated.dll</HintPath><Private>true</Private></Reference></ItemGroup></Project>' > "$host/Host.csproj"
             printf '%s\n' 'return checked((int)Oreslang.Generated.OresProgram.Run());' > "$host/Program.cs"
             dotnet publish "$host/Host.csproj" -c Release -r linux-x64 -o "$host/out"

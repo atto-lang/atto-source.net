@@ -91,6 +91,38 @@ internal static class FrozenDependencyGraphSelfTest
         Deny("E_UNBOUND",()=>OresStructuredParser.CompileFrozenScalar(fromB,new[]{noAuthority,c}));
         Console.WriteLine("FROZEN_PROVIDER_NAMESPACE|three-packages|warm-identical|seven-denials");
     }
+    internal static void EmitPersistentCilGuests(string output,string lane)
+    {
+        var c=Snapshot(C,"1.0.0",new(),new(),"use namespace network; pub fnc answer(int x):int{return x*2"+(lane=="edit"?"+1":"")+";}");
+        var d=WithDeps(D);string main="import pkg '"+C+"' as p; pub fnc main()->int{return p.network.answer(21);}";
+        string root=System.IO.Path.Combine(output,"cache");
+        System.IO.Directory.CreateDirectory(output);
+        System.IO.Directory.CreateDirectory(root,System.IO.UnixFileMode.UserRead|System.IO.UnixFileMode.UserWrite|System.IO.UnixFileMode.UserExecute);
+        var master=Enumerable.Repeat((byte)7,32).ToArray();
+        var record=CompilerCacheLedger.Record("tenant/a",2,master);var pin=SHA256.HashData(record);
+        // Fixture build identity from the actual loaded compiler assembly;
+        // a production host must attest its full toolchain closure separately.
+        var compiler=Sha(System.IO.File.ReadAllBytes(typeof(FrozenCilSession).Assembly.Location));
+        var session=new PersistentFrozenCilSession(root,"tenant/a",compiler,Sha(Bytes("fixture-net10-compiler")));
+        var build=session.Compile(main,new[]{d,c},record,pin,master,lane=="cold");
+        if(build.Reused!=(lane=="warm"))throw new InvalidOperationException("wrong persistent cache outcome");
+        if(lane!="warm"&&!build.Cil.AsSpan().SequenceEqual(CilEmitter.BuildLibrary(OresStructuredParser.CompileFrozenScalar(main,new[]{c,d}))))
+            throw new InvalidOperationException("persistent CIL differs from clean");
+        if(lane=="warm"&&!build.Cil.AsSpan().SequenceEqual(System.IO.File.ReadAllBytes(System.IO.Path.Combine(output,"cold.dll"))))
+            throw new InvalidOperationException("restart output differs");
+        Deny("E_CACHE_LEDGER",()=>session.Compile(main,new[]{c,d},record,new byte[32],master));
+        if(lane=="edit"){
+            Deny("E_UNBOUND",()=>session.Compile(main.Replace("answer(21)","missing(21)"),new[]{c,d},record,pin,master,true));
+            if(!session.Compile(main,new[]{c,d},record,pin,master).Reused)throw new InvalidOperationException("rollback lost cache");
+            foreach(var file in System.IO.Directory.GetFiles(root,"slot-*")){
+                var bytes=System.IO.File.ReadAllBytes(file);bytes[80]^=1;System.IO.File.WriteAllBytes(file,bytes);
+            }
+            Deny("E_CACHE_RECEIPT",()=>session.Compile(main,new[]{c,d},record,pin,master));
+        }
+        System.IO.File.WriteAllBytes(System.IO.Path.Combine(output,lane+".dll"),build.Cil);
+        Console.WriteLine("PERSISTENT_NET_CIL|"+lane+"|reused="+build.Reused+"|stale-pin-denied");
+    }
+
     internal static void EmitCilCacheGuests(string output)
     {
         var c=Snapshot(C,"1.0.0",new(),new(),"use namespace network; pub fnc answer(int x):int{return x*2;}");
