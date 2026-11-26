@@ -61,7 +61,8 @@ public static partial class OresParser
     {
         if (languageVersion.HasValue && languageVersion.Value is not (1 or 2))
             throw new FormatException("E_LANGUAGE_VERSION: expected language version 1 or 2");
-        var tokens = StripFileExports(Tokenize(source, allowCaretReturn: languageVersion.HasValue), source);
+        var tokens = StripFileExports(Tokenize(source, allowCaretReturn: languageVersion.HasValue, allowScalarTupleProjection: true), source);
+        RejectUnverifiedScalarBrackets(tokens);
         RejectUnsupportedSourceActors(tokens);
         RejectUnsupportedInvertedClasses(tokens);
         RejectUnsupportedScalarTokens(tokens);
@@ -117,7 +118,7 @@ public static partial class OresParser
         return stripped;
     }
 
-    private static List<Token> Tokenize(string source, bool allowCaretReturn = false)
+    private static List<Token> Tokenize(string source, bool allowCaretReturn = false, bool allowScalarTupleProjection = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
@@ -149,7 +150,7 @@ public static partial class OresParser
         ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
-        var lexer = new Lexer(source, allowCaretReturn);
+        var lexer = new Lexer(source, allowCaretReturn, allowScalarTupleProjection);
         var tokens = new List<Token>();
         for (;;)
         {
@@ -220,6 +221,48 @@ public static partial class OresParser
             if (token.Text.Length == 0) break;
         }
         return tokens;
+    }
+
+    // Only the scalar parser's immediate Tuple.of literal projection can
+    // pass this bracket gate. No array literal, general indexing, nested
+    // bracket, arbitrary receiver, or dynamic index receives admission.
+    // The Reader still validates operands, witnesses, index and bounds.
+    private static void RejectUnverifiedScalarBrackets(List<Token> tokens)
+    {
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            if (tokens[i].Text is not ("[" or "]")) continue;
+            bool allowed = false;
+            if (tokens[i].Text == "[" && i >= 5 && i + 2 < tokens.Count &&
+                tokens[i - 1].Text == ")" && tokens[i + 2].Text == "]" &&
+                tokens[i + 1].Text.Length > 0 && tokens[i + 1].Text[0] is >= '0' and <= '9')
+            {
+                int j = i - 2;
+                // At most 32 signed literal operands and 32 type witnesses.
+                while (j >= 0 && i - j <= 100 &&
+                    (tokens[j].Text is "," or "+" or "-" ||
+                    (tokens[j].Text.Length > 0 && tokens[j].Text[0] is >= '0' and <= '9'))) j--;
+                if (j >= 0 && tokens[j].Text == "(")
+                {
+                    j--;
+                    if (j >= 0 && tokens[j].Text == ">")
+                    {
+                        j--;
+                        while (j >= 0 && i - j <= 170 &&
+                            tokens[j].Text is "int" or ",") j--;
+                        if (j >= 0 && tokens[j].Text == "<") j--;
+                        else j = -1;
+                    }
+                    allowed = j >= 2 && tokens[j].Text == "of" &&
+                        tokens[j - 1].Text == "." && tokens[j - 2].Text == "Tuple" &&
+                        (j == 2 || tokens[j - 3].Text != ".");
+                }
+            }
+            if (!allowed)
+                SafeCollectionSourceAdmission.RejectUnverifiedBracket(tokens[i].Text[0], tokens[i].Offset);
+            else
+                i += 2; // the exactly one literal index and its matching closer
+        }
     }
 
     private static void RejectUnsupportedScalarTokens(List<Token> tokens)
@@ -516,7 +559,7 @@ public static partial class OresParser
     }
     private readonly record struct Token(string Text, int Offset);
 
-    private sealed class Lexer(string text, bool allowCaretReturn)
+    private sealed class Lexer(string text, bool allowCaretReturn, bool allowScalarTupleProjection)
     {
         private int _i;
         private bool previousWasWith;
@@ -604,7 +647,7 @@ public static partial class OresParser
             bool exportScopeBracket =
                 (ch == '[' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*$")) ||
                 (ch == ']' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*$"));
-            if (!exportScopeBracket)
+            if (!exportScopeBracket && !allowScalarTupleProjection)
                 SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
             // Scalar and structured CIL frontends must agree: state-changing
             // annotations are compiler effects, never inert metadata. Check
