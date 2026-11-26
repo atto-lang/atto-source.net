@@ -2,6 +2,9 @@
 # Actual NativeAOT compiler + separately statically linked guest. No CoreCLR
 # substitution. Source-local fixtures are generated deterministically.
 set -Eeuo pipefail
+[[ "$#" -le 1 ]]
+corpus=""
+if [[ "$#" -eq 1 ]]; then corpus="$(realpath -- "$1")"; [[ -f "$corpus" ]]; fi
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 head="$(git rev-parse HEAD)"
@@ -21,7 +24,11 @@ cases=0
 guest() {
   local name="$1" expr="$2" expected_status="$3" expected_text="$4" source="$work/$1.atto" generated="$work/$1/OresGenerated.dll" output="$work/$1/native"
   mkdir -p -- "$work/$name"
+  if [[ -n "$corpus" ]]; then
+    cp -- "$work/shared/$name.atto" "$source"
+  else
   printf '%s\npub fnc main() -> int { return %s; }\n' "$pre" "$expr" >"$source"
+  fi
   "$compiler" compile "$source" --out "$generated"
   [[ -s "$generated" ]]
   dotnet clean "$host" -c Release -r "$rid" "-p:GeneratedAssembly=$generated"
@@ -41,6 +48,53 @@ guest() {
   sha256sum -- "$source" "$compiler" "$generated" "$output/oreslang-app"
   cases=$((cases+1))
 }
+reject() {
+  local name="$1" expr="$2" diagnostic="$3" source="$work/$1.atto" status=0
+  if [[ -n "$corpus" ]]; then
+    cp -- "$work/shared/$name.atto" "$source"
+  else
+  printf '%s\npub fnc main() -> int { return %s; }\n' "$pre" "$expr" >"$source"
+  fi
+  "$compiler" compile "$source" --out "$work/$name.dll" >"$work/stdout" 2>"$work/stderr" || status=$?
+  [[ "$status" -eq 1 && ! -e "$work/$name.dll" && ! -s "$work/stdout" ]]
+  if [[ "$diagnostic" == "-" ]]; then [[ -s "$work/stderr" ]]; else grep -Fq "$diagnostic:" "$work/stderr"; fi
+  printf 'NATIVE_AOT_REJECT %s %s\n' "$name" "$diagnostic"
+  cases=$((cases+1))
+}
+if [[ -n "$corpus" ]]; then
+  mkdir -p "$work/shared"
+  node --input-type=module - "$corpus" "$work/shared" <<'JS'
+import assert from 'node:assert/strict';
+import {writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {pathToFileURL} from 'node:url';
+const [corpus,out]=process.argv.slice(2);
+const {typedBindingCases:cases}=await import(pathToFileURL(corpus).href);
+assert.equal(cases.length,24);
+const errors={divisionByZero:"Oreslang division by zero",integerOverflow:"Oreslang arithmetic overflow",refinementViolation:"Oreslang refinement check failed"};
+const lines=[];
+for(const {source,text,expected:e} of cases){
+ assert.match(source,/^generated-binding-[a-z-]+\.atto$/);
+ const name=source.slice(0,-5);
+ writeFileSync(join(out,source),text,{flag:"wx"});
+ if(e.kind==="diagnostic"){
+   assert.ok(e.category===null||/^E_[A-Z0-9_]+$/.test(e.category));
+   lines.push([name,"reject","1",e.category??"-"].join("\t"));
+ }else if(e.kind==="value"){
+   assert.match(e.decimal,/^-?[0-9]+$/);
+   lines.push([name,"guest","0",e.decimal].join("\t"));
+ }else{
+   assert.ok(Object.hasOwn(errors,e.category));
+   lines.push([name,"guest","70",errors[e.category]].join("\t"));
+ }
+}
+writeFileSync(join(out,"cases.tsv"),lines.join("\n")+"\n",{flag:"wx"});
+JS
+  while IFS=$'\t' read -r name kind status expected; do
+    if [[ "$kind" == "reject" ]]; then reject "$name" "" "$expected"; else guest "$name" "" "$status" "$expected"; fi
+  done <"$work/shared/cases.tsv"
+  [[ "$cases" -eq 24 ]]
+else
 guest prefix '(<Positive>(42.<Second>)) / 1<Second>' 0 42
 guest postfix '(42.<Second>::<Positive>) / 1<Second>' 0 42
 guest keyword '(42.<Second> as Positive) / 1<Second>' 0 42
@@ -48,18 +102,10 @@ guest invalid-prefix '(<Positive>(0.<Second>)) / 1<Second>' 70 'Oreslang refinem
 guest invalid-postfix '(0.<Second>::<Positive>) / 1<Second>' 70 'Oreslang refinement check failed'
 guest invalid-keyword '(0.<Second> as Positive) / 1<Second>' 70 'Oreslang refinement check failed'
 guest zero '1.<Second> / 0.<Second>' 70 'Oreslang division by zero'
-reject() {
-  local name="$1" expr="$2" diagnostic="$3" source="$work/$1.atto" status=0
-  printf '%s\npub fnc main() -> int { return %s; }\n' "$pre" "$expr" >"$source"
-  "$compiler" compile "$source" --out "$work/$name.dll" >"$work/stdout" 2>"$work/stderr" || status=$?
-  [[ "$status" -eq 1 && ! -e "$work/$name.dll" && ! -s "$work/stdout" ]]
-  grep -Fq "$diagnostic:" "$work/stderr"
-  printf 'NATIVE_AOT_REJECT %s %s\n' "$name" "$diagnostic"
-  cases=$((cases+1))
-}
 reject erase '42.<Second>::<i64>' E_UNIT_ERASURE
 reject retag '42.<Second>.<Second>' E_UNIT_ATTACHMENT
 reject scale '(42<Millis> as Positive) / 1<Second>' E_UNIT_SCALE
 [[ "$cases" -eq 10 ]]
+fi
 git diff --quiet -- . && git diff --cached --quiet -- .
 printf 'NATIVE_AOT_VERIFIED %s cases\n' "$cases"
