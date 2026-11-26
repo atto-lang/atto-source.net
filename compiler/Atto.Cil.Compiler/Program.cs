@@ -120,6 +120,28 @@ internal sealed class Parser
         }
         _tokens.Add("<eof>");
         _offsets.Add(source.Length);
+        // A resource constructor is never admitted by the scalar CIL profile.
+        // Precompute matching generic delimiters in one bounded pass; this
+        // avoids quadratic scans of repeated malformed Mutex< prefixes.
+        var openAngles = new Stack<int>();
+        var closeAngles = new Dictionary<int, int>();
+        for (int index = 0; index < _tokens.Count; index++)
+        {
+            if (_tokens[index] == "<") openAngles.Push(index);
+            else if (_tokens[index] == ">" && openAngles.Count > 0)
+                closeAngles.Add(openAngles.Pop(), index);
+        }
+        for (int index = 0; index + 1 < _tokens.Count; index++)
+        {
+            if (_tokens[index] != "Mutex" || _tokens[index + 1] != "<" ||
+                !closeAngles.TryGetValue(index + 1, out int closing) ||
+                closing + 1 >= _tokens.Count || _tokens[closing + 1] != "(") continue;
+            if (index == 0 || _tokens[index - 1] != "new")
+                throw new CompilerError("E_NEW_REQUIRED",
+                    "Mutex<T> is an opaque resource class: new Mutex<T>(value) is required");
+            throw new CompilerError("E_LOCK_UNSUPPORTED",
+                "CIL backend has no compiled MutexLease or asynchronous scheduler");
+        }
     }
     internal List<Function> Parse()
     {

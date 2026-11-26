@@ -1,0 +1,2 @@
+// expected-error: E_LOCK_UNSUPPORTED (class syntax valid, backend unavailable)
+pub fnc main(): int { return new Mutex<int>(0); }

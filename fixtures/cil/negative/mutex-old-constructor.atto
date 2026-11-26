@@ -1,0 +1,2 @@
+// expected-error: E_NEW_REQUIRED
+pub fnc main(): int { return Mutex<int>(0); }
