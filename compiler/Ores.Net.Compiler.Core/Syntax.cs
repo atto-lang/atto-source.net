@@ -6,6 +6,11 @@ public abstract record Expression;
 public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
+// Source-only closed scalar projection. Each root has one ordered evaluation;
+// -1 denotes discard and has no binding in the body. No aggregate escapes.
+internal sealed record ScalarPatternSlot(int Id) : Expression;
+internal sealed record ScalarPatternApply(IReadOnlyList<Expression> Roots,
+    IReadOnlyList<int> Slots, Expression Body) : Expression;
 // Eager closed i64 projection, not an owned aggregate or host tuple.
 public sealed record EntryScalarProjection(Expression First, Expression Second, bool SelectKey) : Expression;
 // Canonical integer ^^ and the named Integer.bitXor intrinsic share this AST.
@@ -890,6 +895,92 @@ public static partial class OresParser
         private readonly Dictionary<string, ScalarMacro> _macros = new(StringComparer.Ordinal);
         private int _index;
         private int _macroExpansions;
+        private Dictionary<string,int>? _patternScope;
+        private int _nextPatternSlot;
+        private int _patternCount;
+        private Dictionary<int,int>? _parenEnds;
+        private bool PatternAhead()
+        {
+            if (Current.Text != "(") return false;
+            if (_parenEnds is null)
+            {
+                _parenEnds = new Dictionary<int,int>();
+                var stack = new Stack<int>();
+                for (int i=0;i<tokens.Count;i++)
+                {
+                    if (tokens[i].Text=="(") stack.Push(i);
+                    else if (tokens[i].Text==")" && stack.Count>0) _parenEnds.Add(stack.Pop(),i);
+                }
+            }
+            return _parenEnds.TryGetValue(_index,out int end) && end+3<tokens.Count &&
+                tokens[end+1].Text=="|>" && tokens[end+2].Text=="|" && tokens[end+3].Text=="(";
+        }
+
+        private FormatException PatternError(string reason) =>
+            new($"E_TUPLE_PATTERN: {reason} at offset {Current.Offset}");
+
+        private Expression ParseTuplePattern(int depth)
+        {
+            CheckDepth(depth);
+            if (++_patternCount>128) throw PatternError("maximum 128 patterns");
+            var outer=_patternScope;
+            try
+            {
+                _patternScope=outer ?? new Dictionary<string,int>(StringComparer.Ordinal);
+                Expect("(");
+                var roots=new List<Expression>();
+                bool comma=false;
+                if (!Take(")"))
+                {
+                    do
+                    {
+                        if (roots.Count>=8) throw PatternError("maximum arity 8");
+                        roots.Add(ParseAdd(depth+1));
+                        if (!Take(",")) {Expect(")");break;}
+                        comma=true;
+                    } while (!Take(")"));
+                }
+                if (roots.Count==1 && !comma) throw PatternError("singleton root requires trailing comma");
+                Expect("|>");Expect("|");Expect("(");
+                var scope=new Dictionary<string,int>(StringComparer.Ordinal);
+                var slots=new List<int>();
+                bool binderComma=false;
+                if (!Take(")"))
+                {
+                    do
+                    {
+                        if (slots.Count>=8) throw PatternError("maximum arity 8");
+                        string name=Current.Text;
+                        if (!IsMacroName(name) || name is "true" or "false" or "self" or "arguments")
+                            throw PatternError("expected scalar binder");
+                        _index++;
+                        if (Take(":"))
+                        {
+                            if (name=="_") throw PatternError("typed discard forbidden");
+                            if (!Take("int")) throw PatternError("only int leaf types admitted");
+                        }
+                        if (name=="_") slots.Add(-1);
+                        else
+                        {
+                            int id=_nextPatternSlot++;
+                            if (!scope.TryAdd(name,id)) throw PatternError("duplicate binding");
+                            slots.Add(id);
+                        }
+                        if (!Take(",")) {Expect(")");break;}
+                        binderComma=true;
+                    } while (!Take(")"));
+                }
+                if (slots.Count==1 && !binderComma) throw PatternError("singleton pattern requires trailing comma");
+                if (slots.Count!=roots.Count) throw PatternError("arity mismatch");
+                Expect("|");Expect("->");
+                _patternScope=scope;
+                var body=ParseAdd(depth+1);
+                if (Current.Text is not (")" or "," or ";" or "}" or "end" or ""))
+                    throw PatternError("unsupported body continuation");
+                return new ScalarPatternApply(roots.AsReadOnly(),slots.AsReadOnly(),body);
+            }
+            finally { _patternScope=outer; }
+        }
 
         private static FormatException UnsupportedMacro(int at, string reason) =>
             new($"NET_MACRO_EXPANDER_REQUIRED: {reason} at offset {at}; " +
@@ -1226,7 +1317,7 @@ public static partial class OresParser
         private Expression ParseAdd(int depth)
         {
             CheckDepth(depth);
-            Expression left = ParseMul(depth + 1);
+            Expression left = PatternAhead() ? ParseTuplePattern(depth + 1) : ParseMul(depth + 1);
             while (Current.Text is "+" or "-")
             {
                 char op = Current.Text[0];
@@ -1264,6 +1355,19 @@ public static partial class OresParser
         private Expression ParseUnary(int depth)
         {
             CheckDepth(depth);
+            if (_patternScope is not null)
+            {
+                if (_patternScope.TryGetValue(Current.Text,out int id))
+                {
+                    _index++;
+                    return new ScalarPatternSlot(id);
+                }
+                // Pure scalar arithmetic only: no calls, casts, host access,
+                // capture, or implicit evaluation of unknown names.
+                if (Current.Text is not ("+" or "-" or "(") &&
+                    (Current.Text.Length==0 || Current.Text[0] is < '0' or > '9'))
+                    throw PatternError("expected closed int arithmetic over bound leaves");
+            }
             if (Current.Text.Length > 0 && Current.Text[0] is '\'' or '"' or '\u0060')
                 throw new FormatException(
                     $"STRING_BACKEND_UNSUPPORTED: quoted strings and template interpolation require typed String CIL/NativeAOT lowering at offset {Current.Offset}");
