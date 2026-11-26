@@ -309,11 +309,11 @@ pub async routine main(): void {
             ("define actor Foo as mtd():void {} fnc mtd():void {} end", "mtd/0"),
             ("define actor Foo as mtd x(int n):int {} fnc x(self,int n):int {} end", "x/1"),
             ("define class Foo as mtd mtd(int n):int {} mtd(self,int n):int {} end", "mtd/1"),
-            ("define class Foo as method method():void {} method():void {} end", "method/0"),
+            ("define class Foo as mtd method():void {} method():void {} end", "method/0"),
             ("define class Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
             ("define class Foo as x(mut self)():void {} fnc x():void {} end", "x/0"),
-            ("define class Foo as fnc x(int n):int {} method x(mut self, int n):int {} end", "x/1"),
-            ("define class Foo as method x(mut self, int n):int {} fnc x(int n):int {} end", "x/1"),
+            ("define class Foo as fnc x(int n):int {} mtd x(mut self, int n):int {} end", "x/1"),
+            ("define class Foo as mtd x(mut self, int n):int {} fnc x(int n):int {} end", "x/1"),
             ("define pub class Foo as pub fnc x():void {} x(mut self)():void {} end", "x/0"),
             ("pub define class Foo as x(int n):int {} pub fnc x(mut self, int n):int {} end", "x/1"),
             ("define actor Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
@@ -324,6 +324,14 @@ pub async routine main(): void {
             ("define actor Foo as x(mut self, int n):void {} x(int n):void {} end", "x/1")
         })
             RejectFeature(source, "Duplicate nominal method slot 'Foo::Instance::" + slot + "'");
+
+        foreach (var obsolete in new[] {
+            "define class Foo as method x():void {} end",
+            "define actor Foo as method x():void {} end",
+            "define class Foo as pub method method():void {} end",
+            "define class Foo as method x(mut self, int n):int {} fnc x(int n):int {} end"
+        })
+            RejectFeature(obsolete, "Obsolete method introducer; use mtd");
 
         // Static callables have their own owner/name/value-arity identity:
         // static-static duplicates reject, but static-instance pairs coexist.
