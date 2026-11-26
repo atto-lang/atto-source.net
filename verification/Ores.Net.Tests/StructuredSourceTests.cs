@@ -89,8 +89,14 @@ internal static class StructuredSourceTests
             "break requires an enclosing loop");
         RejectFeature("fnc main():int{do unless false then continue; fi return 0;}",
             "continue requires an enclosing loop");
-        RejectFeature("fnc main():int{loop{if true then break; fi}return 0;}",
-            "use 'do if'");
+        // Current structured parser intentionally retains legacy imperative
+        // if...then...fi alongside explicit do if until a spec migration.
+        // Keep this acceptance and the non-loop break rejection distinct.
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{loop{if true then break; fi}return 0;}").Body.Count == 2,
+            "legacy imperative if must preserve loop-scoped break");
+        RejectFeature("fnc main():int{if true then break; fi return 0;}",
+            "break requires an enclosing loop");
         RejectFeature("fnc main():int{return ifnot false then break; else 3 fi;}",
             "must produce a value");
         RejectFeature("fnc main():int{return unless true then 3 fi;}",
