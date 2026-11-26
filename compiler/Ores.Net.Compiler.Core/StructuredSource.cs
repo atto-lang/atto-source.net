@@ -838,6 +838,7 @@ public static partial class OresStructuredParser
                        (Alpha(source[nameEnd]) || Digit(source[nameEnd]) ||
                         source[nameEnd] == '_')) nameEnd++;
                 string name = source[(index + 1)..nameEnd];
+                if (name is "requires" or "ensures") { index++; return new Token("@", offset); }
                 if (name is "Inject" or "StateBacked" or "MutableStateContainer" or "StateContainer")
                     throw new FormatException(
                         $"STATE_INJECTION_UNSUPPORTED: @{name} requires typed container ownership, borrow checks and Native AOT lowering at offset {offset}");
