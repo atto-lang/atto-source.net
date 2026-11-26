@@ -892,6 +892,11 @@ ActorFinalizationV1SelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
+ActorHeapAdmissionParitySelfTest.Run(); // native GC/tenant claims must fail closed
+ActorGuestHeap32SelfTest.Run(); // actor-private guest refs: host substrate only
+ActorGuestDemandBackedIntegrationSelfTest.Run(); // demand-backed native Ref32 safety and exact actor stop refund
+ActorHeapV1CompilerSelfTest.Run(); // checked .atto Node source -> C# emitter (not executed guest)
+ActorControlDirectoryIntegrationSelfTest.Run(); // optional native CONTROL root counters
 StateRegionLoanProvenanceSelfTest.Run();
 ActorIsolationAccessV1SelfTest.Run();
 ActorShardColumnsSelfTest.Run();

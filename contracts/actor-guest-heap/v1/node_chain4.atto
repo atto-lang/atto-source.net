@@ -1,0 +1,15 @@
+// Backend-owned extension candidate, not the pinned shared two-node fixture.
+define class Node as
+    int value
+    Node? next
+end
+
+define actor HeapGraphProbe as
+    receive(int message) {
+        let first = new Node(42, none)
+        let second = new Node(99, first)
+        let third = new Node(7, second)
+        let fourth = new Node(3, third)
+        assert(fourth.next?.value == 7)
+    }
+end
