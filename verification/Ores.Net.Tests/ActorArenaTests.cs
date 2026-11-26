@@ -174,6 +174,137 @@ internal static class ActorArenaTests
                 throw new Exception("actor migration test stalled");
             if (failure is not null) throw new Exception("carrier migration", failure);
         }
+        // Lifetime-only external leases model continuations, FFI and I/O
+        // callbacks. Retirement must revoke arena operations immediately but
+        // keep native storage pinned until the last lease is released.
+        var quiescing = new ActorArena(1201, 9);
+        var qt = quiescing.BeginTurn(1201, 9);
+        var qh = quiescing.Allocate(qt, 4);
+        quiescing.Write(qt, qh, new byte[] { 1, 4, 9, 16 });
+        var external = quiescing.AcquireExternalLease(qt);
+        if (quiescing.OutstandingExternalLeases != 1)
+            throw new Exception("external arena lease was not charged");
+        quiescing.EndTurn(qt);
+        quiescing.Dispose();
+        if (!quiescing.Retired || quiescing.PhysicallyDisposed)
+            throw new Exception("external lease did not pin physical actor memory");
+        ExpectFailure(() => quiescing.BeginTurn(1201, 9));
+
+        Exception? leaseReleaseFailure = null;
+        var callbackCarrier = new System.Threading.Thread(() =>
+        {
+            try
+            {
+                external.Dispose();
+                external.Dispose(); // idempotent even on callback cleanup retry
+            }
+            catch (Exception failure) { leaseReleaseFailure = failure; }
+        });
+        callbackCarrier.Start();
+        if (!callbackCarrier.Join(TimeSpan.FromSeconds(5)))
+            throw new Exception("external lease release stalled");
+        if (leaseReleaseFailure is not null)
+            throw new Exception("external lease release failed", leaseReleaseFailure);
+        if (!quiescing.PhysicallyDisposed || quiescing.OutstandingExternalLeases != 0)
+            throw new Exception("last external lease did not trigger physical reclaim");
+        quiescing.Dispose();
+        // Runtime bridge: register the Task while the turn is valid, then
+        // prove completion may release its lifetime pin from a different carrier.
+        using var taskPinned = new ActorArena(405, 1);
+        var taskTurn = taskPinned.BeginTurn(405, 1);
+        var completion = new System.Threading.Tasks.TaskCompletionSource<int>(
+            System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+        var trackedCompletion = taskPinned.TrackExternalCompletion(taskTurn, completion.Task);
+        if (taskPinned.OutstandingExternalLeases != 1)
+            throw new Exception("Task bridge did not acquire external lifetime pin");
+        taskPinned.EndTurn(taskTurn);
+        taskPinned.Dispose();
+        if (!taskPinned.Retired || taskPinned.PhysicallyDisposed)
+            throw new Exception("pending Task must pin physical actor arena lifetime");
+        completion.SetResult(17);
+        if (trackedCompletion.GetAwaiter().GetResult() != 17)
+            throw new Exception("tracked Task result changed");
+        if (!taskPinned.PhysicallyDisposed || taskPinned.OutstandingExternalLeases != 0)
+            throw new Exception("Task completion did not release actor arena lifetime");
+
+
+        // Concurrent external completions: retirement must remain pinned until
+        // both independently charged leases settle, even on cancellation/fault.
+        using var failedPinned = new ActorArena(406, 1);
+        var failedTurn = failedPinned.BeginTurn(406, 1);
+        var cancelled = new System.Threading.Tasks.TaskCompletionSource<int>(
+            System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+        var faulted = new System.Threading.Tasks.TaskCompletionSource<int>(
+            System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelledBridge = failedPinned.TrackExternalCompletion(failedTurn, cancelled.Task);
+        var faultedBridge = failedPinned.TrackExternalCompletion(failedTurn, faulted.Task);
+        if (failedPinned.OutstandingExternalLeases != 2)
+            throw new Exception("two independent lifetime charges required");
+        failedPinned.EndTurn(failedTurn);
+        failedPinned.Dispose();
+        cancelled.SetCanceled();
+        try
+        {
+            cancelledBridge.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            throw new Exception("cancelled bridge unexpectedly succeeded");
+        }
+        catch (OperationCanceledException) { }
+        if (failedPinned.PhysicallyDisposed || failedPinned.OutstandingExternalLeases != 1)
+            throw new Exception("cancelled bridge released another owner's lease");
+        var injected = new ApplicationException("injected external completion fault");
+        faulted.SetException(injected);
+        try
+        {
+            faultedBridge.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            throw new Exception("faulted bridge unexpectedly succeeded");
+        }
+        catch (ApplicationException ex) when (ReferenceEquals(ex, injected)) { }
+        if (!failedPinned.PhysicallyDisposed || failedPinned.OutstandingExternalLeases != 0)
+            throw new Exception("faulted final bridge leaked the retired arena");
+
+        // The factory overload must pin before publishing external work.
+        using var factoryArena = new ActorArena(407, 1);
+        var factoryTurn = factoryArena.BeginTurn(407, 1);
+        var factoryCalls = 0;
+        var factoryPending = new System.Threading.Tasks.TaskCompletionSource<int>(
+            System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+        var factoryTracked = factoryArena.TrackExternalCompletion<int>(factoryTurn, () =>
+        {
+            ++factoryCalls;
+            if (factoryArena.OutstandingExternalLeases != 1)
+                throw new Exception("external work started before lifetime pin");
+            return factoryPending.Task;
+        });
+        if (factoryCalls != 1 || factoryArena.OutstandingExternalLeases != 1)
+            throw new Exception("external factory did not start exactly once");
+        var factoryError = new ApplicationException("injected factory failure");
+        try
+        {
+            factoryArena.TrackExternalCompletion<int>(factoryTurn, () => throw factoryError);
+            throw new Exception("throwing factory unexpectedly succeeded");
+        }
+        catch (ApplicationException ex) when (ReferenceEquals(ex, factoryError)) { }
+        ExpectFailure(() => factoryArena.TrackExternalCompletion<int>(factoryTurn, () => null!));
+        if (factoryArena.OutstandingExternalLeases != 1)
+            throw new Exception("failed factory changed another operation's lifetime pin");
+        var alreadyDone = factoryArena.TrackExternalCompletion<int>(factoryTurn,
+            () => System.Threading.Tasks.Task.FromResult(42));
+        if (alreadyDone.GetAwaiter().GetResult() != 42 || factoryArena.OutstandingExternalLeases != 1)
+            throw new Exception("settled factory retained a phantom lifetime pin");
+        factoryArena.EndTurn(factoryTurn);
+        factoryArena.Dispose();
+        ExpectFailure(() => factoryArena.TrackExternalCompletion<int>(factoryTurn, () =>
+        {
+            ++factoryCalls;
+            return System.Threading.Tasks.Task.FromResult(0);
+        }));
+        if (factoryCalls != 1 || factoryArena.PhysicallyDisposed)
+            throw new Exception("retired actor started external work or freed pinned memory");
+        factoryPending.SetResult(17);
+        if (factoryTracked.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult() != 17 ||
+            !factoryArena.PhysicallyDisposed || factoryArena.OutstandingExternalLeases != 0)
+            throw new Exception("factory completion failed to release last lifetime pin");
+
         using var restarted = new ActorArena(101, 2);
         var tr = restarted.BeginTurn(101, 2);
         ExpectFailure(() => restarted.Read(tr, h));

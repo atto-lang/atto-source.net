@@ -35,6 +35,25 @@ public sealed unsafe class ActorArena : IDisposable
         internal Scratch(Guid domain, Turn turn, int offset, int length) =>
             (Domain, Turn, Offset, Length) = (domain, turn, offset, length);
     }
+
+    /// <summary>
+    /// Opaque lifetime-only authority for a registered continuation/FFI/I/O
+    /// callback. It grants no arena read/write access and may be released from
+    /// any carrier. Logical retirement revokes all arena operations
+    /// immediately, while physical native release waits for the last lease.
+    /// </summary>
+    public sealed class ExternalLease : IDisposable
+    {
+        private ActorArena? _owner;
+        internal ExternalLease(ActorArena owner) => _owner = owner;
+
+        public void Dispose()
+        {
+            var owner = System.Threading.Interlocked.Exchange(ref _owner, null);
+            owner?.ReleaseExternalLease();
+        }
+    }
+
     private struct Slot
     {
         public ulong Generation;
@@ -52,7 +71,7 @@ public sealed unsafe class ActorArena : IDisposable
     private byte* _memory;
     private Turn? _turn;
     private System.Threading.Thread? _carrier;
-    private int _scratchTop;
+    private int _scratchTop, _externalLeases;
     private bool _retired;
 
     public ActorArena(ulong actor, ulong incarnation)
@@ -197,6 +216,132 @@ public sealed unsafe class ActorArena : IDisposable
         }
     }
 
+    /// <summary>
+    /// Register a lifetime pin for an external continuation, FFI operation or
+    /// I/O callback before the actor turn exits. The lease carries lifetime
+    /// authority only; it cannot dereference actor memory.
+    /// </summary>
+    public ExternalLease AcquireExternalLease(Turn turn)
+    {
+        if (!System.Threading.Monitor.TryEnter(_gate))
+            throw new InvalidOperationException("actor arena busy");
+        try
+        {
+            RequireTurn(turn);
+            if (_externalLeases == int.MaxValue)
+                throw new InvalidOperationException("actor arena external lease quota exhausted");
+            // Allocate the managed host lease before publishing its charge.
+            // Allocation failure must leave the arena's ownership ledger unchanged.
+            var lease = new ExternalLease(this);
+            ++_externalLeases;
+            return lease;
+        }
+        finally
+        {
+            System.Threading.Monitor.Exit(_gate);
+        }
+    }
+
+    /// <summary>
+    /// Acquire the lifetime pin synchronously while the actor turn is valid,
+    /// then keep it until the registered asynchronous operation settles.
+    /// The returned task never grants arena memory authority.
+    /// </summary>
+    public System.Threading.Tasks.Task TrackExternalCompletion(
+        Turn turn, System.Threading.Tasks.Task task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        var lease = AcquireExternalLease(turn);
+        try { return ActorArenaExternalCompletion.Await(task, lease); }
+        catch
+        {
+            // A synchronous failure while constructing the host bridge must not pin the arena forever.
+            lease.Dispose();
+            throw;
+        }
+    }
+
+    public System.Threading.Tasks.Task<T> TrackExternalCompletion<T>(
+        Turn turn, System.Threading.Tasks.Task<T> task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        var lease = AcquireExternalLease(turn);
+        try { return ActorArenaExternalCompletion.Await(task, lease); }
+        catch
+        {
+            // A synchronous failure while constructing the host bridge must not pin the arena forever.
+            lease.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Trusted host adapter: pin lifetime before starting external work.
+    /// The factory must return its physical completion receipt and must
+    /// not publish work if it throws or returns null. No turn or pointer
+    /// authority is conveyed to the completion callback.
+    /// </summary>
+    public System.Threading.Tasks.Task TrackExternalCompletion(
+        Turn turn, Func<System.Threading.Tasks.Task> start)
+    {
+        ArgumentNullException.ThrowIfNull(start);
+        var lease = AcquireExternalLease(turn);
+        try
+        {
+            var pending = start() ?? throw new InvalidOperationException("External operation returned no completion task");
+            return ActorArenaExternalCompletion.Await(pending, lease);
+        }
+        catch
+        {
+            lease.Dispose();
+            throw;
+        }
+    }
+
+    public System.Threading.Tasks.Task<T> TrackExternalCompletion<T>(
+        Turn turn, Func<System.Threading.Tasks.Task<T>> start)
+    {
+        ArgumentNullException.ThrowIfNull(start);
+        var lease = AcquireExternalLease(turn);
+        try
+        {
+            var pending = start() ?? throw new InvalidOperationException("External operation returned no completion task");
+            return ActorArenaExternalCompletion.Await(pending, lease);
+        }
+        catch
+        {
+            lease.Dispose();
+            throw;
+        }
+    }
+
+    private void ReleaseExternalLease()
+    {
+        lock (_gate)
+        {
+            if (_externalLeases <= 0)
+                throw new InvalidOperationException("actor arena external lease accounting underflow");
+            --_externalLeases;
+            if (_retired && _externalLeases == 0)
+                FreeNativeMemory();
+        }
+    }
+
+    public int OutstandingExternalLeases
+    {
+        get { lock (_gate) return _externalLeases; }
+    }
+
+    public bool Retired
+    {
+        get { lock (_gate) return _retired; }
+    }
+
+    public bool PhysicallyDisposed
+    {
+        get { lock (_gate) return _memory == null; }
+    }
+
     public Scratch AllocateScratch(Turn turn, int length)
     {
         if (!System.Threading.Monitor.TryEnter(_gate))
@@ -261,6 +406,14 @@ public sealed unsafe class ActorArena : IDisposable
         }
     }
 
+    private void FreeNativeMemory()
+    {
+        if (_memory == null) return;
+        CryptographicOperations.ZeroMemory(new Span<byte>(_memory, TotalBytes));
+        NativeMemory.Free(_memory);
+        _memory = null;
+    }
+
     public void Dispose()
     {
         if (!System.Threading.Monitor.TryEnter(_gate))
@@ -269,14 +422,35 @@ public sealed unsafe class ActorArena : IDisposable
         {
             if (_retired) return;
             if (_turn is not null) throw new InvalidOperationException("active turn blocks retirement");
-            CryptographicOperations.ZeroMemory(new Span<byte>(_memory, TotalBytes));
-            NativeMemory.Free(_memory);
-            _memory = null;
+
+            // Retirement is two-phase: revoke new actor operations now, then
+            // reclaim only after all continuation/FFI/I/O lifetime pins quiesce.
             _retired = true;
+            _carrier = null;
+            if (_externalLeases == 0)
+                FreeNativeMemory();
         }
         finally
         {
             System.Threading.Monitor.Exit(_gate);
         }
+    }
+}
+
+/** Safe async boundary: no native pointer or turn authority crosses await. */
+internal static class ActorArenaExternalCompletion
+{
+    internal static async System.Threading.Tasks.Task Await(
+        System.Threading.Tasks.Task pending, ActorArena.ExternalLease lifetime)
+    {
+        using (lifetime)
+            await pending.ConfigureAwait(false);
+    }
+
+    internal static async System.Threading.Tasks.Task<T> Await<T>(
+        System.Threading.Tasks.Task<T> pending, ActorArena.ExternalLease lifetime)
+    {
+        using (lifetime)
+            return await pending.ConfigureAwait(false);
     }
 }
