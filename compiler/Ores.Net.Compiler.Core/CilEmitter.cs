@@ -90,6 +90,11 @@ public static class CilEmitter
     public static void EmitLibrary(VerifiedCfgModule module, string outputFile) =>
         CfgCilEmitter.EmitLibrary(module, outputFile);
 
+    /// <summary>Build actual verified deterministic CIL in memory, with the
+    /// same independent module linkage verification as file emission.</summary>
+    public static byte[] BuildLibrary(VerifiedCfgModule module) =>
+        CfgCilEmitter.BuildLibrary(module);
+
     private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il,
         MetadataBuilder metadata)
     {
@@ -342,14 +347,13 @@ public static class CilEmitter
     // Experimental multi-method Native AOT assembly. MethodDef handles are
     // reserved before body emission so statically resolved calls target only
     // verified methods in this exact module, never reflection/dynamic code.
-    internal static void EmitLibraryModuleCore(string outputFile,
+    internal static byte[] BuildLibraryModuleCore(
         VerifiedCfgModule module,
         Func<VerifiedCfgFunction, MetadataBuilder, MethodBodyStreamEncoder,
             IReadOnlyDictionary<string, MethodDefinitionHandle>, CfgGuestResultEmitter?,
             (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody)
     {
         ArgumentNullException.ThrowIfNull(module);
-        ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
         var methods = new[] { module.Main }.Concat(module.Helpers).ToArray();
         if (methods.Length is < 1 or > 65 || methods[0].Name != "main" ||
             methods[0].ResultType != IrValueType.I64 ||
@@ -496,13 +500,18 @@ public static class CilEmitter
             deterministicIdProvider: DeterministicImageId);
         var bytes = new BlobBuilder();
         pe.Serialize(bytes);
+        return bytes.ToArray();
+    }
 
+    internal static void PublishLibraryBytes(string outputFile,byte[] bytes)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
         string full = Path.GetFullPath(outputFile);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         string temporary = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            File.WriteAllBytes(temporary, bytes.ToArray());
+            File.WriteAllBytes(temporary, bytes);
             File.Move(temporary, full, overwrite: true);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }

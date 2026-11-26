@@ -91,6 +91,34 @@ internal static class FrozenDependencyGraphSelfTest
         Deny("E_UNBOUND",()=>OresStructuredParser.CompileFrozenScalar(fromB,new[]{noAuthority,c}));
         Console.WriteLine("FROZEN_PROVIDER_NAMESPACE|three-packages|warm-identical|seven-denials");
     }
+    internal static void EmitCilCacheGuests(string output)
+    {
+        var c=Snapshot(C,"1.0.0",new(),new(),"use namespace network; pub fnc answer(int x):int{return x*2;}");
+        var d=WithDeps(D);
+        string main="import pkg '"+C+"' as p; pub fnc main()->int{return p.network.answer(21);}";
+        var session=new FrozenCilSession();
+        var cold=session.Compile(main,new[]{c,d},true);
+        var clean=CilEmitter.BuildLibrary(OresStructuredParser.CompileFrozenScalar(main,new[]{c,d}));
+        if(cold.Reused||!cold.Cil.AsSpan().SequenceEqual(clean))throw new InvalidOperationException("cold CIL differs");
+        var warm=session.Compile(main,new[]{d,c});
+        if(!warm.Reused||!warm.Cil.AsSpan().SequenceEqual(clean))throw new InvalidOperationException("warm CIL differs");
+        System.IO.Directory.CreateDirectory(output);
+        System.IO.File.WriteAllBytes(System.IO.Path.Combine(output,"cold.dll"),cold.Cil);
+        System.IO.File.WriteAllBytes(System.IO.Path.Combine(output,"warm.dll"),warm.Cil);
+        warm.Cil[0]^=1;
+        if(!session.Compile(main,new[]{c,d}).Cil.AsSpan().SequenceEqual(clean))
+            throw new InvalidOperationException("caller mutated cached bytes");
+        Deny("E_AMBIGUOUS",()=>session.Compile(main,new[]{c,c}));
+        Deny("E_UNBOUND",()=>session.Compile(main.Replace("answer(21)","missing(21)"),new[]{c,d}));
+        if(!session.Compile(main,new[]{d,c}).Reused)throw new InvalidOperationException("failed build invalidated memo");
+        var c2=Snapshot(C,"1.0.0",new(),new(),"use namespace network; pub fnc answer(int x):int{return x*2+1;}");
+        var edit=session.Compile(main,new[]{c2,d});
+        if(edit.Reused||!edit.Cil.AsSpan().SequenceEqual(CilEmitter.BuildLibrary(OresStructuredParser.CompileFrozenScalar(main,new[]{c2,d})))||
+            edit.Cil.AsSpan().SequenceEqual(clean))throw new InvalidOperationException("edited CIL differs");
+        System.IO.File.WriteAllBytes(System.IO.Path.Combine(output,"edit.dll"),edit.Cil);
+        Console.WriteLine("INCREMENTAL_NET_CIL|cold-warm-byte-identical|repinned-edit|defensive-copy|rollback");
+    }
+
     internal static void EmitSessionGuests(string output)
     {
         var c=Snapshot(C,"1.0.0",new(),new(),"use namespace network; pub fnc answer(int x):int{return x*2;}");
