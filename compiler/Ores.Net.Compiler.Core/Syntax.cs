@@ -117,7 +117,7 @@ public static partial class OresParser
         return stripped;
     }
 
-    private static List<Token> Tokenize(string source, bool allowCaretReturn = false)
+    private static List<Token> Tokenize(string source, bool allowCaretReturn = false, bool strictGuards = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
@@ -149,7 +149,7 @@ public static partial class OresParser
         ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
-        var lexer = new Lexer(source, allowCaretReturn);
+        var lexer = new Lexer(source, allowCaretReturn, strictGuards);
         var tokens = new List<Token>();
         for (;;)
         {
@@ -519,7 +519,7 @@ public static partial class OresParser
     }
     private readonly record struct Token(string Text, int Offset);
 
-    private sealed class Lexer(string text, bool allowCaretReturn)
+    private sealed class Lexer(string text, bool allowCaretReturn, bool strictGuards = false)
     {
         private int _i;
         private bool previousWasWith;
@@ -786,6 +786,11 @@ public static partial class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
+            if (strictGuards && (ch == '&' || ch == '|') && _i + 1 < text.Length && text[_i+1] == ch)
+            {
+                _i += 2;
+                return new Token(text[start.._i], start);
+            }
             if ("()+-*/{}:;,.=?[]<>~|!".IndexOf(ch) >= 0)
             {
                 _i++;
