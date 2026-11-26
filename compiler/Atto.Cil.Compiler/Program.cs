@@ -125,7 +125,7 @@ internal sealed class Parser
     {
         // A lexed Pointer token is admitted only by the closed local read-lease profile.
         if (_tokens.Contains("Pointer", StringComparer.Ordinal))
-            return _tokens.Count > 10 && _tokens[8] == "let" && _tokens[9] == "mut"
+            return _tokens.Count > 10 && _tokens[8] == "let" && _tokens[9] == "mut" && _tokens[10] == "Pointer"
                 ? ParseOwnedScalarPointer() : ParseBorrowedLocalPointer();
         // File-scoped namespace metadata is distinct from a module/import.
         // It may occur exactly once, and only before any declarations.
