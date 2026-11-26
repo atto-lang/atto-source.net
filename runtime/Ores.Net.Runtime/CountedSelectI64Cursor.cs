@@ -35,9 +35,11 @@ public sealed class CountedSelectI64Cursor
         _values = new(count);
         if (count == 0) { _state = CursorState.Success; return; }
         ArgumentNullException.ThrowIfNull(sources);
-        if (sources.Count < 1 || sources.Count > 256) throw new ArgumentException("counted source count");
-        foreach (object source in sources)
+        int length = sources.Count;
+        if (length < 1 || length > 256) throw new ArgumentException("counted source count");
+        for (int i = 0; i < length; i++)
         {
+            object source = sources[i];
             if (source is not SelectableI64Channel && source is not SelectableI64Future)
                 throw new ArgumentException("counted source requires trusted i64 channel or Future");
             _live.Add(source);

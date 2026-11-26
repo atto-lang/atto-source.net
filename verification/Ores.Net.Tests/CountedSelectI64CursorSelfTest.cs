@@ -10,6 +10,7 @@ internal static class CountedSelectI64CursorSelfTest
     { cursor.BeginRound(); Require(cursor.Pump(), "ready round commits"); }
     public static void Run()
     {
+        Aggregate();
         var a = new SelectableI64Channel(2);
         var b = new SelectableI64Channel(2);
         a.TryWrite(10); a.TryWrite(30); b.TryWrite(20); b.TryWrite(40);
@@ -79,4 +80,35 @@ internal static class CountedSelectI64CursorSelfTest
         Round(c); Round(c);
         Require(c.Result().SequenceEqual(new long[]{99,2,4}),"exact surviving lexical alias fairness");
     }
+    private static void Aggregate()
+    {
+        var a = new SelectableI64Channel(4);
+        a.TryWrite(10); a.TryWrite(20); a.TryWrite(30); a.TryWrite(40);
+        var batch = new CountedSelectI64Batch(3,new object[]{a});
+        for (int i = 0; i < 3; i++)
+        {
+            Require(batch.Pump() && !batch.Completion.IsCompleted,"aggregate registration not settlement");
+            Require(batch.Pump() && batch.Completion.IsCompleted == (i == 2),"aggregate exact retirement");
+        }
+        var result = batch.Completion.GetAwaiter().GetResult();
+        Require(result.SequenceEqual(new long[]{10,20,30}),"aggregate exact immutable result");
+        try { ((IList<long>)result)[0]=99; throw new Exception("mutable aggregate"); }
+        catch (NotSupportedException) {}
+        Require(a.TryRead(out var fourth) && fourth==40 && !batch.Cancel() && !batch.Pump(),"terminal no extra commit");
+        var f = new SelectableI64Future();
+        batch = new(2,new object[]{f});
+        Require(batch.Pump() && !batch.Pump() && f.PendingWaiters==1,"pending aggregate");
+        Require(batch.Cancel() && batch.Completion.IsCanceled && f.PendingWaiters==0,"cancel settles after cleanup");
+        Require(f.Resolve(42),"cancel preserves independent producer");
+        batch = new(2,new object[]{f,f});
+        Require(batch.Pump() && batch.Pump() && batch.Completion.IsFaulted,"aggregate exhaustion");
+        Require(batch.Completion.Exception?.InnerException?.Message=="SelectExhausted","typed exhaustion");
+        Require(new CountedSelectI64Batch(0,null!).Completion.Result.Count==0,"zero aggregate");
+        batch = new(1,new object[]{a});
+        var rejected = false;
+        var foreign = new Thread(()=>{try{batch.Cancel();}catch(InvalidOperationException){rejected=true;}});
+        foreign.Start();foreign.Join();
+        Require(rejected && !batch.Completion.IsCompleted && batch.Cancel(),"foreign cancellation rejected");
+    }
+
 }
