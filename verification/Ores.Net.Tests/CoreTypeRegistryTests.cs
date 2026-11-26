@@ -143,12 +143,17 @@ internal static class CoreTypeRegistryTests
             "E_CORE_TYPE_ARITY", "Option requires an explicit type argument");
         Reject("fnc main():int{val Option<Box> value=None;return 42;}",
             "E_OPTION_I64_ONLY", "affine payload Option is fail-closed until typed drop/borrow lowering");
+        // The registry is still contract-only for general Result lowering.
+        // The closed standalone frontend now has a separately checked scalar ABI.
         Reject("fnc main():int{val Result<int, int> value=Ok(42);return 42;}",
-            "E_CORE_TYPE_LOWERING_UNSUPPORTED", "Result is catalogued but not lowered");
+            "E_RESULT_ERROR_ABI_UNSUPPORTED", "arbitrary Result error payload is not admitted");
         Reject("fnc main():int{return Ok(42);}",
-            "E_CORE_TYPE_LOWERING_UNSUPPORTED", "Ok constructor is not lowered");
+            "Return value does not match function result type", "Ok cannot be coerced to int");
         Reject("fnc main():int{return Err(42);}",
-            "E_CORE_TYPE_LOWERING_UNSUPPORTED", "Err constructor is not lowered");
+            "Err requires a contextual Result success type", "Err cannot infer a success type from int");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{val Result<int, Error> value=Ok(42);return value.unwrap_or(0);}") is not null,
+            "closed standalone scalar Result ABI is admitted");
         Reject("fnc Option():int{return 42;}",
             "E_PRELUDE_SPOOF", "compiler-owned core identity cannot be forged");
         Reject("fnc main():int{val List<int> values=List();return 42;}",
