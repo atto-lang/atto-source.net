@@ -239,8 +239,10 @@ internal static class StructuredCfgLoweringTests
             7, "ifnot-value");
         Check("fnc main():int{return unless true then 7 else 9 fi;}",
             9, "unless-value");
-        Reject("fnc main():int{loop{if true then break; fi}return 0;}",
-            "keyword value-if cannot contain break");
+        Check("fnc main():int{loop{if true then break; fi}return 42;}",
+            42, "legacy imperative if preserves loop exit");
+        Reject("fnc main():int{return if true then break; else 0 fi;}",
+            "value-if cannot contain break");
         Reject("fnc main():int{do ifnot false then break; fi return 0;}",
             "break outside loop");
     }
