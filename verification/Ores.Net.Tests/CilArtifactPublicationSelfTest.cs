@@ -24,6 +24,27 @@ internal static class CilArtifactPublicationSelfTest
             CilEmitter.EmitLibrary(second.Module, output);
             byte[] changed = File.ReadAllBytes(output);
             Require(!initial.AsSpan().SequenceEqual(changed), "compatible edit changes CIL artifact");
+            string Digest(byte[] bytes) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+            var candidate = (byte[])initial.Clone();
+            var admitted = PinnedScalarCilArtifact.Admit(candidate, Digest(initial));
+            candidate[0] ^= 1;
+            byte[] copy = admitted.CopyBytes();
+            copy[0] ^= 1;
+            Require(admitted.CopyBytes().AsSpan().SequenceEqual(initial), "immutable snapshot");
+            void RejectAdmission(byte[] bytes, string digest)
+            {
+                try { PinnedScalarCilArtifact.Admit(bytes, digest); }
+                catch (FormatException e) when (e.Message.Contains("E_CIL_ADMISSION", StringComparison.Ordinal)) { return; }
+                throw new InvalidOperationException("Expected CIL admission denial");
+            }
+            RejectAdmission(changed, Digest(initial));
+            RejectAdmission(candidate, Digest(candidate));
+            RejectAdmission(initial, "invalid");
+            byte[] truncated = initial[..128];
+            RejectAdmission(truncated, Digest(truncated));
+            var updated = PinnedScalarCilArtifact.Admit(changed, Digest(changed));
+            Require(updated.CopyBytes().AsSpan().SequenceEqual(changed), "edited artifact admission");
+            Console.WriteLine("CIL_PINNED_SNAPSHOT|actual-compiler|mutation-isolated|stale-pin-denied|rehashed-invalid-denied");
             string directory = Path.Combine(root, "directory.dll");
             Directory.CreateDirectory(directory);
             Reject(() => CilEmitter.EmitLibrary(second.Module, directory));
