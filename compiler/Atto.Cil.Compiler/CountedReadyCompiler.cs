@@ -45,7 +45,7 @@ internal sealed class CountedReadyCompiler
     {
         if (Eat("int")) return "int";
         if (Eat("Channel")) { Need("<"); Need("int"); Need(">"); return "channel"; }
-        if (Eat("Future")) { Need("<"); if (Eat("Array")) { Need("<"); Need("int"); Need(">"); Need(">"); return "futureArray"; } Need("int"); Need(">"); return "future"; }
+        if (Eat("Future")) { if (!Eat("<")) return "inferFuture"; if (Eat("Array")) { Need("<"); Need("int"); Need(">"); Need(">"); return "futureArray"; } Need("int"); Need(">"); return "future"; }
         if (Eat("Array")) { bool bracket = Eat("["); if (!bracket) Need("<"); Need("int"); Need(bracket ? "]" : ">"); return "array"; }
         throw Bad("unsupported lexical type");
     }
@@ -84,7 +84,7 @@ internal sealed class CountedReadyCompiler
         {
             if (pureCondition) throw Bad("effect in condition");
             bool legacy = Eat("nb");
-            if (Eat("select")) return Counted(true);
+            if (Eat("select")) return SelectResult(true);
             if (legacy) throw Bad("nb requires select");
             string name = Name();
             if (slots.TryGetValue(name,out var pending) && pending.Type == "futureArray" && !pending.Moved && outstanding == pending.Code)
@@ -114,7 +114,6 @@ internal sealed class CountedReadyCompiler
     private Value Counted(bool direct)
     {
         if (outstanding is not null) throw Bad("await outstanding counted batch first");
-        if (Eat("<")) { Need("int"); Need(">"); }
         Need("("); string count = Check(Expr(0,"@count"),"int"); Need(")");
         bool literal = count.EndsWith("L",StringComparison.Ordinal) && long.TryParse(count[..^1],out _);
         long constant = literal ? long.Parse(count[..^1],CultureInfo.InvariantCulture) : -1;
@@ -139,6 +138,17 @@ internal sealed class CountedReadyCompiler
         string start = "Start(" + count + "," + plan + "," + (fair ? "true" : "false") + ",owned)";
         return direct ? new("array","Finish(" + start + ",owned)") : new("futureArray",start);
     }
+    private Value SelectResult(bool direct)
+    {
+        if (outstanding is not null) throw Bad("await outstanding counted batch first");
+        if (Eat("<")) { Need("int"); Need(">"); }
+        if (Peek == "(") return Counted(direct);
+        bool over = Eat("over"); if (!over) Need("{");
+        Need("default"); Need(":"); Need("->"); Need("{"); Need("return");
+        string code = "Ready(static () => " + Check(Expr(0,"$no_binding"),"int") + ")";
+        Need(";"); Need("}"); Need(over ? "end" : "}");
+        return direct ? new("int","Observe(" + code + ")") : new("future",code);
+    }
     private string Bind(bool mutable = false)
     {
         string type = Type(), n = Name();
@@ -151,15 +161,12 @@ internal sealed class CountedReadyCompiler
             Need("Channel"); Need("."); Need("new"); Need("<"); Need("int"); Need(">"); Need("(");
             int cap = Small(64); if (cap == 0) throw Bad("zero capacity"); Need(")"); code = "new SelectableI64Channel(" + cap + ")";
         }
-        else if (type == "future")
+        else if (type is "future" or "futureArray" or "inferFuture")
         {
-            if (outstanding is not null) throw Bad("await outstanding counted batch first");
-            Need("select"); Need("<"); Need("int"); Need(">"); bool over = Eat("over"); if (!over) Need("{");
-            Need("default"); Need(":"); Need("->"); Need("{"); Need("return");
-            code = "Ready(static () => " + Check(Expr(0,"$no_binding"),"int") + ")";
-            Need(";"); Need("}"); Need(over ? "end" : "}");
+            Eat("nb"); Need("select"); Value selected = SelectResult(false);
+            if (type == "inferFuture") type = selected.Type;
+            code = Check(selected,type);
         }
-        else if (type == "futureArray") { Eat("nb"); Need("select"); code = Check(Counted(false),type); }
         else code = Check(Expr(),type);
         Need(";"); string slot = "v" + slots.Count; slots.Add(n,new Slot(type,slot){ Mutable=mutable });
         if (type == "futureArray") outstanding = slot;
@@ -172,7 +179,7 @@ internal sealed class CountedReadyCompiler
         while (Peek != "return")
         {
             if (statements.Count >= 256) throw Bad("statement quota");
-            if (Eat("val")) statements.Add(Bind());
+            if (Eat("val") || Eat("const")) statements.Add(Bind());
             else if (Eat("let")) statements.Add(Bind(true));
             else if (Eat("writech")) { if (outstanding is not null) throw Bad("await outstanding counted batch first"); var s = Get(Name(),"channel"); Need(","); var v = Check(Expr(),"int"); Need(";"); statements.Add("Write(" + s.Code + "," + v + ");"); }
             else if (Eat("if"))
