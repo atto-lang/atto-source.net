@@ -364,8 +364,10 @@ public static partial class OresParser
                     verifiedUpperBounds.Add(local, value.UpperBounds);
                     body.Add(new StructuredLet(at, local, IrValueType.I64, value.Expression, StructuredBindingKind.Val));
                 }
-                if (StrictI64)
+                if (StrictI64) {
                     body.AddRange(ParseStrictReturns(declared, guaranteed, name, upperParameters, parameters, required, 0));
+                    if(!StrictAlwaysReturns(body))throw new FormatException("E_VERIFY_UNSUPPORTED: strict function must return on all paths");
+                }
                 else
                 {
                     int returnAt = Current.Offset;
@@ -481,6 +483,7 @@ public static partial class OresParser
             RefinedQuantity[] required,int depth)
         {
             if(depth>16)throw new FormatException("E_VERIFY_UNSUPPORTED: strict return depth");
+            if(Current.Text=="}")return new();
             int at=Current.Offset;
             if(Take("val"))
             {
@@ -555,20 +558,42 @@ public static partial class OresParser
             }
             if(Take("if"))
             {
-                var p=StrictCondition(SnapshotStrict(),0);
+                var incoming=SnapshotStrict();
+                var p=StrictCondition(incoming,0);
                 var savedBounds=new Dictionary<string,IReadOnlyCollection<string>>(verifiedUpperBounds,StringComparer.Ordinal);
                 var savedMutable=new Dictionary<string,RefinedQuantity>(strictMutable,StringComparer.Ordinal);
                 Expect("{");RestoreStrict(p.Yes);
                 var yes=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
-                Expect("}");RestoreStrict(p.No);
+                Expect("}");
+                var yesFacts=SnapshotStrict();
+                var yesBounds=new Dictionary<string,IReadOnlyCollection<string>>(verifiedUpperBounds,StringComparer.Ordinal);
+                RestoreStrict(p.No);
                 verifiedUpperBounds.Clear();
                 foreach(var pair in savedBounds)verifiedUpperBounds.Add(pair.Key,pair.Value);
                 strictMutable.Clear();
                 foreach(var pair in savedMutable)strictMutable.Add(pair.Key,pair.Value);
-                bool hasElse=Take("else");if(hasElse)Expect("{");
-                var no=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
-                if(hasElse)Expect("}");
-                return new(){new StructuredIf(at,p.Test,yes,no)};
+                var no=new List<StructuredStmt>();
+                if(Take("else")){
+                    Expect("{");
+                    no=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
+                    Expect("}");
+                }
+                var noFacts=SnapshotStrict();
+                var noBounds=new Dictionary<string,IReadOnlyCollection<string>>(verifiedUpperBounds,StringComparer.Ordinal);
+                bool yr=StrictAlwaysReturns(yes),nr=StrictAlwaysReturns(no);
+                var statements=new List<StructuredStmt>{new StructuredIf(at,p.Test,yes,no)};
+                RestoreStrict(incoming);
+                verifiedUpperBounds.Clear();strictMutable.Clear();
+                foreach(var pair in savedMutable)strictMutable.Add(pair.Key,pair.Value);
+                foreach(var key in incoming.Keys){
+                    var y=yesFacts[key];var n=noFacts[key];
+                    verifiedLocals[key]=yr?n:nr?y:y with {Range=y.Range.Join(n.Range)};
+                    var bounds=new HashSet<string>(yr?noBounds[key]:yesBounds[key],StringComparer.Ordinal);
+                    if(!yr&&!nr)bounds.IntersectWith(noBounds[key]);
+                    verifiedUpperBounds[key]=bounds.ToArray();
+                }
+                if(!yr||!nr)statements.AddRange(ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1));
+                return statements;
             }
             if(!Take("return"))throw new FormatException("E_VERIFY_UNSUPPORTED: strict returning conditionals only");
             var returned=VerifiedExpression(0);
@@ -582,6 +607,14 @@ public static partial class OresParser
             }
             Expect(";");
             return new(){new StructuredReturn(at,returned.Expression)};
+        }
+
+        private static bool StrictAlwaysReturns(IReadOnlyList<StructuredStmt> body)
+        {
+            if(body.Count==0)return false;
+            return body[^1] is StructuredReturn ||
+                body[^1] is StructuredIf branch && branch.Else is not null &&
+                StrictAlwaysReturns(branch.Then) && StrictAlwaysReturns(branch.Else);
         }
 
         private QuantityTerm AttachVerifiedUnit(QuantityTerm term, string name)
