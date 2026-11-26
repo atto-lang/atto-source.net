@@ -1,0 +1,5 @@
+pub fnc main(): int {
+  val a = b;
+  val b = 42;
+  return a;
+}

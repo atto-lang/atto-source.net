@@ -1,0 +1,9 @@
+// expect-error: E_POINTER_SYNTAX
+pub fnc main(): int {
+  let value: int = 42;
+  val Pointer<int> ptr = rt ref value;
+  val answer = rt deref ptr;
+  value = 43;
+  rt unref ptr;
+  return answer;
+}
