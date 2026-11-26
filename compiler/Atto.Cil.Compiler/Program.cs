@@ -86,7 +86,9 @@ internal sealed class Parser
             else if (c == '=' && i < source.Length && source[i] == '=') i++;
             else if (c == '|' && i < source.Length && source[i] == '>') i++;
             else if (c == '<' && i < source.Length && source[i] == '|') i++;
-            else if (!"(){}:;,+-*/^>=.".Contains(c))
+            // Tokenize < so unsupported nominal ADT patterns reach the
+            // typed E_UNSUPPORTED_TYPE gate; it is not a scalar operator.
+            else if (!"(){}:;,+-*/^<>=.".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");

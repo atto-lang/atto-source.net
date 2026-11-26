@@ -73,6 +73,20 @@ check_rejected() {
 check_rejected match-guard-no-fallback E_MATCH fail/
 check_rejected match-guard-block-fallthrough E_RETURN fail/
 check_rejected unsupported-adt-is-pattern E_UNSUPPORTED_TYPE negative/
+# Standalone < is tokenized only to deliver typed unsupported diagnostics.
+# It must never silently acquire scalar comparison semantics in this profile.
+less_input=artifacts/unsupported-less.atto
+less_output=artifacts/UnsupportedLess.dll
+printf 'pub fnc main(): int { return 1 < 2; }\n' >"$less_input"
+rm -f "$less_output"
+set +e
+dotnet run --no-build -c Release --project "$compiler" -- "$less_input" "$less_output" >/tmp/atto-less.out 2>/tmp/atto-less.err
+less_status=$?
+set -e
+test "$less_status" -eq 2 && grep -Fq E_PARSE: /tmp/atto-less.err && test ! -e "$less_output"
+rm -f "$less_input"
+echo "PASS unsupported standalone less-than no-artifact"
+
 # Signed i64 division in a match is covered by checked-i64-division.atto
 # in test-cil-guest.sh. The old widening probes remain historical fixtures.
 for entry in \
