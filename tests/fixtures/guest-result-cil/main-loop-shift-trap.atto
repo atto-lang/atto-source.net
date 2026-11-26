@@ -1,0 +1,11 @@
+pub fnc main(): int {
+  let int count = 0;
+  loop {
+    count = count + 1;
+    if count eq 21 { break; } fi
+    continue;
+  }
+  val result = trap ((count <<< 2) / 2);
+  guard result.is_ok() { return 1; }
+  return result.unwrap();
+}

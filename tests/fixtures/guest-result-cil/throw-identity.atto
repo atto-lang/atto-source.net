@@ -1,0 +1,16 @@
+fnc fail(Error error): int { throw! error; }
+
+fnc forward(Error error): Result<int, Error> {
+  val Result<int, Error> result = trap! fail(error);
+  val int value = result?;
+  return Ok(value + 1);
+}
+
+pub fnc main(): int {
+  val Error error = new Error("invalid input");
+  val Result<int, Error> result = trap! forward(error);
+  guard result.is_err() { return 1; }
+  guard result.unwrap_err() eq error { return 2; }
+  guard result.unwrap_err().message eq "invalid input" { return 3; }
+  return 42;
+}

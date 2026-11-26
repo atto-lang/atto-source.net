@@ -1,0 +1,7 @@
+// Guard must use bool, not integer truthiness.
+pub fnc main(): int {
+  guard 17 else
+    return 0;
+  end
+  return 42;
+}

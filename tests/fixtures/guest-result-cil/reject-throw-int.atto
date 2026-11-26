@@ -1,0 +1,2 @@
+fnc fail(): int { throw! 7; }
+pub fnc main(): int { return fail(); }

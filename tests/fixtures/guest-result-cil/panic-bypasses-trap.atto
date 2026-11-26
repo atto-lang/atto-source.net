@@ -1,0 +1,5 @@
+fnc missing(): int { return None.unwrap(); }
+pub fnc main(): int {
+  val result = trap! missing();
+  return result.unwrap_or(42);
+}

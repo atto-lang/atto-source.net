@@ -1,0 +1,91 @@
+name: Atto ifnot/unless scalar NativeAOT exact source
+on:
+  push:
+    paths:
+      - 'compiler/Ores.Net.Compiler.Core/**'
+      - 'verification/IfnotNativeAot/**'
+      - 'tests/fixtures/conditional/**'
+      - '.github/workflows/atto-ifnot-nativeaot-scalar.yml'
+  pull_request:
+    paths:
+      - 'compiler/Ores.Net.Compiler.Core/**'
+      - 'verification/IfnotNativeAot/**'
+      - 'tests/fixtures/conditional/**'
+      - '.github/workflows/atto-ifnot-nativeaot-scalar.yml'
+permissions:
+  contents: read
+jobs:
+  compiler-generated-cil-nativeaot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: unless-break
+            fixture: do-unless-nativeaot.atto
+            expected: 4
+          - id: ifnot-nested-continue
+            fixture: do-ifnot-nativeaot.atto
+            expected: 2
+          - id: negated-truth-table
+            fixture: negated-truth-table-nativeaot.atto
+            expected: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Pin exact PR head, root tree and compiler sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$expected" || { echo "WRONG_HEAD=$actual expected=$expected" >&2; exit 1; }
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          test "${#tree}" -eq 40
+          for path in \
+            compiler/Ores.Net.Compiler.Core/StructuredSource.cs \
+            compiler/Ores.Net.Compiler.Core/StructuredCfgLowering.cs \
+            verification/IfnotNativeAot/Emitter/Program.cs \
+            verification/IfnotNativeAot/Host/Program.cs \
+            .github/workflows/atto-ifnot-nativeaot-scalar.yml; do
+            test -f "$path"
+            test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")" ||
+              { echo "SOURCE_BLOB_MISMATCH=$path" >&2; exit 1; }
+          done
+          echo "EXACT_SOURCE_PIN_OK head=$actual tree=$tree"
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Verify source-root SDK selection and target runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet --version | grep -E '^10\.'
+          dotnet --list-sdks | grep -E '^8\.'
+          dotnet --list-runtimes | grep -F 'Microsoft.NETCore.App 8.'
+      - name: Install NativeAOT linker requirements
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang zlib1g-dev
+      - name: Compile exact .atto through real CFG/CIL, then Linux NativeAOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          source="$PWD/tests/fixtures/conditional/${{ matrix.fixture }}"
+          generated="$PWD/verification/IfnotNativeAot/generated/OresGenerated.dll"
+          test "$(git hash-object "$source")" = "$(git rev-parse HEAD:tests/fixtures/conditional/${{ matrix.fixture }})"
+          dotnet run -c Release --project verification/IfnotNativeAot/Emitter/Emitter.csproj -- "$source" "$generated"
+          test -s "$generated"
+          echo "COMPILED_CIL_SHA256=$(sha256sum "$generated" | awk '{print $1}')"
+          dotnet publish verification/IfnotNativeAot/Host/Host.csproj -c Release -r linux-x64 -p:PublishAot=true -o "$RUNNER_TEMP/atto-ifnot-nativeaot"
+          test -s "$RUNNER_TEMP/atto-ifnot-nativeaot/Host"
+          echo "NATIVE_AOT_SHA256=$(sha256sum "$RUNNER_TEMP/atto-ifnot-nativeaot/Host" | awk '{print $1}')"
+          set +e
+          timeout --signal=TERM --kill-after=1s 5s "$RUNNER_TEMP/atto-ifnot-nativeaot/Host"
+          result=$?
+          set -e
+          test "$result" -eq ${{ matrix.expected }} || { echo "INCORRECT_NATIVE_AOT_GUEST_RESULT=${result} fixture=${{ matrix.fixture }}" >&2; exit 1; }
+          echo "ATTO_IFNOT_UNLESS_NATIVE_AOT_PASS fixture=${{ matrix.fixture }} exit=${{ matrix.expected }}"

@@ -1,0 +1,99 @@
+// Freestanding Atto core collection combinators.
+// Guest-language implementations only: no Java/.NET/LLVM interop.
+// V1 admission is limited to independently copyable element/accumulator types
+// until ownership/borrow contracts for non-Copy values are verified.
+// Each callback is invoked synchronously in input order; callbacks may not suspend.
+
+define module collections as
+
+  pub fnc map_array<T, U>(Array<T> values, Fnc<U(T)> transform): Array<U> {
+    let mut Array<U> output = new Array<U>();
+    val int original_size = values.size;
+    for (let i = 0; i < original_size; i++) do
+      output.add(transform(values.get(i)));
+    done
+    return output;
+  }
+
+  pub fnc filter_array<T>(Array<T> values, Fnc<bool(T)> predicate): Array<T> {
+    let mut Array<T> output = new Array<T>();
+    val int original_size = values.size;
+    for (let i = 0; i < original_size; i++) do
+      val T element = values.get(i);
+      if predicate(element) then
+        output.add(element);
+      fi
+    done
+    return output;
+  }
+
+  pub fnc reduce_array<T, Acc>(Array<T> values, Acc initial, Fnc<Acc(Acc, T)> combine): Acc {
+    let Acc accumulator = initial;
+    val int original_size = values.size;
+    for (let i = 0; i < original_size; i++) do
+      accumulator = combine(accumulator, values.get(i));
+    done
+    return accumulator;
+  }
+
+  pub fnc map_vector<T, U>(Vector<T> values, Fnc<U(T)> transform): Vector<U> {
+    let mut Vector<U> output = new Vector<U>();
+    val int original_size = values.size;
+    for (let i = 0; i < original_size; i++) do
+      output.add(transform(values.get(i)));
+    done
+    return output;
+  }
+
+  pub fnc filter_vector<T>(Vector<T> values, Fnc<bool(T)> predicate): Vector<T> {
+    let mut Vector<T> output = new Vector<T>();
+    val int original_size = values.size;
+    for (let i = 0; i < original_size; i++) do
+      val T element = values.get(i);
+      if predicate(element) then
+        output.add(element);
+      fi
+    done
+    return output;
+  }
+
+  pub fnc reduce_vector<T, Acc>(Vector<T> values, Acc initial, Fnc<Acc(Acc, T)> combine): Acc {
+    let Acc accumulator = initial;
+    val int original_size = values.size;
+    for (let i = 0; i < original_size; i++) do
+      accumulator = combine(accumulator, values.get(i));
+    done
+    return accumulator;
+  }
+
+  pub fnc map_list<T, U>(List<T> values, Fnc<U(T)> transform): List<U> {
+    let mut List<U> output = new List<U>();
+    val int original_size = values.size;
+    for (let i = 0; i < original_size; i++) do
+      output.add(transform(values.get(i)));
+    done
+    return output;
+  }
+
+  pub fnc filter_list<T>(List<T> values, Fnc<bool(T)> predicate): List<T> {
+    let mut List<T> output = new List<T>();
+    val int original_size = values.size;
+    for (let i = 0; i < original_size; i++) do
+      val T element = values.get(i);
+      if predicate(element) then
+        output.add(element);
+      fi
+    done
+    return output;
+  }
+
+  pub fnc reduce_list<T, Acc>(List<T> values, Acc initial, Fnc<Acc(Acc, T)> combine): Acc {
+    let Acc accumulator = initial;
+    val int original_size = values.size;
+    for (let i = 0; i < original_size; i++) do
+      accumulator = combine(accumulator, values.get(i));
+    done
+    return accumulator;
+  }
+
+end

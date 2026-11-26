@@ -1,0 +1,133 @@
+// .NET / NativeAOT Atto standard-library telemetry value model.
+// This Atto source owns no Activity/OTLP exporter, ambient TLS, dynamic
+// code generation or privileged span lifecycle. The runtime owns those.
+define module Telemetry as
+  // Non-authoritative immutable representation for drain/export adapters.
+  // Two signed i64 limbs preserve all 128 trace-id bits, including sign bits.
+  pub define class SpanSnapshot as
+    pub val int trace_id_high;
+    pub val int trace_id_low;
+    pub val int span_id;
+    pub val int parent_span_id;
+    pub val int operation_id;
+    pub val int code_generation;
+    pub val int trace_flags;
+    pub val int span_kind;
+    pub val int started_ns;
+    pub val int ended_ns;
+    pub val int status_code;
+  end
+
+  // Field-level W3C v00 checks; no header text/hex/tracestate parsing here.
+  pub fnc traceparent_v00_fields_valid(int version, int high, int low, int span_id, int flags): bool {
+    if version != 0 then return false; fi
+    if high == 0 && low == 0 then return false; fi
+    if span_id == 0 then return false; fi
+    return flags >= 0 && flags <= 255;
+  }
+
+  pub fnc sampled_flag(int flags): bool {
+    if flags < 0 || flags > 255 then return false; fi
+    return flags % 2 == 1;
+  }
+
+  // 0 drop, 1 record-only, 2 record+sample, 3 parent-based policy.
+  pub fnc sampling_decision(int policy, bool parent_sampled): int {
+    if policy == 1 then return 1; fi
+    if policy == 2 then return 2; fi
+    if policy == 3 && parent_sampled then return 2; fi
+    return 0;
+  }
+
+  pub fnc decision_is_recording(int decision): bool {
+    return decision == 1 || decision == 2;
+  }
+
+  pub fnc decision_is_sampled(int decision): bool {
+    return decision == 2;
+  }
+
+  pub fnc span_window_valid(int started_ns, int ended_ns): bool {
+    if started_ns < 0 || ended_ns < 0 then return false; fi
+    return ended_ns >= started_ns;
+  }
+
+  // NativeAOT: only dormant sites already emitted by the compiler may toggle.
+  // No NativeAOT run-time IL emission, unsafe profiler injection or reflection.
+  pub fnc dormant_probe_admissible(int compiled_ceiling, int requested, bool authorized): bool {
+    if !authorized then return false; fi
+    if compiled_ceiling < 1 || compiled_ceiling > 3 then return false; fi
+    if requested < 1 || requested > 3 then return false; fi
+    return requested <= compiled_ceiling;
+  }
+
+  // Background bounded drain admission; caller must reserve memory/bytes and
+  // enforce tenant/egress capabilities without blocking application actors.
+  pub fnc export_queue_admissible(int queued, int capacity, int bytes, int free_bytes): bool {
+    if queued < 0 || capacity < 1 || queued >= capacity then return false; fi
+    if bytes < 0 || free_bytes < 0 then return false; fi
+    return bytes <= free_bytes;
+  }
+
+  pub fnc span_fields_valid(int trace_high, int trace_low, int span_id,
+                            int flags, int operation_id, int generation,
+                            int span_kind, int started_ns, int ended_ns,
+                            int status_code): bool {
+    if !traceparent_v00_fields_valid(0, trace_high, trace_low, span_id, flags) then return false; fi
+    if operation_id <= 0 || generation < 0 then return false; fi
+    if span_kind < 0 || span_kind > 5 then return false; fi
+    if status_code < 0 || status_code > 2 then return false; fi
+    return span_window_valid(started_ns, ended_ns);
+  }
+
+  // Construct only after validation; host must still prove provenance.
+  pub fnc snapshot(int high, int low, int span_id, int parent_id,
+                   int operation_id, int generation, int flags, int kind,
+                   int start_ns, int end_ns, int status_code): SpanSnapshot {
+    return new SpanSnapshot(high, low, span_id, parent_id, operation_id,
+                            generation, flags, kind, start_ns, end_ns,
+                            status_code);
+  }
+
+  // NativeAOT-safe text validation: no runtime-generated parser or reflection.
+  // W3C v00 uses exactly 55 lowercase ASCII characters.
+  fnc is_hex_lower(int cp): bool {
+    return (cp >= 48 && cp <= 57) || (cp >= 97 && cp <= 102);
+  }
+
+  pub fnc traceparent_v00_header_valid(String wire): bool {
+    let points = wire.codepoints();
+    if points.size != 55 then return false; fi
+    if points.get(0) != 48 || points.get(1) != 48 then return false; fi
+    if points.get(2) != 45 || points.get(35) != 45 ||
+       points.get(52) != 45 then return false; fi
+    let mut bool trace_nonzero = false;
+    let mut bool parent_nonzero = false;
+    for (let int i = 3; i <= 54; i = i + 1) {
+      if i != 35 && i != 52; do
+        let int scalar = points.get(i);
+        if !is_hex_lower(scalar) then return false; fi
+        if scalar != 48; do
+          if i >= 3 && i <= 34 then trace_nonzero = true; fi
+          if i >= 36 && i <= 51 then parent_nonzero = true; fi
+        fi
+      fi
+    }
+    return trace_nonzero && parent_nonzero;
+  }
+
+
+  // Pure bounded-export decisions. Network transport, ownership, clocks,
+  // trace IDs and actual span dispatch remain trusted runtime obligations.
+  pub fnc queue_admissible(int queued, int capacity, int batch_bytes,
+                          int available_bytes): bool {
+    if capacity < 1 || capacity > 65536 then return false; fi
+    return export_queue_admissible(queued, capacity, batch_bytes, available_bytes);
+  }
+
+  pub fnc drop_increment(int count): int {
+    if count < 0 then return -1; fi
+    if count >= 2147483647 then return 2147483647; fi
+    return count + 1;
+  }
+end

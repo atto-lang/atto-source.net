@@ -1,0 +1,7 @@
+fnc failure(): int raises Error {
+  raise Error("recover only");
+}
+
+pub fnc main(): Result<int,Error> {
+  return trap failure();
+}

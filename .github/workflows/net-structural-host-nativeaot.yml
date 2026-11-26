@@ -1,0 +1,45 @@
+# Host-only ABI proof. This is not compiled .atto guest conformance.
+name: Atto .NET structural ABI host-only NativeAOT
+on:
+  pull_request:
+    paths:
+      - "src/Atto.Structural.Shape/**"
+      - "tests/Atto.Structural.Shape.Probe/**"
+      - ".github/workflows/net-structural-host-nativeaot.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host-structural-loan-nativeaot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout source with no persisted credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install .NET 8 SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: "8.0.x"
+      - name: Execute 20 managed C# host ABI assertions
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project tests/Atto.Structural.Shape.Probe/Atto.Structural.Shape.Probe.csproj --configuration Release | tee /tmp/atto-managed.log
+          grep -Fxq 'DOTNET_SHAPE_FIELD_WITNESS_PASS checks=20' /tmp/atto-managed.log
+      - name: Publish .NET Linux-x64 NativeAOT host ABI executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet publish tests/Atto.Structural.Shape.Probe/Atto.Structural.Shape.Probe.csproj --configuration Release --runtime linux-x64 -p:PublishAot=true --self-contained true --output /tmp/atto-shape-aot
+      - name: Execute 20 NativeAOT C# host ABI assertions
+        shell: bash
+        run: |
+          set -euo pipefail
+          /tmp/atto-shape-aot/Atto.Structural.Shape.Probe | tee /tmp/atto-aot.log
+          grep -Fxq 'DOTNET_SHAPE_FIELD_WITNESS_PASS checks=20' /tmp/atto-aot.log
+      # Guest .atto frontend, type checking, ownership analysis and CIL lowering
+      # remain NOT_IMPLEMENTED. Never claim backend parity from this job.

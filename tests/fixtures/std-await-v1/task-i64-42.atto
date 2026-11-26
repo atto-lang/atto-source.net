@@ -1,0 +1,5 @@
+// NativeAOT restricted Task<int> guest source; source-wide async parity pending.
+pub fnc main(): int {
+    const Future<int> f = Future.from_task(task { return 6 * 7; });
+    return f |> std.await;
+}
