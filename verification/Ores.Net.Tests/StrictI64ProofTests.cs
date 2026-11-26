@@ -49,6 +49,12 @@ static class StrictI64ProofTests
         Reject(pre+"pub fnc main() -> int { let int x = 1; while x > 0 { x = x-1; } return 42/x; }","E_VERIFY_UNPROVEN");
         Reject(pre+"fnc f(int x) -> int { let int d = x; if d != 0 { d = 1; return 42/d; } return 42/d; } "+Main("f(0)"),"E_VERIFY_UNPROVEN");
         Reject(pre+"pub fnc main() -> int { let int x = 1; while x < 42 { x = x+1; x = x+1; } return x; }","E_VERIFY_UNSUPPORTED");
+        _ = OresParser.LowerVerifiedStrict(pre+"type Small = int where self >= 1 and self <= 21; fnc f(Small n) -> Bounded { val a=n+n; return a; } "+Main("f(21)"));
+        _ = OresParser.LowerVerifiedStrict(pre+"pub fnc main() -> int { val a=21; val b=a+a; return b; }");
+        Reject(pre+"pub fnc main() -> int { val a=9223372036854775807+1; return 42; }","E_VERIFY_UNPROVEN");
+        Reject(pre+"pub fnc main() -> int { val a=a; return 42; }","E_REFINEMENT_NAME");
+        Reject(pre+"pub fnc main() -> int { val a=1; val a=2; return a; }","E_REFINEMENT_DUPLICATE");
+        Reject(pre+"pub fnc main() -> int { val a=1; a=0; return a; }","E_VERIFY_UNSUPPORTED");
         Reject(Main("42"),"E_VERIFY_UNSUPPORTED");
         Reject(pre+"type Narrow = i32 where self > 0; "+Main("42"),"E_VERIFY_UNSUPPORTED");
         Console.WriteLine("PASS strict signed-i64 source-to-CFG admission (not native guest execution)");

@@ -336,9 +336,13 @@ public static partial class OresParser
                 {
                     if (body.Count >= 128) throw new FormatException("E_REFINEMENT_LIMIT: too many immutable bindings");
                     int at = Current.Offset;
-                    RefinedQuantity type;
+                    RefinedQuantity? type = null;
                     string local;
-                    if (tokens[_index + 1].Text == ":")
+                    if (StrictI64 && _index + 1 < tokens.Count && tokens[_index + 1].Text == "=")
+                    {
+                        local = ReadVerifiedName();
+                    }
+                    else if (tokens[_index + 1].Text == ":")
                     {
                         local = ReadVerifiedName();
                         Expect(":");
@@ -351,6 +355,8 @@ public static partial class OresParser
                     }
                     Expect("=");
                     var value = VerifiedExpression(0);
+                    // Retain proven units and ranges; verify before adding the binding.
+                    type ??= value.Type;
                     type.Require(value.Type, "E_REFINEMENT_BINDING", "binding " + local);
                     Expect(";");
                     if (!verifiedLocals.TryAdd(local, type with { Range = value.Type.Range }))
