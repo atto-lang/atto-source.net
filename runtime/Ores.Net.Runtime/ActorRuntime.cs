@@ -185,6 +185,10 @@ public sealed class ActorContext
     public ActorArenaLifetimePin PinLifetime() =>
         _arena.AcquireLifetimePin(_turn);
 
+    // Trusted host transport adapter; the callback receives no new turn authority.
+    internal Task TrackExternalCompletion(Func<Task> start) =>
+        _arena.TrackExternalCompletion(_turn, start);
+
     public ActorScratchHandle AllocateScratch(int bytes, int alignment = 8) =>
         _arena.AllocateScratch(_turn, bytes, alignment);
 

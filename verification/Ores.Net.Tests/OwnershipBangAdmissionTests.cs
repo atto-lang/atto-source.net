@@ -25,8 +25,24 @@ internal static class OwnershipBangAdmissionTests
                 operand[after] is not (' ' or '\t' or '\r' or '\n' or '\v' or '\f');
             var diagnostic = missingSeparator ? "E_BANG_KEYWORD_WHITESPACE" : "OWNERSHIP_BANG_BACKEND_UNSUPPORTED";
             RequireUnsupported(() => OresParser.Parse(source), "scalar", operand, diagnostic);
-            RequireUnsupported(() => OresStructuredParser.Parse(source), "structured", operand, diagnostic);
+            if (!missingSeparator && operand.StartsWith("copy!", StringComparison.Ordinal))
+            {
+                if (OresStructuredParser.Parse(source).Body.Count == 0)
+                    throw new Exception("Missing checked structured scalar copy");
+            }
+            else
+                RequireUnsupported(() => OresStructuredParser.Parse(source), "structured", operand, diagnostic);
         }
+
+        foreach (string operand in new[] { "copy! (40 + 2)", "copy!! (40 + 2)" })
+        {
+            var source = "pub fnc main(): int { return " + operand + "; }";
+            if (OresStructuredParser.Parse(source).Body.Count == 0)
+                throw new Exception("Missing checked scalar expression copy");
+            RequireUnsupported(() => OresParser.Parse(source), "scalar", operand, "OWNERSHIP_BANG_BACKEND_UNSUPPORTED");
+        }
+        RequireUnsupported(() => OresStructuredParser.Parse("pub fnc main(): int { return copy!!!42; }"),
+            "structured", "copy!!!42", "E_BANG_KEYWORD_WHITESPACE");
 
         foreach (string inert in new[] {
             "pub fnc main(): int { /* copy! 7 */ return 42; }",
