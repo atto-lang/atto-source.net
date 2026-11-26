@@ -1,0 +1,5 @@
+pub suspends fnc main(): int {
+  val TaskFuture<int> pending = task<int> { return 42; };
+  val int first = await pending;
+  return first + await pending;
+}
