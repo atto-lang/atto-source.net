@@ -19,7 +19,7 @@ try{
  const compilerProject=join(root,'compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj');
  const build=join(tmp,'compiler');
  checked(run('dotnet',['build',compilerProject,'-c','Release','-o',build],root,600000),'compiler build');
- const compiler=join(build,'Ores.Net.Compiler.dll');
+ const compiler=join(build,'oresnet.dll');
  const compilerSha256=hash(readFileSync(compiler));
  const host=join(root,'host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj');
  for(const c of m.cases){
