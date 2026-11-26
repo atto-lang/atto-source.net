@@ -587,7 +587,13 @@ public static partial class OresStructuredParser
                     $"E_CRITICAL_UNSUPPORTED: structured CIL has no authenticated guard owner or FIFO continuation lowering at offset {tokens[i].Offset}");
             bool permittedMarker = inlineProfile && word == "suspends" &&
                 next is ("fnc" or "routine");
-            if ((word is "suspends" or "await") && !permittedMarker)
+            // The structured scalar parser can prove an immediate i64 await
+            // outside inline tasks. Never relax frozen-provider or std.await
+            // admission, and never infer a suspension from this lexical gate.
+            bool immediateAwaitCandidate = word == "await" &&
+                frozenNamespace is null && (i == 0 || tokens[i - 1].Text != ".") &&
+                !IsInsideInlineTask(tokens, i);
+            if ((word is "suspends" or "await") && !permittedMarker && !immediateAwaitCandidate)
             {
                 string diagnostic = word == "await" && IsInsideInlineTask(tokens, i)
                     ? "E_SYNC_TASK_SUSPEND: this suspension lacks a same-thread continuation"
@@ -635,8 +641,8 @@ public static partial class OresStructuredParser
             : reader.ReadLinkedUnit();
     }
 
-    // Diagnostic-only lexical classification. The preflight still rejects every
-    // await; no token sequence can grant suspension or bypass the typed parser.
+    // Inline tasks still reject await. Other immediate candidates must pass
+    // the structured scalar parser's exact i64 type check.
     private static bool IsInsideInlineTask(IReadOnlyList<Token> tokens, int at)
     {
         int braces = 0;
@@ -2692,6 +2698,18 @@ public static partial class OresStructuredParser
                 index++;
                 if (++forwards > 64)
                     throw Error("E_VALUE_PIPE_BUDGET: forward application exceeds 64 stages");
+                if (Take("await"))
+                {
+                    if (Current.Text is "(" or "<")
+                        throw Error("E_VALUE_PIPE_STAGE: await takes only the left-hand value");
+                    Require(value, IrValueType.I64, "E_SUSPENDS_UNSUPPORTED: immediate await requires int");
+                    continue;
+                }
+                if (Take("match"))
+                {
+                    value = ReadMatchValue(at, depth + 1, value);
+                    continue;
+                }
                 string name = Name();
                 value = ApplyValueStage(name, at, value);
             }
@@ -3037,6 +3055,12 @@ public static partial class OresStructuredParser
             }
             if (inlineTaskDepth != 0 && Current.Text is "await" or "yield")
                 throw Error("E_SYNC_TASK_SUSPEND: this suspension lacks a same-thread continuation");
+            if (Take("await"))
+            {
+                var operand = Unary(depth + 1);
+                Require(operand, IrValueType.I64, "E_SUSPENDS_UNSUPPORTED: immediate await requires int");
+                return operand;
+            }
             if (Take("trap") || Take("trap!")) return TrapOperand(offset, depth);
             if (Take("Ok")) return TaggedPostfix(NewResult(offset, success: true, depth), depth);
             if (Take("Err")) return TaggedPostfix(NewResult(offset, success: false, depth), depth);
