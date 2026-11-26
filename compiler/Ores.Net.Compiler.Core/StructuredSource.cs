@@ -743,9 +743,13 @@ public static partial class OresStructuredParser
                     }
                     cursor++;
                 }
-                else if (cursor < tokens.Count &&
-                    (tokens[cursor].Text is "mtd" or "method" or "fnc"))
-                    cursor++;
+                else if (cursor < tokens.Count && tokens[cursor].Text == "fnc")
+                    cursor++; // compatibility introducer, never a callable name
+                else if (cursor + 2 < tokens.Count &&
+                    (tokens[cursor].Text is "mtd" or "method") &&
+                    IsSimpleNominalWord(tokens[cursor + 1].Text) &&
+                    tokens[cursor + 2].Text == "(")
+                    cursor++; // contextual marker; mtd() and method() are names
                 if (cursor < tokens.Count && tokens[cursor].Text == "constructor")
                 {
                     // Constructors do not occupy ordinary method slots.
