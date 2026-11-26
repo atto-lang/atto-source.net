@@ -10,9 +10,10 @@ public sealed class CountedSelectI64Batch
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _driving;
 
-    public CountedSelectI64Batch(int count, IReadOnlyList<object> sources, bool fair = true)
+    public CountedSelectI64Batch(int count, IReadOnlyList<object> sources, bool fair = true,
+        IReadOnlyList<Func<long, long>>? projectors = null)
     {
-        _cursor = new(count, sources, fair);
+        _cursor = new(count, sources, fair, projectors);
         Publish();
     }
 
