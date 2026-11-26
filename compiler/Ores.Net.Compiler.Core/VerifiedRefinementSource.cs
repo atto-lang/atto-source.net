@@ -332,7 +332,7 @@ public static partial class OresParser
                 }
                 Expect("{");
                 var body = new List<StructuredStmt>();
-                while (Take("val"))
+                while (!StrictI64 && Take("val"))
                 {
                     if (body.Count >= 128) throw new FormatException("E_REFINEMENT_LIMIT: too many immutable bindings");
                     int at = Current.Offset;
@@ -482,6 +482,24 @@ public static partial class OresParser
         {
             if(depth>16)throw new FormatException("E_VERIFY_UNSUPPORTED: strict return depth");
             int at=Current.Offset;
+            if(Take("val"))
+            {
+                RefinedQuantity? type=null;
+                string local;
+                if(_index+1<tokens.Count&&tokens[_index+1].Text=="=")local=ReadVerifiedName();
+                else if(_index+1<tokens.Count&&tokens[_index+1].Text==":"){
+                    local=ReadVerifiedName();Expect(":");type=ReadRefinedType();
+                }else{type=ReadRefinedType();local=ReadVerifiedName();}
+                Expect("=");var value=VerifiedExpression(0);Expect(";");
+                type??=value.Type;
+                type.Require(value.Type,"E_REFINEMENT_BINDING","immutable binding "+local);
+                if(!verifiedLocals.TryAdd(local,type with {Range=value.Type.Range}))
+                    throw new FormatException("E_REFINEMENT_DUPLICATE: duplicate immutable binding");
+                verifiedUpperBounds.Add(local,value.UpperBounds);
+                var tail=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
+                tail.Insert(0,new StructuredLet(at,local,IrValueType.I64,value.Expression,StructuredBindingKind.Val));
+                return tail;
+            }
             if(Take("let"))
             {
                 var type=ReadRefinedType();
