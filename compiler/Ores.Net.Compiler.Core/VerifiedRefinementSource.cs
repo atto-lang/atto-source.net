@@ -24,7 +24,7 @@ public static partial class OresParser
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576 || !HasVerifiedRefinementPrefix(source))
             throw new FormatException("E_VERIFY_UNSUPPORTED: strict refinement profile required");
-        var tokens = Tokenize(source, strictBoolean: true);
+        var tokens = Tokenize(source, strictBoolean: true, strictFixedArrays: true);
         RejectUnsupportedInvertedClasses(tokens);
         var reader = new Reader(tokens, DotnetHostImportPolicy.DenyAll, source, null) { StrictI64 = true };
         var prelude = reader.ParseVerifiedPrelude();
@@ -144,6 +144,9 @@ public static partial class OresParser
         private readonly Dictionary<string, RefinedQuantity> verifiedLocals = new(StringComparer.Ordinal);
         private readonly Dictionary<string, IReadOnlyCollection<string>> verifiedUpperBounds = new(StringComparer.Ordinal);
         private readonly Dictionary<string, RefinedQuantity> strictMutable = new(StringComparer.Ordinal);
+        private readonly Dictionary<string,IReadOnlyList<QuantityTerm>> strictArrays=new(StringComparer.Ordinal);
+        private int strictArrayCells;
+        private const string StrictCellPrefix="__atto_strict_cell_";
         private readonly Dictionary<string, VerifiedFunction> verifiedFunctions = new(StringComparer.Ordinal);
 
         internal static bool IsVerifiedIdentifier(string name) => IsSourceIdentifier(name);
@@ -151,7 +154,7 @@ public static partial class OresParser
         private string ReadVerifiedName()
         {
             var token = Current;
-            if (!IsSourceIdentifier(token.Text) || token.Text is
+            if (!IsSourceIdentifier(token.Text) || (StrictI64 && token.Text.StartsWith(StrictCellPrefix,StringComparison.Ordinal)) || token.Text is
                 "int" or "i32" or "type" or "fnc" or "val" or "let" or "return" or "pub" or "private" or "self")
                 throw new FormatException($"E_REFINEMENT_NAME: expected a name at offset {token.Offset}");
             _index++;
@@ -280,6 +283,7 @@ public static partial class OresParser
                 verifiedLocals.Clear();
                 verifiedUpperBounds.Clear();
                 strictMutable.Clear();
+                strictArrays.Clear();strictArrayCells=0;
                 Expect("(");
                 var parameters = new List<StructuredParameter>();
                 if (Current.Text != ")")
@@ -493,7 +497,30 @@ public static partial class OresParser
                 else if(_index+1<tokens.Count&&tokens[_index+1].Text==":"){
                     local=ReadVerifiedName();Expect(":");type=ReadRefinedType();
                 }else{type=ReadRefinedType();local=ReadVerifiedName();}
-                Expect("=");var value=VerifiedExpression(0);Expect(";");
+                if(strictArrays.ContainsKey(local))throw new FormatException("E_VERIFY_UNSUPPORTED: reused array binding");
+                Expect("=");
+                if(Take("Array")){
+                    if(type is not null||verifiedLocals.ContainsKey(local))
+                        throw new FormatException("E_VERIFY_UNSUPPORTED: fixed array requires fresh inferred val");
+                    Expect(".");Expect("of");Expect("(");
+                    var cells=new List<QuantityTerm>();var statements=new List<StructuredStmt>();
+                    do{
+                        if(cells.Count>=16||strictArrayCells>=64)throw new FormatException("E_UNIT_LIMIT: fixed array cell budget");
+                        var cell=VerifiedExpression(0);
+                        RefinedQuantity.Scalar.Unit.RequireCompatible(cell.Type.Unit);
+                        string generated=StrictCellPrefix+(strictArrayCells++);
+                        statements.Add(new StructuredLet(at,generated,IrValueType.I64,cell.Expression,StructuredBindingKind.Val));
+                        cells.Add(new QuantityTerm(new StructuredRead(at,generated,IrValueType.I64),cell.Type));
+                    }while(Take(","));
+                    Expect(")");Expect(";");
+                    var range=cells[0].Type.Range;
+                    foreach(var cell in cells)range=range.Join(cell.Type.Range);
+                    verifiedLocals.Add(local,RefinedQuantity.Scalar with {Range=range});
+                    verifiedUpperBounds.Add(local,Array.Empty<string>());strictArrays.Add(local,cells);
+                    statements.AddRange(ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1));
+                    return statements;
+                }
+                var value=VerifiedExpression(0);Expect(";");
                 type??=value.Type;
                 type.Require(value.Type,"E_REFINEMENT_BINDING","immutable binding "+local);
                 if(!verifiedLocals.TryAdd(local,type with {Range=value.Type.Range}))
@@ -507,6 +534,7 @@ public static partial class OresParser
             {
                 var type=ReadRefinedType();
                 string local=ReadVerifiedName();
+                if(strictArrays.ContainsKey(local))throw new FormatException("E_VERIFY_UNSUPPORTED: reused array binding");
                 Expect("=");var value=VerifiedExpression(0);Expect(";");
                 type.Require(value.Type,"E_REFINEMENT_BINDING","mutable binding "+local);
                 if(!verifiedLocals.TryAdd(local,type with {Range=value.Type.Range}))
@@ -830,6 +858,22 @@ public static partial class OresParser
             {
                 if (!verifiedLocals.TryGetValue(name, out var type))
                     throw new FormatException($"E_REFINEMENT_NAME: unknown immutable value '{name}'");
+                if(strictArrays.TryGetValue(name,out var cells)){
+                    if(!Take("["))throw new FormatException("E_VERIFY_UNSUPPORTED: array cannot escape or be used as scalar");
+                    var index=VerifiedExpression(depth+1);Expect("]");
+                    RefinedQuantity.Scalar.Unit.RequireCompatible(index.Type.Unit);
+                    long lo=index.Type.Range.Minimum,hi=index.Type.Range.Maximum;
+                    if(lo<0||hi>=cells.Count)throw new FormatException("E_VERIFY_UNPROVEN: index not proved within receiver bounds");
+                    if(index.Expression is not (StructuredRead or StructuredInt))
+                        throw new FormatException("E_VERIFY_UNSUPPORTED: fixed index requires local or literal");
+                    StructuredExpr value=cells[(int)hi].Expression;
+                    var range=cells[(int)hi].Type.Range;
+                    for(long k=hi-1;k>=lo;k--){
+                        var cell=cells[(int)k];range=range.Join(cell.Type.Range);
+                        value=new StructuredConditional(at,new StructuredBinary(at,StructuredOperator.EqualI64,index.Expression,new StructuredInt(at,k),IrValueType.Bool),cell.Expression,value,IrValueType.I64);
+                    }
+                    return new(value,RefinedQuantity.Scalar with {Range=range},depth+1);
+                }
                 return new(new StructuredRead(at, name, IrValueType.I64), type, Bounds: verifiedUpperBounds[name]);
             }
             if (!verifiedFunctions.TryGetValue(name, out var function))
