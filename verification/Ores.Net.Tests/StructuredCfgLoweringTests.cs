@@ -533,6 +533,9 @@ internal static class StructuredCfgLoweringTests
             42, "named scalar aggregate types through real structured CFG and CIL");
         Check("fnc main():int{const Record r=(a=10);const Tuple t=(true,12);const struct s={a:20};return r.a+t[1]+s.a;}",
             42, "bare aggregate annotations create no named type");
+        Check("fnc main():int{const Tuple t=(true,42);return t[1];}", 42, "checked constant tuple projection");
+        foreach (string tail in new[] { "return t[2];", "return t[-1];", "return t[0+1];", "let int i=1;return t[i];", "return values[0];", "return [1,2][0];", "return t[1][0];", "return t[1]; } ]" })
+            Reject("fnc main():int{const Tuple t=(true,42);" + tail + "}", "no unchecked collection or dynamic tuple projection: " + tail);
         Reject("fnc main():int{const Record<infer> r=(a=1);return 0;}", "bare infer invalid");
         foreach (string name in new[] { "select", "await", "Pointer", "ActorMail",
             "ReadLoan", "AtomicInt", "RwLock", "boolean", "String", "while" })
