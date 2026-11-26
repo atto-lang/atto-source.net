@@ -27,11 +27,12 @@ internal sealed record ValueMatch(Expression Subject, List<ValueArm> Arms) : Exp
 internal abstract record Statement;
 internal sealed record LocalBinding(string Name, Expression Initializer) : Statement;
 internal sealed record PrintLine(Expression Value) : Statement;
+internal sealed record MutablePointerCall(string Helper, string Storage) : Statement;
 internal sealed record ReturnStmt(Expression Value) : Statement;
 // Signed i64 guest results; bool is internal to guards.
-internal enum CheckedType { Int, Bool }
+internal enum CheckedType { Int, Bool, Void }
 internal sealed record Function(string Name, List<string> Args,
-    CheckedType ReturnType, List<Statement> Body);
+    CheckedType ReturnType, List<Statement> Body, long? MutableWrite = null);
 
 // Typed, local-only read lease. Source pointer authority is verified and
 // erased before ordinary CIL lowering; it is never represented as a raw
@@ -129,6 +130,9 @@ internal sealed class Parser
             // One private, readonly singleton helper before the closed owner main.
             if (_tokens.Count > 7 && _tokens[0] == "fnc" && _tokens[2] == "(" &&
                     _tokens[3] == "Pointer") return ParseOwnedScalarPointer(ParseReadonlyPointerHelper());
+            if (_tokens.Count > 8 && _tokens[0] == "fnc" && _tokens[2] == "(" &&
+                    _tokens[3] == "mut" && _tokens[4] == "Pointer")
+                return ParseOwnedScalarPointer(ParseMutablePointerHelper());
             return _tokens.Count > 10 && _tokens[8] == "let" && _tokens[9] == "mut" && _tokens[10] == "Pointer"
                 ? ParseOwnedScalarPointer() : ParseBorrowedLocalPointer();
         }
@@ -289,6 +293,25 @@ internal sealed class Parser
             [new ReturnStmt(new Arg("$borrowed_value"))]);
     }
 
+    private Function ParseMutablePointerHelper()
+    {
+        PointerNeed("fnc"); var name = PointerName();
+        PointerNeed("("); PointerNeed("mut"); PointerNeed("Pointer");
+        PointerNeed("<"); PointerNeed("int"); PointerNeed(">");
+        var parameter = PointerName();
+        if (name == parameter) throw new CompilerError("E_POINTER_ALIAS", "helper name shadows parameter");
+        PointerNeed(")"); PointerNeed(":"); PointerNeed("void"); PointerNeed("{");
+        PointerNeed(parameter); PointerNeed("."); PointerNeed("write"); PointerNeed("(");
+        bool negative = Eat("-");
+        var raw = Peek;
+        if (!long.TryParse((negative ? "-" : "") + raw, NumberStyles.AllowLeadingSign,
+                CultureInfo.InvariantCulture, out var value))
+            throw new CompilerError("E_POINTER_OVERFLOW", "mutable helper requires signed i64 literal");
+        _position++;
+        PointerNeed(")"); PointerNeed(";"); PointerNeed("}");
+        return new Function(name, ["$exclusive_slot"], CheckedType.Void, [], value);
+    }
+
     private List<Function> ParseOwnedScalarPointer(Function? helper = null)
     {
         foreach (var token in new[] { "pub", "fnc", "main", "(", ")", ":", "int", "{",
@@ -307,9 +330,10 @@ internal sealed class Parser
 
         (Expression Expr, long Known) Bind((Expression Expr, long Known) value)
         {
-            if (body.Count >= 4)
+            int slots = body.Count(s => s is LocalBinding);
+            if (slots >= 4)
                 throw new CompilerError("E_POINTER_LIMIT", "four scalar storage bindings per direct CIL region");
-            var name = "$ptr" + body.Count.ToString(CultureInfo.InvariantCulture);
+            var name = "$ptr" + slots.ToString(CultureInfo.InvariantCulture);
             body.Add(new LocalBinding(name, value.Expr));
             return (new Arg(name), value.Known);
         }
@@ -372,7 +396,7 @@ internal sealed class Parser
             else
             {
                 var name = PointerName();
-                if (helper != null && name == helper.Name)
+                if (helper != null && helper.MutableWrite == null && name == helper.Name)
                 {
                     RequireLive();
                     PointerNeed("(");
@@ -426,6 +450,27 @@ internal sealed class Parser
                     if (name == owner || name == helper?.Name || scalars.ContainsKey(name))
                         throw new CompilerError("E_POINTER_ALIAS", "duplicate pointer or scalar name");
                     PointerNeed("="); scalars.Add(name, Bind(Value())); PointerNeed(";");
+                }
+                else if (helper?.MutableWrite is long write && Eat(helper.Name))
+                {
+                    RequireLive(); PointerNeed("(");
+                    if (Peek == "borrow")
+                    {
+                        var offset = _offsets[_position];
+                        PointerNeed("borrow");
+                        if (Peek != "!" || _offsets[_position] != offset + "borrow".Length)
+                            throw new CompilerError("E_POINTER_SYNTAX", "borrow! must be contiguous");
+                        PointerNeed("!");
+                    }
+                    PointerNeed("mut", "E_POINTER_AUTHORITY");
+                    PointerNeed(owner, "E_POINTER_AUTHORITY"); PointerNeed(")"); PointerNeed(";");
+                    if (count != 1) throw new CompilerError("E_POINTER_BOUNDS", "mutable helper requires singleton");
+                    // The old immutable snapshots remain intact. A fresh scalar
+                    // local has exclusive address authority only during this call.
+                    var cell = Bind((new Literal(0), 0));
+                    var storage = ((Arg)cell.Expr).Name;
+                    body.Add(new MutablePointerCall(helper.Name, storage));
+                    cells[0] = (cell.Expr, write);
                 }
                 else
                 {
@@ -769,7 +814,20 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             if (state[id] == 2) return;
             if (state[id] == 1) throw new CompilerError("E_CYCLE", _functions[id].Name);
             state[id] = 1;
+            var function = _functions[id];
+            if (function.MutableWrite != null)
+            {
+                if (function.ReturnType != CheckedType.Void || function.Args.Count != 1 ||
+                        function.Args[0] != "$exclusive_slot" || function.Body.Count != 0 ||
+                        function.Name == "main")
+                    throw new CompilerError("E_POINTER_AUTHORITY", "invalid mutable helper signature");
+                state[id] = 2;
+                return;
+            }
+            if (function.ReturnType == CheckedType.Void)
+                throw new CompilerError("E_POINTER_AUTHORITY", "unproven void helper");
             var scope = new HashSet<string>(StringComparer.Ordinal);
+            var usedExclusiveSlots = new HashSet<string>(StringComparer.Ordinal);
             foreach (var statement in _functions[id].Body)
             {
                 switch (statement)
@@ -779,6 +837,15 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                             throw new CompilerError("E_TYPE", "local initializer must be int");
                         if (_functions[id].Args.Contains(l.Name) || !scope.Add(l.Name))
                             throw new CompilerError("E_DUP_LOCAL", l.Name);
+                        break;
+                    case MutablePointerCall m:
+                        if (function.Name != "main" || !scope.Contains(m.Storage) ||
+                                !m.Storage.StartsWith("$ptr", StringComparison.Ordinal) ||
+                                !usedExclusiveSlots.Add(m.Storage) ||
+                                !_symbols.TryGetValue(m.Helper, out var mutableId) ||
+                                _functions[mutableId].MutableWrite == null)
+                            throw new CompilerError("E_POINTER_AUTHORITY", "invalid exclusive call");
+                        WalkFunction(mutableId);
                         break;
                     case PrintLine p:
                         if (!allowStdio)
@@ -952,6 +1019,13 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             var code = new BlobBuilder();
             var il = new InstructionEncoder(code, new ControlFlowBuilder());
             var bindings = new Dictionary<string, int>(StringComparer.Ordinal);
+            if (f.MutableWrite is long write)
+            {
+                il.LoadArgument(0);
+                il.LoadConstantI8(write);
+                il.OpCode(ILOpCode.Stind_i8);
+                il.OpCode(ILOpCode.Ret);
+            }
             foreach (var statement in f.Body)
             {
                 switch (statement)
@@ -961,6 +1035,10 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                         int slot = bindings.Count;
                         il.StoreLocal(slot);
                         bindings.Add(l.Name, slot);
+                        break;
+                    case MutablePointerCall m:
+                        il.LoadLocalAddress(bindings[m.Storage]);
+                        il.Call(MetadataTokens.MethodDefinitionHandle(_symbols[m.Helper] + 1));
                         break;
                     case PrintLine p:
                         Generate(p.Value, f, il, bindings, 0);
@@ -984,9 +1062,10 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             var signature = new BlobBuilder();
             new BlobEncoder(signature).MethodSignature().Parameters(
                 f.Args.Count,
-                r => r.Type().Int64(),
-                p => { foreach (var arg in f.Args) p.AddParameter().Type().Int64(); });
-            metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
+                r => { if (f.MutableWrite != null) r.Void(); else r.Type().Int64(); },
+                p => { foreach (var arg in f.Args) p.AddParameter().Type(isByRef: f.MutableWrite != null).Int64(); });
+            metadata.AddMethodDefinition((f.MutableWrite != null ? MethodAttributes.Private : MethodAttributes.Public) |
+                MethodAttributes.Static | MethodAttributes.HideBySig,
                 MethodImplAttributes.IL, metadata.GetOrAddString(f.Name),
                 metadata.GetOrAddBlob(signature), bodyOffsets[i],
                 MetadataTokens.ParameterHandle(nextParameter));
