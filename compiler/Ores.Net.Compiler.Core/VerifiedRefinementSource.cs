@@ -144,6 +144,12 @@ public static partial class OresParser
         private readonly Dictionary<string, RefinedQuantity> verifiedLocals = new(StringComparer.Ordinal);
         private readonly Dictionary<string, IReadOnlyCollection<string>> verifiedUpperBounds = new(StringComparer.Ordinal);
         private readonly Dictionary<string, RefinedQuantity> strictMutable = new(StringComparer.Ordinal);
+        private sealed class StrictLoopExitContext(Dictionary<string,RefinedQuantity> writes)
+        {
+            internal readonly Dictionary<string,RefinedQuantity> Writes = writes;
+            internal bool HasBreak;
+        }
+        private readonly Stack<StrictLoopExitContext> strictLoopExits = new();
         private readonly Dictionary<string,IReadOnlyList<QuantityTerm>> strictArrays=new(StringComparer.Ordinal);
         private int strictArrayCells;
         private const string StrictCellPrefix="__atto_strict_cell_";
@@ -283,6 +289,7 @@ public static partial class OresParser
                 verifiedLocals.Clear();
                 verifiedUpperBounds.Clear();
                 strictMutable.Clear();
+                strictLoopExits.Clear();
                 strictArrays.Clear();strictArrayCells=0;
                 Expect("(");
                 var parameters = new List<StructuredParameter>();
@@ -489,6 +496,18 @@ public static partial class OresParser
             if(depth>16)throw new FormatException("E_VERIFY_UNSUPPORTED: strict return depth");
             if(Current.Text=="}")return new();
             int at=Current.Offset;
+            if(Current.Text is "break" or "continue"){
+                if(strictLoopExits.Count==0)throw new FormatException("E_VERIFY_UNSUPPORTED: loop exit outside strict while");
+                bool breaking=Take("break");
+                if(!breaking)Expect("continue");
+                Expect(";");
+                if(Current.Text!="}")throw new FormatException("E_VERIFY_UNSUPPORTED: statement after unconditional loop exit");
+                var loop=strictLoopExits.Peek();
+                if(breaking)loop.HasBreak=true;
+                else foreach(var pair in loop.Writes)
+                    pair.Value.Require(verifiedLocals[pair.Key],"E_REFINEMENT_BINDING","continue backedge "+pair.Key);
+                return new(){breaking?(StructuredStmt)new StructuredBreak(at):new StructuredContinue(at)};
+            }
             if(Take("val"))
             {
                 RefinedQuantity? type=null;
@@ -581,14 +600,23 @@ public static partial class OresParser
                     invariant.Require(header[key],"E_REFINEMENT_BINDING","loop entry "+key);
                     header[key]=invariant;verifiedUpperBounds[key]=Array.Empty<string>();
                 }
+                // Invalidate all relations referencing a written identity.
+                foreach(var key in verifiedUpperBounds.Keys.ToArray())
+                    verifiedUpperBounds[key]=verifiedUpperBounds[key].Where(bound=>!writes.Contains(bound)).ToArray();
                 var headerBounds=new Dictionary<string,IReadOnlyCollection<string>>(verifiedUpperBounds,StringComparer.Ordinal);
                 var p=StrictCondition(header,0);
                 Expect("{");RestoreStrict(p.Yes);
-                var loopBody=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
+                var invariants=new Dictionary<string,RefinedQuantity>(StringComparer.Ordinal);
+                foreach(var key in writes)invariants.Add(key,savedMutable[key]);
+                var loop=new StrictLoopExitContext(invariants);
+                strictLoopExits.Push(loop);
+                List<StructuredStmt> loopBody;
+                try { loopBody=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1); }
+                finally { strictLoopExits.Pop(); }
                 Expect("}");
-                if(!StrictAlwaysReturns(loopBody))foreach(var key in writes)
+                if(!StrictAlwaysStops(loopBody))foreach(var key in writes)
                     savedMutable[key].Require(verifiedLocals[key],"E_REFINEMENT_BINDING","loop backedge "+key);
-                RestoreStrict(p.No);
+                RestoreStrict(loop.HasBreak?header:p.No);
                 verifiedUpperBounds.Clear();
                 foreach(var pair in headerBounds)verifiedUpperBounds.Add(pair.Key,pair.Value);
                 strictMutable.Clear();
@@ -621,7 +649,7 @@ public static partial class OresParser
                 }
                 var noFacts=SnapshotStrict();
                 var noBounds=new Dictionary<string,IReadOnlyCollection<string>>(verifiedUpperBounds,StringComparer.Ordinal);
-                bool yr=StrictAlwaysReturns(yes),nr=StrictAlwaysReturns(no);
+                bool yr=StrictAlwaysStops(yes),nr=StrictAlwaysStops(no);
                 var statements=new List<StructuredStmt>{new StructuredIf(at,p.Test,yes,no)};
                 RestoreStrict(incoming);
                 verifiedUpperBounds.Clear();strictMutable.Clear();
@@ -648,6 +676,14 @@ public static partial class OresParser
             }
             Expect(";");
             return new(){new StructuredReturn(at,returned.Expression)};
+        }
+
+        private static bool StrictAlwaysStops(IReadOnlyList<StructuredStmt> body)
+        {
+            if(body.Count==0)return false;
+            return body[^1] is StructuredReturn or StructuredBreak or StructuredContinue ||
+                body[^1] is StructuredIf branch && branch.Else is not null &&
+                StrictAlwaysStops(branch.Then) && StrictAlwaysStops(branch.Else);
         }
 
         private static bool StrictAlwaysReturns(IReadOnlyList<StructuredStmt> body)
