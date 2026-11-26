@@ -21,9 +21,9 @@ internal static class StructuredSourceTests
         throw new Exception("Structured source incorrectly accepted: " + reason);
     }
 
-    private static void RejectFeature(string source, string expectedDiagnostic)
+    private static void RejectFeature(string source, string expectedDiagnostic, bool strictConditionals = false)
     {
-        try { _ = OresStructuredParser.Parse(source); }
+        try { _ = strictConditionals ? OresStructuredParser.ParseStrictConditionals(source) : OresStructuredParser.Parse(source); }
         catch (FormatException error)
         {
             Require(error.Message.Contains(expectedDiagnostic, StringComparison.OrdinalIgnoreCase),
@@ -89,12 +89,26 @@ internal static class StructuredSourceTests
             "break requires an enclosing loop");
         RejectFeature("fnc main():int{do unless false then continue; fi return 0;}",
             "continue requires an enclosing loop");
-        // Current structured parser intentionally retains legacy imperative
-        // if...then...fi alongside explicit do if until a spec migration.
-        // Keep this acceptance and the non-loop break rejection distinct.
-        Require(OresStructuredParser.Parse(
-            "fnc main():int{loop{if true then break; fi}return 0;}").Body.Count == 2,
-            "legacy imperative if must preserve loop-scoped break");
+        foreach (string head in new[] { "if", "ifnot", "unless" })
+        {
+            string legacy = "fnc main():int{loop{" + head + " true then break; fi}return 0;}";
+            Require(OresStructuredParser.Parse(legacy).Body.Count == 2,
+                "migration-only keyword statement retained");
+            RejectFeature(legacy, "use 'do if'", strictConditionals: true);
+            Require(OresStructuredParser.ParseStrictConditionals(
+                "fnc main():int{loop{do " + head + " true then break; fi}return 0;}").Body.Count == 2,
+                "strict explicit do statement");
+            Require(OresStructuredParser.ParseStrictConditionals(
+                "fnc main():int{loop{" + head + " true {break;}}return 0;}").Body.Count == 2,
+                "strict brace statement");
+            RejectFeature("fnc main():int{loop{" + head + " true {break;}fi}return 0;}",
+                "brace statements must not end with fi", strictConditionals: true);
+            Require(OresStructuredParser.ParseStrictConditionals(
+                "fnc main():int{return " + head + " true then 42 else 7 fi;}").Body.Count == 1,
+                "strict value conditional");
+        }
+        Require(OresStructuredParser.ParseStrictConditionals(accepted).Body.Count == 3,
+            "strict canonical negated conditional fixture");
         RejectFeature("fnc main():int{if true then break; fi return 0;}",
             "break requires an enclosing loop");
         RejectFeature("fnc main():int{return ifnot false then break; else 3 fi;}",
@@ -103,6 +117,17 @@ internal static class StructuredSourceTests
             "Expected 'else'");
         Reject("fnc main():int{return ifnot 3 then 3 else 4 fi;}",
             "non-boolean value-if condition");
+    }
+
+    public static void RunExplicitTernaryArms()
+    {
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return true ? { return 42; } : { ^ 7; };}").Body[0]
+            is StructuredReturn { Value: StructuredConditional { ResultType: IrValueType.I64 } },
+            "explicit braced results share the typed conditional AST");
+        foreach (string arm in new[] { "{}", "{status: 42}", "{42}", "{val int x=42; return x;}" })
+            RejectFeature("fnc main():int{return true ? " + arm + " : 7;}", "E_VALUE_ARM");
+        RejectFeature("fnc main():int{return false ? 7 : {};}", "E_VALUE_ARM");
     }
 
     public static void Run()
@@ -552,6 +577,7 @@ pub async routine main(): void {
             System.Reflection.BindingFlags.Static |
             System.Reflection.BindingFlags.NonPublic)
             ?? throw new Exception("Linked import admission entry point missing");
+        foreach (bool compilerOwnedCoreNamespace in new[] { false, true })
         foreach (var (source, expectedError) in new (string, string)[] {
             ("/* hidden " + '\0' + " */", "Source contains NUL"),
             ("/* hidden " + (char)0xD800 + " */", "Invalid UTF-16"),
@@ -561,7 +587,7 @@ pub async routine main(): void {
         {
             try
             {
-                _ = readLinkedImports.Invoke(null, new object?[] { source, false });
+                _ = readLinkedImports.Invoke(null, new object?[] { source, compilerOwnedCoreNamespace });
             }
             catch (System.Reflection.TargetInvocationException failure)
                 when (failure.InnerException is FormatException error &&
@@ -574,13 +600,12 @@ pub async routine main(): void {
                 "Linked import discovery admitted malformed source before full parse: " +
                 expectedError);
         }
-        _ = readLinkedImports.Invoke(null, new object?[] { "/* valid \uD83D\uDD12 */", false });
+        foreach (bool compilerOwnedCoreNamespace in new[] { false, true })
+            _ = readLinkedImports.Invoke(null, new object?[] { "/* valid \uD83D\uDD12 */", compilerOwnedCoreNamespace });
 
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
         // by CFG/CIL lowering until value layout and construction are verified.
-        RejectFeature("fnc main():int{struct Pair{int left;int right}return 42;}",
-            "E_CORE_TYPE_LOWERING_UNSUPPORTED");
         var localTypes = OresStructuredParser.Parse("""
             fnc main():int {
                 struct LocalPair { int left; int right }
@@ -600,6 +625,8 @@ pub async routine main(): void {
         } status && status.Fields[0] == new StructuredLocalField("ready", IrValueType.Bool)
                  && status.Fields[1] == new StructuredLocalField("code", IrValueType.I64),
             "local record field order and scalar types are preserved");
+        RejectFeature("fnc main():int{struct Pair{int x}return 1;}",
+            "E_CORE_TYPE_LOWERING_UNSUPPORTED");
         Reject("fnc main():int{struct LocalPair{int x;int x}return 1;}",
             "duplicate local value-type fields are forbidden");
         Reject("fnc main():int{struct LocalPair{int x}if true{record LocalPair{int y}}return 1;}",
@@ -1376,6 +1403,7 @@ pub async routine main(): void {
             "fnc main():int{const bool x=true xor false;return x ? 42 : 7;}").Body[1]
             is StructuredReturn { Value: StructuredConditional { ResultType: IrValueType.I64 } },
             "conditional and compile-time boolean XOR are typed");
+        RunExplicitTernaryArms();
         Reject("fnc and():int{return 0;}fnc main():int{return 42;}",
             "logical keywords are reserved as function names");
         Reject("fnc main():int{let bool or=true;return 42;}",

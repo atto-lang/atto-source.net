@@ -250,12 +250,35 @@ internal static class StructuredCfgLoweringTests
             7, "ifnot-value");
         Check("fnc main():int{return unless true then 7 else 9 fi;}",
             9, "unless-value");
-        Check("fnc main():int{loop{if true then break; fi}return 42;}",
-            42, "legacy imperative if preserves loop exit");
+        const string legacy = "fnc main():int{loop{if true then break; fi}return 0;}";
+        Check(legacy, 0, "migration-only keyword statement");
+        try
+        {
+            _ = OresStructuredCfgLowering.LowerStrictConditionals(legacy);
+            throw new Exception("Strict conditional CFG incorrectly admitted a bare keyword statement");
+        }
+        catch (FormatException ex) when (ex.Message.Contains("E_CONDITIONAL_STATEMENT", StringComparison.Ordinal)) { }
+        foreach (string head in new[] { "if", "ifnot", "unless" })
+        {
+            var strict = OresStructuredCfgLowering.LowerStrictConditionals(
+                "fnc main():int{do " + head + " true then return 42; else return 42; fi}");
+            if (CfgReferenceEvaluator.Evaluate(strict) != 42)
+                throw new Exception("Strict conditional CFG mismatch: " + head);
+        }
         Reject("fnc main():int{return if true then break; else 0 fi;}",
             "value-if cannot contain break");
         Reject("fnc main():int{do ifnot false then break; fi return 0;}",
             "break outside loop");
+    }
+
+    public static void RunExplicitTernaryArms()
+    {
+        Check("fnc main():int{let int x=true ? {return 40;} : {^ 7;};return x+2;}",
+            42, "explicit arm return is not a function return");
+        Check("fnc main():int{return false ? 7 : {^ 42;};}",
+            42, "selected explicit false arm");
+        Check("fnc main():int{let int x=9223372036854775807;return true ? {^ 42;} : {return x+1;};}",
+            42, "unselected explicit arm does not overflow");
     }
 
     public static void Run()
@@ -685,6 +708,7 @@ internal static class StructuredCfgLoweringTests
         Check("fnc inc(int x):int{return x+1;}" +
             "fnc main():int{return inc((false xor true) ? 41 : 0);}",
             42, "ternary and eager xor inside typed call argument");
+        RunExplicitTernaryArms();
         Check("fnc main():int{if true or (false and true){return 42;}else{return 7;}}",
             42, "nested logical short-circuit branches");
         Check("fnc main():int{const bool b=false and (9223372036854775807+1>0);" +

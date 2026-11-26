@@ -117,13 +117,12 @@ internal static class HeapContainerSourceBoundaryTests
                 (ex.Message.Contains("E_COLLECTION_FACTORY_REMOVED", StringComparison.Ordinal))
             { }
         }
-        // The bracketed retired tuple spelling must independently fail at the
-        // earlier lexical collection gate; the unindexed case above still
-        // requires the dedicated removed-factory diagnostic.
+        // The scalar lexer checks brackets before the retired factory
+        // parser is reached. Require that independent specific denial too.
         try
         {
             _ = OresParser.Parse("pub fnc main():int{return ~tuple(11,23)[1];}");
-            throw new Exception("Retired tuple projection accepted");
+            throw new Exception("Retired indexed tuple factory accepted");
         }
         catch (FormatException ex) when
             (ex.Message.Contains("E_SAFE_COLLECTION_ACCESS_UNSUPPORTED", StringComparison.Ordinal))

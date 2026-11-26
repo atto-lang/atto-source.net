@@ -154,7 +154,7 @@ static class CrossBackendCheckedI64ParityTests
             {
                 _ = OresParser.Parse(Header + "define pub fnc main(): int { return " + expression + "; }");
             }
-            catch (FormatException ex) when (ex.Message.Contains("Checked integer division requires typed guest error lowering", StringComparison.Ordinal))
+            catch (FormatException ex) when (ex.Message.Contains("Checked integer division requires typed guest error lowering; unsupported in the i64 source subset", StringComparison.Ordinal))
             {
                 continue;
             }
