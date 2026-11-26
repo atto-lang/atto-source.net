@@ -9,6 +9,7 @@ internal static class ActorArenaSelfTest
         CheckedRef32SurvivesDynamicBackingGrowth();
         Ref32NativeProofBudgetAndReclamation();
         Ref32NativeIndexPreservesPeersDuringChurn();
+        Ref32NativeIndexGrowthDeniedPreservesOldProofs();
         DemandBackedGrowthPreservesActorRootsAndBudget();
         DemandBackedGrowthDeniedDuringFfiPin();
         DemandBackedScratchAndQuiescentPin();
@@ -198,6 +199,42 @@ internal static class ActorArenaSelfTest
                     "parent retirement leaves sibling proofs intact");
         }
         Require(arena.Retire() && budget.ReservedBytes == 0, "indexed native proofs fully refunded");
+    }
+
+    private static void Ref32NativeIndexGrowthDeniedPreservesOldProofs()
+    {
+        // 4 KiB payload + 1 KiB first 32-bucket table fits. Its 2 KiB
+        // replacement does not fit alongside the old table.
+        var budget = new ActorArenaBudget(6 * 1024);
+        using var arena = new ActorArena(86005, 1, 2048, 2048, 8, 2, 2, budget: budget);
+        using (var turn = arena.EnterTurn(86005, 1))
+        {
+            var parent = arena.AllocatePersistent(turn, 128);
+            var child = arena.AllocatePersistent(turn, 8);
+            for (int i = 0; i < 16; i++)
+                arena.WriteManagedRef32(turn, parent, i * 4, child);
+            int bytes = arena.ReferenceProofNativeBytes;
+            long reserved = budget.ReservedBytes;
+            for (int attempt = 0; attempt < 8; attempt++)
+            {
+                ExpectInvalid(() => arena.WriteManagedRef32(turn, parent, 64, child),
+                    "replacement proof table requires peak native budget");
+                Require(arena.ReadManagedRef32(turn, parent, 64) is null &&
+                        arena.ReferenceProofNativeBytes == bytes && budget.ReservedBytes == reserved,
+                    "failed rehash leaves the new field null and charges unchanged");
+                for (int i = 0; i < 16; i++)
+                    Require(ReferenceEquals(arena.ReadManagedRef32(turn, parent, i * 4), child),
+                        "failed growth retains every original proof");
+            }
+            arena.WriteManagedRef32(turn, parent, 0, null);
+            arena.WriteManagedRef32(turn, parent, 64, child);
+            Require(ReferenceEquals(arena.ReadManagedRef32(turn, parent, 64), child),
+                "a freed proof bucket can be reused without growing");
+            Require(arena.ReferenceProofNativeBytes == bytes && budget.ReservedBytes == reserved,
+                "post-denial reuse stays within original charge");
+        }
+        Require(arena.Retire() && budget.ReservedBytes == 0,
+            "failed replacement and original table are fully reclaimed");
     }
 
     private static void DemandBackedGrowthPreservesActorRootsAndBudget()
