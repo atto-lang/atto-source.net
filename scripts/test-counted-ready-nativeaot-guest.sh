@@ -54,6 +54,12 @@ for case in invalid-count overflow-before-await empty-read; do
   class="$(dotnet "$work/compiler/Atto.Cil.Compiler.dll" --counted-ready-v1 "$work/$case.atto" "$work/guest/$case.cs")"
   echo "try { $class.Run(); throw new Exception(\"$case unexpectedly succeeded\"); } catch ($expected) { Console.WriteLine(\"NEGATIVE_RUNTIME_PASS $case\"); }" >> "$work/guest/Program.cs"
 done
+for cond in '(1 == 2) && ((await f) == 20)' '(1 == 1) || ((readch a) == 42)'; do
+  printf 'suspends fnc main(): int { val Channel<int> a = Channel.new<int>(2); writech a, 42; val Future<int> f = select<int> { default: -> { return 20; } }; val Array[int] b = await select<int>(0) { when readch a: int n -> { return n; } }; if %s then return 1; fi return 42; }\n' "$cond" > "$work/condition.atto"
+  if dotnet "$work/compiler/Atto.Cil.Compiler.dll" --counted-ready-v1 "$work/condition.atto" "$work/guest/bad.cs" > "$work/out" 2> "$work/err"; then exit 1; fi
+  test ! -e "$work/guest/bad.cs"
+  grep -F 'effect in condition' "$work/err"
+done
 dotnet publish "$work/guest/Guest.csproj" -c Release -r linux-x64 -o "$work/native" -warnaserror
 file "$work/native/Guest" | grep -F ELF
 "$work/native/Guest" | tee "$work/results"

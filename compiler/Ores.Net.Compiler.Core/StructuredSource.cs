@@ -1673,7 +1673,7 @@ public static partial class OresStructuredParser
                 if (terminated) throw Error("Unreachable comma expression body item");
                 if (++statements > MaxStatements)
                     throw Error("Structured statement budget exceeded");
-                if (Current.Text is "let" or "val" or "const" or "int" or "bool")
+                if ((Current.Text is "let" or "val" or "const") || StartsScalarTypeFirst())
                 {
                     bool previous = commaBindingTerminator;
                     commaBindingTerminator = true;
@@ -2206,12 +2206,12 @@ public static partial class OresStructuredParser
                 return (new StructuredOverflowCatchReturn(
                     at, protectedValue, typeTest, matchValue, fallbackValue), true);
             }
-            if (Current.Text is "let" or "val" or "const" or "int" or "bool")
+            if ((Current.Text is "let" or "val" or "const") || StartsScalarTypeFirst())
             {
                 // In the v1 scalar subset, a type-first local is exactly const:
                 // both spellings need a statically evaluable initializer.
                 // val is the fixed runtime binding; let is rebindable.
-                bool typeFirstImmutable = Current.Text is "int" or "bool";
+                bool typeFirstImmutable = StartsScalarTypeFirst();
                 StructuredBindingKind kind = typeFirstImmutable
                     ? StructuredBindingKind.Const
                     : Current.Text switch
@@ -2241,7 +2241,7 @@ public static partial class OresStructuredParser
                     index++;
                     // Prefix forms admit const int x=e, const x:int=e, const x=e.
                     // A declaration's type is a check; it is not a cast.
-                    annotated = Current.Text is "int" or "bool" or "Option" or "Array" or "Result" or "Error";
+                    annotated = StartsScalarTypeFirst() || Current.Text is "Option" or "Array" or "Result" or "Error";
                     if (annotated)
                     {
                         type = Type();
@@ -2445,6 +2445,13 @@ public static partial class OresStructuredParser
             Expect(";");
             return (new StructuredSet(at, variable, assigned), false);
         }
+        // The compatibility spelling remains a contextual type name. A value
+        // named boolean followed by = or : retains its existing interpretation.
+        private bool StartsScalarTypeFirst() => Current.Text is "int" or "bool" ||
+            (Current.Text == "boolean" && index + 1 < tokens.Count &&
+             tokens[index + 1].Text is { Length: > 0 } next &&
+             (Alpha(next[0]) || next[0] == '_'));
+
         private IrValueType Type()
         {
             if (Current.Text == "Error" && linking is null)
@@ -2496,7 +2503,7 @@ public static partial class OresStructuredParser
                     throw Error("E_OPTION_NESTED_UNSUPPORTED: int?? requires verified nested Option ABI");
                 return IrValueType.OptionI64;
             }
-            if (Take("bool"))
+            if (Take("bool") || Take("boolean"))
             {
                 CoreTypeRegistry.RequireExecutableStructuredNet("bool", 0);
                 if (Take("?"))
@@ -3010,7 +3017,7 @@ public static partial class OresStructuredParser
                 {
                     Require(left, IrValueType.GuestError, "Type inspection requires Error in this backend");
                     string name = Current.Text;
-                    if (name is not ("Error" or "ArithmeticOverflowError" or "DivisionByZeroError"))
+                    if (name is not ("Error" or "ArithmeticOverflowError" or "DivisionByZeroError" or "OptionUnwrapError" or "ResultUnwrapError"))
                         throw Error("Unsupported nominal Error type test");
                     index++;
                     left = TypedNode(new StructuredErrorTest(left.Offset, left, name, IsType: true), left);
@@ -3023,7 +3030,7 @@ public static partial class OresStructuredParser
                     if (Take("?"))
                         throw new FormatException(
                             $"Optional cast as? requires verified Option<T> lowering at offset {castAt}");
-                    if (Current.Text is not ("int" or "bool"))
+                    if (Current.Text is not ("int" or "bool" or "boolean"))
                         throw new FormatException(
                             $"Checked cast requires a reifiable supported scalar target at offset {castAt}");
                     IrValueType target = Type();
@@ -3147,6 +3154,8 @@ public static partial class OresStructuredParser
                 throw Error("E_SYNC_TASK_SUSPEND: this suspension lacks a same-thread continuation");
             if (Take("await"))
             {
+                if (Current.Text == "task")
+                    throw Error("E_SUSPENDS_UNSUPPORTED: scheduled task await requires typed continuation lowering");
                 var operand = Unary(depth + 1);
                 Require(operand, IrValueType.I64, "E_SUSPENDS_UNSUPPORTED: immediate await requires int");
                 return operand;
