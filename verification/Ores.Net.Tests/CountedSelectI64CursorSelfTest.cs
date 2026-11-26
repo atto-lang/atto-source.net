@@ -102,7 +102,14 @@ internal static class CountedSelectI64CursorSelfTest
         Require(f.Resolve(42),"cancel preserves independent producer");
         batch = new(2,new object[]{f,f});
         Require(batch.Pump() && batch.Pump() && batch.Completion.IsFaulted,"aggregate exhaustion");
-        Require(batch.Completion.Exception?.InnerException?.Message=="SelectExhausted","typed exhaustion");
+        Require(batch.Completion.Exception?.InnerException is SelectExhaustedException,"typed exhaustion");
+        var failedProducer = new SelectableI64Future();
+        var producerError = new InvalidOperationException("SelectExhausted");
+        batch = new(1,new object[]{failedProducer});
+        Require(batch.Pump() && !batch.Pump(),"producer failure pending");
+        failedProducer.Fail(producerError);
+        Require(batch.Pump() && ReferenceEquals(batch.Completion.Exception?.InnerException,producerError)
+                && failedProducer.PendingWaiters==0,"producer failure is not exhaustion");
         Require(new CountedSelectI64Batch(0,null!).Completion.Result.Count==0,"zero aggregate");
         batch = new(1,new object[]{a});
         var rejected = false;

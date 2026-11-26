@@ -1,5 +1,11 @@
 namespace Ores.Net.Runtime;
 
+/// Host runtime exhaustion, distinct from a producer failure with the same message.
+public sealed class SelectExhaustedException : InvalidOperationException
+{
+    public SelectExhaustedException() : base("SelectExhausted") { }
+}
+
 /// Trusted host-only scalar selection. One non-migrating owner drives
 /// registration and commit; producer callbacks only mark their own round dirty.
 /// This is not an actor scheduler, guest Future/Array, or source lowering.
@@ -148,7 +154,7 @@ public sealed class CountedSelectI64Cursor
                 }
                 else _cursor = next;
                 if (_values.Count == _count) { _live.Clear(); _state = CursorState.Success; }
-                else if (_live.Count == 0) Fail(new InvalidOperationException("SelectExhausted"));
+                else if (_live.Count == 0) Fail(new SelectExhaustedException());
                 else _state = CursorState.Ready;
                 return true;
             }
