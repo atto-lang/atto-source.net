@@ -3,6 +3,14 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+if (args.Length == 1 && args[0] == "--directional-value-pipe")
+{
+    CriticalSuspendsBoundaryTests.Run();
+    DirectionalValuePipeStructuredTests.Run();
+    Console.WriteLine("DIRECTIONAL_VALUE_PIPE_AND_EFFECT_BOUNDARY_PASS");
+    return;
+}
+
 if (args.Length == 1 && args[0] == "--explicit-ternary-arms")
 {
     StructuredSourceTests.RunExplicitTernaryArms();
@@ -93,6 +101,19 @@ Require(OresParser.Parse("fnc main():int{\r\n\treturn 42;\r\n}") is not null,
     "ordinary scalar CRLF and TAB must remain accepted");
 Require(OresStructuredParser.Parse("fnc main():int{\r\n\treturn 42;\r\n}").Body.Count == 1,
     "ordinary structured CRLF and TAB must remain accepted");
+
+// Distinguish unresolved scalar names from missing numeric operands.
+foreach (string name in new[] { "undeclared_value", "_missing", "Missing2" })
+{
+    string unresolved = "pub fnc main(): int { return " + name + "; }";
+    RejectDiagnostic(() => OresParser.Parse(unresolved),
+        $"Unknown or unsupported scalar identifier at offset {unresolved.IndexOf(name, StringComparison.Ordinal)}",
+        "scalar identifier rejection preserves source offset");
+}
+RejectDiagnostic(() => OresParser.Parse("pub fnc main(): int { return ); }"),
+    "Expected integer", "punctuation remains a numeric grammar error");
+Require(OresParser.Parse("pub fnc main(): int { return 40 + 2; }") is Binary,
+    "scalar arithmetic remains accepted");
 
 StaticSelectAdmissionTests.Run();
 

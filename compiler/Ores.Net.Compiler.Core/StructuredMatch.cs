@@ -16,11 +16,10 @@ public static partial class OresStructuredParser
 {
     private sealed partial class Reader
     {
-        private StructuredExpr ReadMatchValue(int offset, int depth, StructuredExpr? injectedSubject = null)
+        private StructuredExpr ReadMatchValue(int offset, int depth, StructuredExpr? receiver = null)
         {
             var match = ReadMatch(depth + 1, imperative: false,
-                writebackRoot: injectedSubject is null && matchWritebackRoot == offset,
-                injectedSubject: injectedSubject);
+                writebackRoot: receiver is null && matchWritebackRoot == offset, receiver: receiver);
             var children = new List<StructuredExpr> { match.Subject };
             foreach (var arm in match.Arms)
             {
@@ -31,7 +30,7 @@ public static partial class OresStructuredParser
         }
 
         private StructuredMatch ReadMatch(int depth, bool imperative, bool writebackRoot = false,
-            StructuredExpr? injectedSubject = null)
+            StructuredExpr? receiver = null)
         {
             Budget(depth);
             IrValueType? result = imperative ? IrValueType.Void : null;
@@ -47,7 +46,7 @@ public static partial class OresStructuredParser
             expectedExpressionType = null;
             try
             {
-                var subject = injectedSubject ?? Expr(depth + 1);
+                var subject = receiver ?? Expr(depth + 1);
                 if (subject.Type is not (IrValueType.I64 or IrValueType.Bool or IrValueType.OptionI64) && !subject.Type.IsResult())
                     throw Error("MATCH_TYPE_UNSUPPORTED: match requires int, bool, Option<int> or a closed Result");
                 Expect("over");
@@ -56,10 +55,11 @@ public static partial class OresStructuredParser
                 MatchTags uncovered = MatchTags.Any;
                 var coveredLiterals = new HashSet<long>();
                 bool completes = !imperative;
-                while (Take("on"))
+                while (Current.Text is "on" or "is")
                 {
+                    Take("on"); // optional only when the next token is the type-test introducer
                     if (++statements > MaxStatements) throw Error("Structured match statement budget exceeded");
-                    var literal = subject.Type == IrValueType.I64 ? ReadMatchLiteral() : null;
+                    var literal = subject.Type == IrValueType.I64 && Current.Text != "is" ? ReadMatchLiteral() : null;
                     var (tags, binding, bindingType) = literal is null
                         ? ReadMatchPattern(subject.Type) : ((MatchTags)0, null, null);
                     if (literal is long n ? uncovered == 0 || coveredLiterals.Contains(n) : (tags & uncovered) == 0)
@@ -124,7 +124,7 @@ public static partial class OresStructuredParser
                     Take(",");
                 }
                 if (Current.Text == "default") throw MatchDefaultError();
-                if (!Take(end)) throw Error("MATCH_SYNTAX: expected 'on' or the end of match");
+                if (!Take(end)) throw Error("MATCH_SYNTAX: expected 'on', 'is' or the end of match");
                 if (uncovered != 0)
                     throw Error("MATCH_NON_EXHAUSTIVE: cover all tags with unguarded arms or add 'on _'");
                 return new StructuredMatch(subject, arms.AsReadOnly(), result!.Value, completes);
@@ -151,6 +151,19 @@ public static partial class OresStructuredParser
         private (MatchTags Tags, string? Binding, IrValueType? BindingType) ReadMatchPattern(IrValueType subject)
         {
             if (Current.Text == "default") throw MatchDefaultError();
+            if (Take("is"))
+            {
+                string type = Current.Text;
+                if (type is not ("int" or "bool"))
+                    throw Error("MATCH_TYPE_PATTERN_UNSUPPORTED: only statically proven int/bool type patterns are supported");
+                index++;
+                var expected = type == "int" ? IrValueType.I64 : IrValueType.Bool;
+                if (subject != expected)
+                    throw Error("MATCH_PATTERN_TYPE: type pattern is not statically proven for this subject");
+                if (Current.Text == "as")
+                    throw Error("MATCH_TYPE_PATTERN_UNSUPPORTED: type pattern bindings require dedicated lowering");
+                return (MatchTags.Any, null, null);
+            }
             if (Take("_")) return (MatchTags.Any, null, null);
             if (subject == IrValueType.Bool)
             {

@@ -587,7 +587,13 @@ public static partial class OresStructuredParser
                     $"E_CRITICAL_UNSUPPORTED: structured CIL has no authenticated guard owner or FIFO continuation lowering at offset {tokens[i].Offset}");
             bool permittedMarker = inlineProfile && word == "suspends" &&
                 next is ("fnc" or "routine");
-            if ((word is "suspends" or "await") && !permittedMarker)
+            // The structured scalar parser can prove an immediate i64 await
+            // outside inline tasks. Never relax frozen-provider or std.await
+            // admission, and never infer a suspension from this lexical gate.
+            bool immediateAwaitCandidate = word == "await" &&
+                frozenNamespace is null && (i == 0 || tokens[i - 1].Text != ".") &&
+                !IsInsideInlineTask(tokens, i);
+            if ((word is "suspends" or "await") && !permittedMarker && !immediateAwaitCandidate)
             {
                 string diagnostic = word == "await" && IsInsideInlineTask(tokens, i)
                     ? "E_SYNC_TASK_SUSPEND: this suspension lacks a same-thread continuation"
@@ -635,8 +641,8 @@ public static partial class OresStructuredParser
             : reader.ReadLinkedUnit();
     }
 
-    // Diagnostic-only lexical classification. The preflight still rejects every
-    // await; no token sequence can grant suspension or bypass the typed parser.
+    // Inline tasks still reject await. Other immediate candidates must pass
+    // the structured scalar parser's exact i64 type check.
     private static bool IsInsideInlineTask(IReadOnlyList<Token> tokens, int at)
     {
         int braces = 0;
@@ -1014,6 +1020,19 @@ public static partial class OresStructuredParser
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
+                // Check complete keyword suffix before any effect token is consumed.
+                if ((word is "trap" or "throw" or "raise" or "panic" or "copy" or "take" or "move" or
+                    "borrow" or "share" or "pin" or "drop" or "pipe" or "rpipe" or "stop" or "expand") &&
+                    index < source.Length && source[index] == '!' &&
+                    (index + 1 >= source.Length || source[index + 1] != '=') &&
+                    !(source.AsSpan(index).StartsWith("!eq", StringComparison.Ordinal) &&
+                      (index + 3 == source.Length ||
+                       !(char.IsLetterOrDigit(source[index + 3]) || source[index + 3] == '_'))))
+                {
+                    int after = index + (word == "copy" && index + 1 < source.Length && source[index + 1] == '!' ? 2 : 1);
+                    if (after >= source.Length || source[after] is not (' ' or '\t' or '\r' or '\n' or '\v' or '\f'))
+                        throw new FormatException($"E_BANG_KEYWORD_WHITESPACE: whitespace required after bang keyword at offset {offset}");
+                }
                 if (word is "trap" or "throw" or "panic" or "raise" && index < source.Length &&
                     source[index] == '!' && (index + 1 == source.Length || source[index + 1] != '=') &&
                     !(index + 2 < source.Length && source[index + 1] == 'e' && source[index + 2] == 'q' &&
@@ -1028,7 +1047,7 @@ public static partial class OresStructuredParser
                 // backend has no typed borrow/move/share HIR, so refuse it
                 // before generic '!' or macro syntax can swallow the effect.
                 // 'copy !foo' is not an ownership prefix: the verb must touch '!'.
-                if ((word is "copy" or "take" or "borrow" or "share") &&
+                if ((word is "copy" or "take" or "move" or "borrow" or "share") &&
                     index < source.Length && source[index] == '!' &&
                     !(index + 1 < source.Length && source[index + 1] == '=') &&
                     !(index + 2 < source.Length && source[index + 1] == 'e' &&
@@ -2692,19 +2711,103 @@ public static partial class OresStructuredParser
                 index++;
                 if (++forwards > 64)
                     throw Error("E_VALUE_PIPE_BUDGET: forward application exceeds 64 stages");
-                if (Take("match"))
-                    value = ReadMatchValue(at, depth + 1, value);
-                else
+                if (Take("await"))
                 {
-                    string name = Name();
-                    value = ApplyValueStage(name, at, value);
+                    if (Current.Text is "(" or "<")
+                        throw Error("E_VALUE_PIPE_STAGE: await takes only the left-hand value");
+                    Require(value, IrValueType.I64, "E_SUSPENDS_UNSUPPORTED: immediate await requires int");
+                    continue;
                 }
+                if (Take("match"))
+                {
+                    value = ReadMatchValue(at, depth + 1, value);
+                    continue;
+                }
+                if (Current.Text is "if" or "ifnot" or "unless")
+                {
+                    bool inverted = Current.Text != "if";
+                    index++;
+                    var predicate = ReceiverPredicate(value, depth + 1);
+                    Require(predicate, IrValueType.Bool, "Value if condition requires bool");
+                    if (inverted)
+                        predicate = CheckedBinary(at, StructuredOperator.EqualBool,
+                            predicate, new StructuredBool(at, false), IrValueType.Bool);
+                    Expect("then");
+                    var yes = ReadConditionalStatementArm(depth + 1, false, "else");
+                    Expect("else");
+                    var no = ReadConditionalStatementArm(depth + 1, false, "fi");
+                    Expect("fi");
+                    Require(no, yes.Type, "Value if result types differ");
+                    value = CheckedConditional(at, predicate, yes, no);
+                    continue;
+                }
+                if (Current.Text == "?" || ReceiverPredicateStarts())
+                {
+                    value = ReceiverPredicate(value, depth + 1);
+                    if (Take("?"))
+                    {
+                        Require(value, IrValueType.Bool, "Conditional test requires bool");
+                        var yes = ReadTernaryArm(depth + 1, false, ":");
+                        Expect(":");
+                        var no = ReadTernaryArm(depth + 1, false, ";", conditionalOnly: true);
+                        Require(no, yes.Type, "Conditional result types differ");
+                        value = CheckedConditional(at, value, yes, no);
+                    }
+                    continue;
+                }
+                string name = Name();
+                value = ApplyValueStage(name, at, value);
             }
             if (Current.Text == "<|")
                 throw Error("E_VALUE_PIPE_DIRECTION: parenthesize mixed |> and <| applications");
             if (Current.Text == "^")
                 throw Error("Reserved AttoLang operator '^' in expressions; use Integer.bitXor(a, b)");
             return value;
+        }
+
+        private bool ReceiverPredicateStarts() =>
+            Current.Text is "is" or "<" or ">" or "<=" or ">=" or "eq" or "==" or "neq" or "!=";
+
+        private StructuredExpr ReceiverPredicate(StructuredExpr input, int depth)
+        {
+            Budget(depth);
+            int at = Current.Offset;
+            if (Take("is"))
+            {
+                Take("type");
+                Expect("int");
+                Require(input, IrValueType.I64, "Receiver int type test requires proven int");
+                // Preserve evaluation of the operand even for an always-true
+                // checked scalar test; never erase a potentially failing call.
+                return CheckedBinary(at, StructuredOperator.GreaterThanOrEqualI64,
+                    input, new StructuredInt(at, long.MinValue), IrValueType.Bool);
+            }
+            if (!ReceiverPredicateStarts()) return input;
+            string op = Current.Text;
+            index++;
+            bool equality = op is "eq" or "==" or "neq" or "!=";
+            var right = equality ? Compare(depth + 1) : Shift(depth + 1);
+            if (equality)
+            {
+                Require(right, input.Type, "Equality requires matching operands");
+                if (input.Type is not (IrValueType.I64 or IrValueType.Bool))
+                    throw Error("Receiver equality requires int or bool");
+                bool neq = op is "neq" or "!=";
+                var comparison = input.Type == IrValueType.Bool
+                    ? (neq ? StructuredOperator.NotEqualBool : StructuredOperator.EqualBool)
+                    : (neq ? StructuredOperator.NotEqualI64 : StructuredOperator.EqualI64);
+                return CheckedBinary(at, comparison, input, right, IrValueType.Bool);
+            }
+            Require(input, IrValueType.I64, "Comparison requires int operands");
+            Require(right, IrValueType.I64, "Comparison requires int operands");
+            return CheckedBinary(at, op switch
+            {
+                "<" => StructuredOperator.LessThanI64,
+                ">" => StructuredOperator.GreaterThanI64,
+                "<=" => StructuredOperator.LessThanOrEqualI64,
+                ">=" => StructuredOperator.GreaterThanOrEqualI64,
+                _ => throw Error("Unrecognized receiver comparison")
+            }, input, right, IrValueType.Bool);
         }
 
         private StructuredExpr ApplyValueStage(string name, int at, StructuredExpr input)
@@ -3042,6 +3145,12 @@ public static partial class OresStructuredParser
             }
             if (inlineTaskDepth != 0 && Current.Text is "await" or "yield")
                 throw Error("E_SYNC_TASK_SUSPEND: this suspension lacks a same-thread continuation");
+            if (Take("await"))
+            {
+                var operand = Unary(depth + 1);
+                Require(operand, IrValueType.I64, "E_SUSPENDS_UNSUPPORTED: immediate await requires int");
+                return operand;
+            }
             if (Take("trap") || Take("trap!")) return TrapOperand(offset, depth);
             if (Take("Ok")) return TaggedPostfix(NewResult(offset, success: true, depth), depth);
             if (Take("Err")) return TaggedPostfix(NewResult(offset, success: false, depth), depth);

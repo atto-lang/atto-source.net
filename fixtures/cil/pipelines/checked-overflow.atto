@@ -1,0 +1,3 @@
+// Checked CIL arithmetic must reject overflow, never wrap the guest
+fnc plus_one(int x): int -> x + 1;
+pub fnc main(): int -> 9223372036854775807 |> plus_one;
