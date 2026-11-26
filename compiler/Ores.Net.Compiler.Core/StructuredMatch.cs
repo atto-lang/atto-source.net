@@ -16,10 +16,10 @@ public static partial class OresStructuredParser
 {
     private sealed partial class Reader
     {
-        private StructuredExpr ReadMatchValue(int offset, int depth)
+        private StructuredExpr ReadMatchValue(int offset, int depth, StructuredExpr? receiver = null)
         {
             var match = ReadMatch(depth + 1, imperative: false,
-                writebackRoot: matchWritebackRoot == offset);
+                writebackRoot: receiver is null && matchWritebackRoot == offset, receiver: receiver);
             var children = new List<StructuredExpr> { match.Subject };
             foreach (var arm in match.Arms)
             {
@@ -29,7 +29,8 @@ public static partial class OresStructuredParser
             return TaggedPostfix(TypedNode(new StructuredMatchValue(offset, match), children.ToArray()), depth);
         }
 
-        private StructuredMatch ReadMatch(int depth, bool imperative, bool writebackRoot = false)
+        private StructuredMatch ReadMatch(int depth, bool imperative, bool writebackRoot = false,
+            StructuredExpr? receiver = null)
         {
             Budget(depth);
             IrValueType? result = imperative ? IrValueType.Void : null;
@@ -45,7 +46,7 @@ public static partial class OresStructuredParser
             expectedExpressionType = null;
             try
             {
-                var subject = Expr(depth + 1);
+                var subject = receiver ?? Expr(depth + 1);
                 if (subject.Type is not (IrValueType.I64 or IrValueType.Bool or IrValueType.OptionI64) && !subject.Type.IsResult())
                     throw Error("MATCH_TYPE_UNSUPPORTED: match requires int, bool, Option<int> or a closed Result");
                 Expect("over");
