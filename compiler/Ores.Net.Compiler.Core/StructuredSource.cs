@@ -1020,6 +1020,19 @@ public static partial class OresStructuredParser
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
+                // Check complete keyword suffix before any effect token is consumed.
+                if ((word is "trap" or "throw" or "raise" or "panic" or "copy" or "take" or "move" or
+                    "borrow" or "share" or "pin" or "drop" or "pipe" or "rpipe" or "stop" or "expand") &&
+                    index < source.Length && source[index] == '!' &&
+                    (index + 1 >= source.Length || source[index + 1] != '=') &&
+                    !(source.AsSpan(index).StartsWith("!eq", StringComparison.Ordinal) &&
+                      (index + 3 == source.Length ||
+                       !(char.IsLetterOrDigit(source[index + 3]) || source[index + 3] == '_'))))
+                {
+                    int after = index + (word == "copy" && index + 1 < source.Length && source[index + 1] == '!' ? 2 : 1);
+                    if (after >= source.Length || source[after] is not (' ' or '\t' or '\r' or '\n' or '\v' or '\f'))
+                        throw new FormatException($"E_BANG_KEYWORD_WHITESPACE: whitespace required after bang keyword at offset {offset}");
+                }
                 if (word is "trap" or "throw" or "panic" or "raise" && index < source.Length &&
                     source[index] == '!' && (index + 1 == source.Length || source[index + 1] != '=') &&
                     !(index + 2 < source.Length && source[index + 1] == 'e' && source[index + 2] == 'q' &&
@@ -1034,7 +1047,7 @@ public static partial class OresStructuredParser
                 // backend has no typed borrow/move/share HIR, so refuse it
                 // before generic '!' or macro syntax can swallow the effect.
                 // 'copy !foo' is not an ownership prefix: the verb must touch '!'.
-                if ((word is "copy" or "take" or "borrow" or "share") &&
+                if ((word is "copy" or "take" or "move" or "borrow" or "share") &&
                     index < source.Length && source[index] == '!' &&
                     !(index + 1 < source.Length && source[index + 1] == '=') &&
                     !(index + 2 < source.Length && source[index + 1] == 'e' &&
