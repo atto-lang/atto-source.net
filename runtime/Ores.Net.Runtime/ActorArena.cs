@@ -275,6 +275,46 @@ public sealed unsafe class ActorArena : IDisposable
         }
     }
 
+    /// <summary>
+    /// Trusted host adapter: pin lifetime before starting external work.
+    /// The factory must return its physical completion receipt and must
+    /// not publish work if it throws or returns null. No turn or pointer
+    /// authority is conveyed to the completion callback.
+    /// </summary>
+    public System.Threading.Tasks.Task TrackExternalCompletion(
+        Turn turn, Func<System.Threading.Tasks.Task> start)
+    {
+        ArgumentNullException.ThrowIfNull(start);
+        var lease = AcquireExternalLease(turn);
+        try
+        {
+            var pending = start() ?? throw new InvalidOperationException("External operation returned no completion task");
+            return ActorArenaExternalCompletion.Await(pending, lease);
+        }
+        catch
+        {
+            lease.Dispose();
+            throw;
+        }
+    }
+
+    public System.Threading.Tasks.Task<T> TrackExternalCompletion<T>(
+        Turn turn, Func<System.Threading.Tasks.Task<T>> start)
+    {
+        ArgumentNullException.ThrowIfNull(start);
+        var lease = AcquireExternalLease(turn);
+        try
+        {
+            var pending = start() ?? throw new InvalidOperationException("External operation returned no completion task");
+            return ActorArenaExternalCompletion.Await(pending, lease);
+        }
+        catch
+        {
+            lease.Dispose();
+            throw;
+        }
+    }
+
     private void ReleaseExternalLease()
     {
         lock (_gate)
