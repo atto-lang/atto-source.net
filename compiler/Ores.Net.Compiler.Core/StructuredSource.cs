@@ -1793,6 +1793,15 @@ public static partial class OresStructuredParser
                 return (new StructuredOverflowCatchReturn(
                     at, protectedValue, typeTest, matchValue, fallbackValue), true);
             }
+            // A recognized primitive declaration missing its initializer is a
+            // declaration error, independent of support for its value lowering.
+            int typeAt = Current.Text is "let" or "val" or "const" ? index+1 : index;
+            if (typeAt+2 < tokens.Count &&
+                tokens[typeAt].Text is ("int" or "bool" or "string") &&
+                tokens[typeAt+1].Text.Length>0 &&
+                (char.IsLetter(tokens[typeAt+1].Text[0]) || tokens[typeAt+1].Text[0]=='_') &&
+                tokens[typeAt+2].Text==";")
+                throw new FormatException($"E_MISSING_INITIALIZER: explicit initializer required at offset {tokens[typeAt+2].Offset}");
             if (Current.Text is "let" or "val" or "const" or "int" or "bool")
             {
                 // In the v1 scalar subset, a type-first local is exactly const:
@@ -1849,6 +1858,7 @@ public static partial class OresStructuredParser
                 if (scopes.Any(scope => scope.ContainsKey(name)) ||
                     aggregateScopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
+                if(Current.Text==";")throw Error("E_MISSING_INITIALIZER: explicit initializer required");
                 Expect("=");
                 var initializer = Expr(depth + 1);
                 if (annotated)
