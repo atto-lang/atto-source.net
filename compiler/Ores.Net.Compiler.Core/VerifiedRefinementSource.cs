@@ -301,6 +301,7 @@ public static partial class OresParser
                 if (main && (parameters.Count != 0 || !declared.Unit.IsScalar
                         || !declared.Range.Includes(VerifiedI64Range.Full)))
                     throw new FormatException("E_REFINEMENT_EXPORT: main must have signature () -> int");
+                int contractStart = _index;
                 while (Take("requires"))
                 {
                     if (main) throw new FormatException("E_REFINEMENT_EXPORT: main cannot require caller facts");
@@ -330,7 +331,20 @@ public static partial class OresParser
                         guaranteed = ReadVerifiedBound(guaranteed, op);
                     }
                 }
-                Expect("{");
+                bool contracted = _index != contractStart;
+                string closer = "}";
+                if (!Take("{"))
+                {
+                    if (Take("::")) closer = "end";
+                    else if (Current.Text == "begin")
+                    {
+                        if (contracted && !VerifiedHeaderHasNewline())
+                            throw new FormatException("E_SYNTAX: contracted begin must start on a later line");
+                        Expect("begin");
+                        closer = "end";
+                    }
+                    else throw new FormatException("E_SYNTAX: expected verified callable body opener");
+                }
                 var body = new List<StructuredStmt>();
                 while (Take("val"))
                 {
@@ -383,7 +397,7 @@ public static partial class OresParser
                     Expect(";");
                     body.Add(new StructuredReturn(returnAt, returned.Expression));
                 }
-                Expect("}");
+                Expect(closer);
                 if (main)
                 {
                     if (Current.Text.Length != 0)
