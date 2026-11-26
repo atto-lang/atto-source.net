@@ -61,6 +61,24 @@ internal static class CfgVerifierTests
 
     public static void Run()
     {
+        CfgFunction ErrorComparison(string name, int operand = 0) =>
+            new("checkedUnwrapErrorType", IrValueType.Bool, "entry", new[] {
+                Block("entry", Array.Empty<CfgParameter>(), new[] {
+                    new CfgInstruction(0, CfgOpcode.GuestErrorLiteral, IrValueType.GuestError,
+                        TextOperand: "original"),
+                    new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                        I64Constant: 42),
+                    new CfgInstruction(2, CfgOpcode.GuestErrorIsType, IrValueType.Bool,
+                        Left: operand, TextOperand: name)
+                }, new CfgReturn(2))
+            });
+        foreach (string name in new[] { "Error", "OptionUnwrapError", "ResultUnwrapError",
+            "ArithmeticOverflowError", "DivisionByZeroError" })
+            _ = OresCfgVerifier.Verify(ErrorComparison(name));
+        foreach (string name in new[] { "UnknownError", "OptionUnwrapPanic", "", "ResultUnwrapError " })
+            Reject(ErrorComparison(name), "unregistered Error subtype");
+        Reject(ErrorComparison("OptionUnwrapError", 1), "integer is not a guest Error");
+
         // Typed bool opcodes must not accept integer SSA values, forged result
         // tags or injected operand metadata. Verifier rejection precedes CIL.
         foreach (CfgOpcode op in new[] {
