@@ -308,7 +308,7 @@ public static partial class OresParser
                 {
                     if (body.Count >= 128) throw new FormatException("E_REFINEMENT_LIMIT: too many immutable bindings");
                     int at = Current.Offset;
-                    RefinedQuantity type;
+                    RefinedQuantity? type = null;
                     string local;
                     if (tokens[_index + 1].Text == ":")
                     {
@@ -316,14 +316,26 @@ public static partial class OresParser
                         Expect(":");
                         type = ReadRefinedType();
                     }
+                    else if (tokens[_index + 1].Text == "=")
+                    {
+                        local = ReadVerifiedName();
+                    }
                     else
                     {
                         type = ReadRefinedType();
                         local = ReadVerifiedName();
                     }
+                    if (verifiedLocals.ContainsKey(local) || refinementAliases.ContainsKey(local) ||
+                        local is "i64" or "main" or "infer" or "_")
+                        throw new FormatException("E_REFINEMENT_DUPLICATE: reserved or duplicate binding");
                     Expect("=");
                     var value = VerifiedExpression(0);
-                    type.Require(value.Type, "E_REFINEMENT_BINDING", "binding " + local);
+                    if (type is null) type = value.Type;
+                    else
+                    {
+                        type.Unit.RequireCompatible(value.Type.Unit);
+                        type.Require(value.Type, "E_REFINEMENT_BINDING", "binding " + local);
+                    }
                     Expect(";");
                     if (!verifiedLocals.TryAdd(local, type with { Range = value.Type.Range }))
                         throw new FormatException("E_REFINEMENT_DUPLICATE: duplicate verified binding");
