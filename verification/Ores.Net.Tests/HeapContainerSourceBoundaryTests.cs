@@ -25,10 +25,10 @@ internal static class HeapContainerSourceBoundaryTests
             ("pub fnc main():int{return Record.of(a: -9223372036854775808, b: 42).b;}", 42),
             ("pub fnc main():int{return Entry.of(11, 23).value + 19;}", 42),
             ("pub fnc main():int{return Entry.of(11, 23).key + 31;}", 42),
-            ("pub fnc main():int{return Pair.of(11, 23).second + 19;}", 42),
-            ("pub fnc main():int{return Pair.of(11, 23).first + 31;}", 42),
+            ("pub fnc main():int{return Pair.of(\"count\", 23).second + 19;}", 42),
+            ("pub fnc main():int{return Pair.of<int>(\"count\", 11).second + 31;}", 42),
             ("pub fnc main():int{return Entry.of<int,int>(-9223372036854775808, 42).value;}", 42),
-            ("pub fnc main():int{return Pair.of<int,int>(11, 23).first + 31;}", 42)
+            ("pub fnc main():int{return Pair.of<string,int>(\"count\", 11).second + 31;}", 42)
         };
         string folder = Path.Combine(Path.GetTempPath(),
             "atto-tuple-scalar-cil-" + Guid.NewGuid().ToString("N"));
@@ -67,13 +67,17 @@ internal static class HeapContainerSourceBoundaryTests
             "Tuple.of(1,2)[0].foo",   // no dynamic guest object member
             "Map.of<string,int>()",   // owned Map remains unsupported
             "Entry.of(1,2)",      // first-class nominal Entry cannot escape
-            "Pair.of(1,2)",       // first-class nominal Pair cannot escape
+            "Pair.of(\"a\",2)",       // first-class nominal Pair cannot escape
+            "Pair.of(1,2).second", // invalid key independent of projection
+            "Pair.of<int,int>(1,2).second",
+            "Pair.of(true,2).second",
+            "Pair.of(\"a\",2).first", // string projection still unsupported
             "Entry.of(1,2).first", // Entry and Pair projections remain distinct
-            "Pair.of(1,2).key",
+            "Pair.of(\"a\",2).key",
             "~entry(1,2).missing",
             "~pair(1,2).value",
             "Entry.of(1,2).key.foo", // no dynamic member fallback
-            "Pair.of(1,true).second",
+            "Pair.of(\"a\",true).second",
             "Entry.of<int>(1,2).key", // both type slots required, int-only
             "~entry(1+2,3).key", // no unproven effects
             "Array.of(1,2)",
