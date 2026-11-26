@@ -14,6 +14,7 @@ internal sealed class CountedReadyCompiler
     private readonly Dictionary<string, Slot> slots = new(StringComparer.Ordinal);
     private int pos, budget = 4096, depth, countSites;
     private string? outstanding;
+    private bool pureCondition;
     private static readonly HashSet<string> Reserved = new("pub suspends fnc main int bool val let const Channel Future Array new writech readch select nb await when fair first random default over end return if then fi true false".Split(' '), StringComparer.Ordinal);
     private string Peek => tokens[pos];
     private CountedReadyCompiler(string source) { tokens = new Parser(source, countedReady: true).CountedTokens; }
@@ -81,6 +82,7 @@ internal sealed class CountedReadyCompiler
         }
         if (Eat("await"))
         {
+            if (pureCondition) throw Bad("effect in condition");
             bool legacy = Eat("nb");
             if (Eat("select")) return Counted(true);
             if (legacy) throw Bad("nb requires select");
@@ -95,6 +97,7 @@ internal sealed class CountedReadyCompiler
         }
         if (Eat("readch"))
         {
+            if (pureCondition) throw Bad("effect in condition");
             if (outstanding is not null) throw Bad("await outstanding counted batch before channel access");
             return new("int","Read(" + Get(Name(),"channel").Code + ")");
         }
@@ -175,7 +178,7 @@ internal sealed class CountedReadyCompiler
             else if (Eat("if"))
             {
                 if (outstanding is not null) throw Bad("await outstanding counted batch before branching");
-                string cond = Check(Expr(),"bool"); Need("then"); Need("return");
+                pureCondition = true; string cond = Check(Expr(),"bool"); pureCondition = false; Need("then"); Need("return");
                 var before = slots.Values.ToDictionary(s => s.Code,s => s.Moved);
                 string value = Check(Expr(),"int"); Need(";"); Need("fi");
                 foreach (var s in slots.Values) s.Moved = before[s.Code];
