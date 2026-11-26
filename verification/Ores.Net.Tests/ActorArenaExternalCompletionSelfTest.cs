@@ -89,6 +89,7 @@ internal static class ActorArenaExternalCompletionSelfTest
         }
         Require(immediate.Retire(), "no leaked pins after immediate and rejected operations");
         ConcurrentPhysicalCompletionQuiescence();
+        RacePhysicalOwnersAndRetirement();
         Console.WriteLine("ATTO_NET_EXTERNAL_COMPLETION_PIN_BEFORE_START_PASS");
     }
 
@@ -175,6 +176,60 @@ internal static class ActorArenaExternalCompletionSelfTest
                 "repeated retirement cannot refund again");
         }
         Console.WriteLine("ATTO_NET_MULTI_EXTERNAL_COMPLETION_QUIESCENCE_PASS");
+    }
+
+    // Unlike the two ordered terminal-path checks, run the actual physical
+    // owners and retirement concurrently. A third, deliberately withheld pin
+    // proves storage remains charged after both racing callbacks settle.
+    private static void RacePhysicalOwnersAndRetirement()
+    {
+        var budget = new ActorArenaBudget(1280);
+        long processBefore = ActorArenaBudget.Process.ReservedBytes;
+        for (int cycle = 0; cycle < 1024; ++cycle)
+        {
+            ulong incarnation = (ulong)cycle + 1;
+            using var arena = new ActorArena(3011, incarnation, 1024, 256,
+                4, 3, 2, budget);
+            var left = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var right = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Task<int> leftReceipt, rightReceipt;
+            ActorArenaLifetimePin withheld;
+            using (var turn = arena.EnterTurn(3011, incarnation))
+            {
+                leftReceipt = arena.TrackExternalCompletion<int>(turn, () => left.Task);
+                rightReceipt = arena.TrackExternalCompletion<int>(turn, () => right.Task);
+                withheld = arena.AcquireLifetimePin(turn);
+                Require(arena.OutstandingLifetimePins == 3, "three physical owners charged");
+            }
+            using (withheld)
+            {
+                using var go = new ManualResetEventSlim(false);
+                var completeLeft = Task.Run(() => { go.Wait(); left.SetResult(41); });
+                var completeRight = Task.Run(() => { go.Wait(); right.SetResult(42); });
+                var retire = Task.Run(() =>
+                {
+                    go.Wait();
+                    Require(!arena.Retire(), "withheld owner prevents concurrent retirement");
+                });
+                go.Set();
+                Task.WhenAll(completeLeft, completeRight, retire)
+                    .WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+                var results = Task.WhenAll(leftReceipt, rightReceipt)
+                    .WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+                Require(results[0] == 41 && results[1] == 42, "racing receipts preserve values");
+                Require(arena.IsRetired && !arena.IsReclaimed &&
+                    arena.OutstandingLifetimePins == 1 && budget.ReservedBytes == 1280 &&
+                    ActorArenaBudget.Process.ReservedBytes == processBefore + 1280,
+                    "racing owners cannot release the withheld physical credit");
+            }
+            Require(arena.IsReclaimed && arena.OutstandingLifetimePins == 0 &&
+                arena.ReservedNativeBytes == 0 && budget.ReservedBytes == 0 &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore,
+                "last physical owner releases the full charge exactly once");
+            Require(arena.Retire() && budget.ReservedBytes == 0,
+                "retirement retry remains idempotent");
+        }
+        Console.WriteLine("ATTO_NET_CONCURRENT_OWNER_RETIREMENT_PASS cycles=1024");
     }
 
     private static void ExpectInvalid(Action action, string scenario)
