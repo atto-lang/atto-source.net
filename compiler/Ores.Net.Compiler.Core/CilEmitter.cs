@@ -325,18 +325,7 @@ public static class CilEmitter
         var peBytes = new BlobBuilder();
         pe.Serialize(peBytes);
 
-        var fullPath = Path.GetFullPath(outputFile);
-        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-        var temporary = fullPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            File.WriteAllBytes(temporary, peBytes.ToArray());
-            File.Move(temporary, fullPath, overwrite: true);
-        }
-        finally
-        {
-            if (File.Exists(temporary)) File.Delete(temporary);
-        }
+        CilArtifactPublisher.Publish(outputFile, peBytes.ToArray());
     }
 
     // Experimental multi-method Native AOT assembly. MethodDef handles are
@@ -497,15 +486,7 @@ public static class CilEmitter
         var bytes = new BlobBuilder();
         pe.Serialize(bytes);
 
-        string full = Path.GetFullPath(outputFile);
-        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
-        string temporary = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            File.WriteAllBytes(temporary, bytes.ToArray());
-            File.Move(temporary, full, overwrite: true);
-        }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        CilArtifactPublisher.Publish(outputFile, bytes.ToArray());
     }
 
     // This second gate cross-checks actual module member signatures after

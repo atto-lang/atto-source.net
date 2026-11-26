@@ -3,6 +3,43 @@ using System.Text;
 using System.Globalization;
 using Ores.Net.Runtime;
 
+// Linkage is an explicit build choice, not an execution-profile switch.
+// The bounded module and frozen-package compiler paths produce a single
+// source-linked CIL assembly. NativeAOT linking is a separate host step.
+// Refuse unsupported requests before reading any package or source.
+string? packageLinkage = null;
+var linkageArgs = new List<string>();
+foreach (string arg in args)
+{
+    if (arg == "--link" || arg.StartsWith("--link=", StringComparison.Ordinal))
+    {
+        if (packageLinkage is not null || arg == "--link")
+        {
+            Console.Error.WriteLine("E_LINK_MODE: expected one --link=static|dynamic|hybrid");
+            return 2;
+        }
+        packageLinkage = arg["--link=".Length..];
+        if (packageLinkage is "dynamic" or "hybrid")
+        {
+            Console.Error.WriteLine("E_LINK_MODE_UNSUPPORTED: separate package ABI is not admitted");
+            return 2;
+        }
+        if (packageLinkage != "static")
+        {
+            Console.Error.WriteLine("E_LINK_MODE: expected static|dynamic|hybrid");
+            return 2;
+        }
+    }
+    else linkageArgs.Add(arg);
+}
+args = linkageArgs.ToArray();
+if (packageLinkage is not null &&
+    (args.Length == 0 || args[0] is not ("compile-modules" or "compile-frozen" or "compile")))
+{
+    Console.Error.WriteLine("E_LINK_MODE: explicit linkage is supported only for source-linked compilation");
+    return 2;
+}
+
 if(args.Length>0 && args[0] is "check-frozen" or "compile-frozen")
 {
     try { return FrozenPackageCommand.Run(args); }

@@ -139,6 +139,38 @@ jobs:
           if ($LASTEXITCODE -ne 1 -or $rejection -notmatch 'Nominal class/actor methods require' -or (Test-Path artifacts/module-rejected/OresGenerated.dll)) { throw 'Class rejection was not correctly classified' }
           $rejection
           $global:LASTEXITCODE = 0
+      - name: Refuse unsupported package linkage before source or output access
+        shell: pwsh
+        run: |
+          $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          $root = Join-Path $env:RUNNER_TEMP ('atto-linkage-' + [Guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $root | Out-Null
+          try {
+            $dest = Join-Path $root 'OresGenerated.dll'
+            $missing = Join-Path $root 'missing.atto'
+            $PSNativeCommandUseErrorActionPreference = $false
+            foreach ($command in @('compile-modules','compile-frozen','compile')) {
+              foreach ($mode in @('dynamic','hybrid','unknown')) {
+                [System.IO.File]::WriteAllText($dest,'previous artifact')
+                $prior = (Get-FileHash $dest -Algorithm SHA256).Hash
+                $diagnostic = & $compiler $command $missing --out $dest "--link=$mode" 2>&1 | Out-String
+                $code = $LASTEXITCODE
+                $expected = if ($mode -eq 'unknown') { 'E_LINK_MODE:' } else { 'E_LINK_MODE_UNSUPPORTED:' }
+                if ($code -ne 2 -or $diagnostic -notmatch $expected -or (Get-FileHash $dest -Algorithm SHA256).Hash -cne $prior) {
+                  throw "Linkage denial changed prior output: $command $mode $diagnostic"
+                }
+                Remove-Item $dest
+                $diagnostic = & $compiler $command $missing --out $dest "--link=$mode" 2>&1 | Out-String
+                if ($LASTEXITCODE -ne 2 -or $diagnostic -notmatch $expected -or (Test-Path $dest)) {
+                  throw "Linkage denial published output: $command $mode $diagnostic"
+                }
+              }
+            }
+            $diagnostic = & $compiler compile-modules $missing --out $dest --link=static --link=static 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 2 -or $diagnostic -notmatch 'E_LINK_MODE:' -or (Test-Path $dest)) { throw 'Duplicate linkage selection accepted' }
+            $global:LASTEXITCODE = 0
+            Write-Host 'PASS native compiler unsupported linkage: 18 no-write cases plus duplicate rejection'
+          } finally { Remove-Item -LiteralPath $root -Recurse -Force }
       - name: Compile canonical .atto source graph and execute NativeAOT guest
         shell: pwsh
         run: |
@@ -147,7 +179,10 @@ jobs:
           if ($compilerSha256 -cne (Get-Content artifacts/module-app/compiler.sha256 -Raw).Trim()) {
             throw 'Native compiler executable changed before canonical graph compilation'
           }
-          $witness = & $compiler compile-modules examples/modules/atto-main.atto --root examples/modules --out artifacts/atto-module-generated/OresGenerated.dll
+          $defaultWitness = & $compiler check-modules examples/modules/atto-main.atto --root examples/modules
+          if ($LASTEXITCODE -ne 0) { throw 'Default source graph admission failed' }
+          $witness = & $compiler compile-modules examples/modules/atto-main.atto --root examples/modules --out artifacts/atto-module-generated/OresGenerated.dll --link=static
+          if ($LASTEXITCODE -ne 0 -or ($defaultWitness | ConvertFrom-Json).graph_sha256 -cne ($witness | ConvertFrom-Json).graph_sha256) { throw 'Explicit static linkage changed source graph' }
           if ($LASTEXITCODE -ne 0) { throw 'Canonical AttoLang .atto module graph did not compile' }
           $witness | Set-Content artifacts/atto-module-source-graph.json
           $graph = $witness | ConvertFrom-Json -ErrorAction Stop
