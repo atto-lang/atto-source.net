@@ -242,7 +242,23 @@ public static partial class OresStructuredParser
         body.Add(new StructuredReturn(0,result));
         var program=new StructuredProgram("main",body.AsReadOnly(),
             new System.Collections.ObjectModel.ReadOnlyDictionary<string,StructuredFunction>(methods),order.AsReadOnly());
+        // Verify every admitted method first, including unreachable providers.
+        // Frozen scalar modules have no dynamic dispatch, exports or init hooks.
+        // Retain only the transitive closure of verified static call targets.
         var verified=OresStructuredCfgLowering.LowerModule(program);
+        var byName=verified.Helpers.ToDictionary(m=>m.Name,StringComparer.Ordinal);
+        var reached=new HashSet<string>(StringComparer.Ordinal);
+        var pending=new Stack<VerifiedCfgFunction>();pending.Push(verified.Main);
+        while(pending.Count!=0){
+            var method=pending.Pop();
+            foreach(var op in method.Blocks.SelectMany(b=>b.Instructions)){
+                if(op.Opcode is not (CfgOpcode.Call or CfgOpcode.TrapCall))continue;
+                if(op.Target is null||!byName.TryGetValue(op.Target,out var target))
+                    throw new FormatException("E_UNBOUND: verified frozen call target missing");
+                if(reached.Add(target.Name))pending.Push(target);
+            }
+        }
+        verified=new VerifiedCfgModule(verified.Main,Array.AsReadOnly(verified.Helpers.Where(m=>reached.Contains(m.Name)).ToArray()));
         nextGraph=closure;next=staged;
         return new FrozenScalarBuild(verified,reparsed.AsReadOnly(),reused.AsReadOnly());
     }
