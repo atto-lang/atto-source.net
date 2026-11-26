@@ -148,6 +148,20 @@ public sealed class SelectContinuationFence
         }
     }
 
+    /// <summary>
+    /// Claim and invoke on the calling actor lane; retain physical credit
+    /// until callback completion, including cancellation or exception.
+    /// The callback and scheduler are responsible for actor-lane affinity.
+    /// </summary>
+    public async ValueTask<bool> TryInvokeAsync(Ticket? ticket, Func<ValueTask> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        using var lease = TryClaim(ticket);
+        if (lease is null) return false;
+        await callback().ConfigureAwait(false);
+        return true;
+    }
+
     public sealed class Execution : IDisposable
     {
         private readonly SelectContinuationFence _owner;
