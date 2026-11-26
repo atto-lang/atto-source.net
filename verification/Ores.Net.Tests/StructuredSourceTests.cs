@@ -1368,6 +1368,13 @@ pub async routine main(): void {
             "fnc main():int{const bool x=true xor false;return x ? 42 : 7;}").Body[1]
             is StructuredReturn { Value: StructuredConditional { ResultType: IrValueType.I64 } },
             "conditional and compile-time boolean XOR are typed");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return true ? { return 42; } : { ^ 7; };}").Body[0]
+            is StructuredReturn { Value: StructuredConditional { ResultType: IrValueType.I64 } },
+            "explicit braced results share the typed conditional AST");
+        foreach (string arm in new[] { "{}", "{status: 42}", "{42}", "{val int x=42; return x;}" })
+            RejectFeature("fnc main():int{return true ? " + arm + " : 7;}", "E_VALUE_ARM");
+        RejectFeature("fnc main():int{return false ? 7 : {};}", "E_VALUE_ARM");
         Reject("fnc and():int{return 0;}fnc main():int{return 42;}",
             "logical keywords are reserved as function names");
         Reject("fnc main():int{let bool or=true;return 42;}",
