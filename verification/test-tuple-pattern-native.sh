@@ -33,6 +33,7 @@ done
 for kind in positive overflow; do
   for d in "$tmp"/"$kind"/*; do
     dotnet "$compiler" compile "$d/main.atto" --out "$d/OresGenerated.dll"
+    dotnet clean host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj -c Release -r linux-x64 "-p:GeneratedAssembly=$d/OresGenerated.dll"
     dotnet publish host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj -c Release -r linux-x64 -o "$d/native" "-p:GeneratedAssembly=$d/OresGenerated.dll" -warnaserror
     test -x "$d/native/oreslang-app"
     test "$(head -c4 "$d/native/oreslang-app" | od -An -tx1 | tr -d ' \n')" = 7f454c46
