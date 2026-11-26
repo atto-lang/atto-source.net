@@ -482,6 +482,35 @@ public static partial class OresParser
         {
             if(depth>16)throw new FormatException("E_VERIFY_UNSUPPORTED: strict return depth");
             int at=Current.Offset;
+            // A val captures the current value and proof facts before later writes.
+            // Keep the declaration in source order in the structured CFG.
+            if(Take("val"))
+            {
+                RefinedQuantity? type = null;
+                string local;
+                if (_index + 1 < tokens.Count && tokens[_index + 1].Text == "=")
+                    local = ReadVerifiedName();
+                else if (_index + 1 < tokens.Count && tokens[_index + 1].Text == ":")
+                {
+                    local = ReadVerifiedName();
+                    Expect(":");
+                    type = ReadRefinedType();
+                }
+                else
+                {
+                    type = ReadRefinedType();
+                    local = ReadVerifiedName();
+                }
+                Expect("="); var value = VerifiedExpression(0); Expect(";");
+                type ??= value.Type;
+                type.Require(value.Type,"E_REFINEMENT_BINDING","immutable snapshot "+local);
+                if(!verifiedLocals.TryAdd(local,type with {Range=value.Type.Range}))
+                    throw new FormatException("E_REFINEMENT_DUPLICATE: duplicate verified binding");
+                verifiedUpperBounds.Add(local,value.UpperBounds);
+                var tail=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
+                tail.Insert(0,new StructuredLet(at,local,IrValueType.I64,value.Expression,StructuredBindingKind.Val));
+                return tail;
+            }
             if(Take("let"))
             {
                 var type=ReadRefinedType();
