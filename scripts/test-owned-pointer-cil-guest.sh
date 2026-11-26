@@ -45,6 +45,9 @@ positive mutable_initializes 'fnc update(mut Pointer<int> q): void { q.write(13)
 mixed_update='fnc update(mut Pointer<int> q): void { q.write(29); }'
 positive mixed_implicit "$helper $mixed_update pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(13); val int before = inspect(p); update(mut p); val int after = inspect(p); p.close(); return before + after; }"
 positive mixed_explicit "$mixed_update $helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(13); val int before = inspect(borrow! p); update(borrow! mut p); val int after = inspect(borrow! p); p.close(); return before + after; }"
+scalar_helper='fnc update(mut Pointer<int> q, int value): void { q.write(value); }'
+positive mutable_scalar "$scalar_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p, 42); val int a = p.read(); p.close(); return a; }"
+positive mutable_scalar_snapshot "$helper $scalar_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(13); val int a = inspect(p); update(borrow! mut p, a + 16); val int b = inspect(p); p.close(); return a + b; }"
 negative() {
   local name="$1" code="$2" source="$3"
   printf '%s\n' "$source" >"$work/$name.atto"
@@ -92,4 +95,10 @@ negative mixed_duplicate E_POINTER_ALIAS "$helper fnc inspect(mut Pointer<int> q
 negative mixed_excess E_POINTER_ALIAS "$helper fnc second(Pointer<int> q): int { return q.read(); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); p.close(); return 0; }"
 negative mixed_uninitialized E_POINTER_INITIALIZE "$helper $mixed_update pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); val int before = inspect(p); update(mut p); p.close(); return before; }"
 negative mixed_closed E_POINTER_LIFETIME "$helper $mixed_update pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); p.close(); update(mut p); return 0; }"
+negative mut_scalar_missing E_POINTER_PROFILE "$scalar_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p); p.close(); return 0; }"
+negative mut_scalar_conflict E_POINTER_AUTHORITY "$scalar_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); update(mut p, p.read()); p.close(); return 0; }"
+negative mut_scalar_metadata E_POINTER_AUTHORITY "$scalar_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); update(mut p, p.len()); p.close(); return 0; }"
+negative mut_scalar_overflow E_POINTER_OVERFLOW "$scalar_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p, 9223372036854775807 + 1); p.close(); return 0; }"
+negative mut_scalar_extra E_POINTER_PROFILE "$scalar_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p, 42, 0); p.close(); return 0; }"
+negative mut_scalar_nested_read E_POINTER_AUTHORITY "$helper $scalar_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); update(mut p, inspect(p)); p.close(); return 0; }"
 echo ATTO_OWNED_POINTER_CIL_NATIVEAOT_PASS

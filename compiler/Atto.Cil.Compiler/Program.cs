@@ -27,12 +27,12 @@ internal sealed record ValueMatch(Expression Subject, List<ValueArm> Arms) : Exp
 internal abstract record Statement;
 internal sealed record LocalBinding(string Name, Expression Initializer) : Statement;
 internal sealed record PrintLine(Expression Value) : Statement;
-internal sealed record MutablePointerCall(string Helper, string Storage) : Statement;
+internal sealed record MutablePointerCall(string Helper, string Storage, Expression? Scalar = null) : Statement;
 internal sealed record ReturnStmt(Expression Value) : Statement;
 // Signed i64 guest results; bool is internal to guards.
 internal enum CheckedType { Int, Bool, Void }
 internal sealed record Function(string Name, List<string> Args,
-    CheckedType ReturnType, List<Statement> Body, long? MutableWrite = null);
+    CheckedType ReturnType, List<Statement> Body, long? MutableWrite = null, bool MutableScalar = false);
 
 // Typed, local-only read lease. Source pointer authority is verified and
 // erased before ordinary CIL lowering; it is never represented as a raw
@@ -316,8 +316,20 @@ internal sealed class Parser
         PointerNeed("<"); PointerNeed("int"); PointerNeed(">");
         var parameter = PointerName();
         if (name == parameter) throw new CompilerError("E_POINTER_ALIAS", "helper name shadows parameter");
+        string? scalar = null;
+        if (Eat(","))
+        {
+            PointerNeed("int"); scalar = PointerName();
+            if (scalar == parameter || scalar == name)
+                throw new CompilerError("E_POINTER_ALIAS", "duplicate mutable helper formal");
+        }
         PointerNeed(")"); PointerNeed(":"); PointerNeed("void"); PointerNeed("{");
         PointerNeed(parameter); PointerNeed("."); PointerNeed("write"); PointerNeed("(");
+        if (scalar != null)
+        {
+            PointerNeed(scalar); PointerNeed(")"); PointerNeed(";"); PointerNeed("}");
+            return new Function(name, ["$exclusive_slot", "$scalar_value"], CheckedType.Void, [], 0, true);
+        }
         bool negative = Eat("-");
         var raw = Peek;
         if (!long.TryParse((negative ? "-" : "") + raw, NumberStyles.AllowLeadingSign,
@@ -343,6 +355,7 @@ internal sealed class Parser
         var cells = new (Expression Expr, long Known)?[16];
         bool live = false;
         int count = 1;
+        bool scalarCallArgument = false;
 
         (Expression Expr, long Known) Bind((Expression Expr, long Known) value)
         {
@@ -388,6 +401,7 @@ internal sealed class Parser
             }
             else if (Eat(owner))
             {
+                if (scalarCallArgument) throw new CompilerError("E_POINTER_AUTHORITY", "conflicting access during mutable loan");
                 RequireLive(); PointerNeed(".");
                 if (Peek is "len" or "size_bytes")
                 {
@@ -414,6 +428,7 @@ internal sealed class Parser
                 var name = PointerName();
                 if (helper != null && helper.MutableWrite == null && name == helper.Name)
                 {
+                    if (scalarCallArgument) throw new CompilerError("E_POINTER_AUTHORITY", "conflicting access during mutable loan");
                     RequireLive();
                     PointerNeed("(");
                     if (Peek == "borrow")
@@ -479,13 +494,23 @@ internal sealed class Parser
                         PointerNeed("!");
                     }
                     PointerNeed("mut", "E_POINTER_AUTHORITY");
-                    PointerNeed(owner, "E_POINTER_AUTHORITY"); PointerNeed(")"); PointerNeed(";");
+                    PointerNeed(owner, "E_POINTER_AUTHORITY");
+                    Expression? scalar = null;
+                    if (mutableHelper.MutableScalar)
+                    {
+                        PointerNeed(",");
+                        scalarCallArgument = true;
+                        var arg = Value();
+                        scalarCallArgument = false;
+                        scalar = arg.Expr; write = arg.Known;
+                    }
+                    PointerNeed(")"); PointerNeed(";");
                     if (count != 1) throw new CompilerError("E_POINTER_BOUNDS", "mutable helper requires singleton");
                     // The old immutable snapshots remain intact. A fresh scalar
                     // local has exclusive address authority only during this call.
                     var cell = Bind((new Literal(0), 0));
                     var storage = ((Arg)cell.Expr).Name;
-                    body.Add(new MutablePointerCall(mutableHelper.Name, storage));
+                    body.Add(new MutablePointerCall(mutableHelper.Name, storage, scalar));
                     cells[0] = (cell.Expr, write);
                 }
                 else
@@ -837,7 +862,9 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             var function = _functions[id];
             if (function.MutableWrite != null)
             {
-                if (function.ReturnType != CheckedType.Void || function.Args.Count != 1 ||
+                if (function.ReturnType != CheckedType.Void ||
+                        function.Args.Count != (function.MutableScalar ? 2 : 1) ||
+                        (function.MutableScalar && (function.Args[1] != "$scalar_value" || function.MutableWrite != 0)) ||
                         function.Args[0] != "$exclusive_slot" || function.Body.Count != 0 ||
                         function.Name == "main")
                     throw new CompilerError("E_POINTER_AUTHORITY", "invalid mutable helper signature");
@@ -865,6 +892,12 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                                 !_symbols.TryGetValue(m.Helper, out var mutableId) ||
                                 _functions[mutableId].MutableWrite == null)
                             throw new CompilerError("E_POINTER_AUTHORITY", "invalid exclusive call");
+                        if (_functions[mutableId].MutableScalar != (m.Scalar != null))
+                            throw new CompilerError("E_POINTER_AUTHORITY", "invalid mutable scalar argument arity");
+                        // Only prior immutable scalar snapshots and checked arithmetic are admitted.
+                        if (m.Scalar != null && (!PureScalar(m.Scalar, m.Storage, 0) ||
+                                WalkExpr(m.Scalar, function, scope, 0) != CheckedType.Int))
+                            throw new CompilerError("E_POINTER_AUTHORITY", "invalid exclusive scalar operand");
                         WalkFunction(mutableId);
                         break;
                     case PrintLine p:
@@ -889,6 +922,19 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 }
             }
             state[id] = 2;
+        }
+
+        bool PureScalar(Expression e, string storage, int depth)
+        {
+            if (depth > 16) return false;
+            return e switch
+            {
+                Literal => true,
+                Arg a => a.Name != storage,
+                Binary b when b.Op is "+" or "-" or "*" =>
+                    PureScalar(b.Left, storage, depth + 1) && PureScalar(b.Right, storage, depth + 1),
+                _ => false
+            };
         }
 
         CheckedType WalkExpr(Expression e, Function owner, HashSet<string> bound, int depth)
@@ -1042,7 +1088,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             if (f.MutableWrite is long write)
             {
                 il.LoadArgument(0);
-                il.LoadConstantI8(write);
+                if (f.MutableScalar) il.LoadArgument(1); else il.LoadConstantI8(write);
                 il.OpCode(ILOpCode.Stind_i8);
                 il.OpCode(ILOpCode.Ret);
             }
@@ -1058,6 +1104,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                         break;
                     case MutablePointerCall m:
                         il.LoadLocalAddress(bindings[m.Storage]);
+                        if (m.Scalar != null) Generate(m.Scalar, f, il, bindings, 0);
                         il.Call(MetadataTokens.MethodDefinitionHandle(_symbols[m.Helper] + 1));
                         break;
                     case PrintLine p:
@@ -1083,7 +1130,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             new BlobEncoder(signature).MethodSignature().Parameters(
                 f.Args.Count,
                 r => { if (f.MutableWrite != null) r.Void(); else r.Type().Int64(); },
-                p => { foreach (var arg in f.Args) p.AddParameter().Type(isByRef: f.MutableWrite != null).Int64(); });
+                p => { foreach (var arg in f.Args) p.AddParameter().Type(isByRef: f.MutableWrite != null && arg == "$exclusive_slot").Int64(); });
             metadata.AddMethodDefinition((f.MutableWrite != null ? MethodAttributes.Private : MethodAttributes.Public) |
                 MethodAttributes.Static | MethodAttributes.HideBySig,
                 MethodImplAttributes.IL, metadata.GetOrAddString(f.Name),
