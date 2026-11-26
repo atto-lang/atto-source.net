@@ -24,7 +24,7 @@ public static partial class OresParser
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576 || !HasVerifiedRefinementPrefix(source))
             throw new FormatException("E_VERIFY_UNSUPPORTED: strict refinement profile required");
-        var tokens = Tokenize(source, strictBoolean: true);
+        var tokens = Tokenize(source, strictBoolean: true, strictFixedArrays: true);
         RejectUnsupportedInvertedClasses(tokens);
         var reader = new Reader(tokens, DotnetHostImportPolicy.DenyAll, source, null) { StrictI64 = true };
         var prelude = reader.ParseVerifiedPrelude();

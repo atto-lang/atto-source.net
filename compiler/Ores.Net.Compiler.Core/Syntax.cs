@@ -117,7 +117,7 @@ public static partial class OresParser
         return stripped;
     }
 
-    private static List<Token> Tokenize(string source, bool allowCaretReturn = false, bool strictBoolean = false)
+    private static List<Token> Tokenize(string source, bool allowCaretReturn = false, bool strictBoolean = false, bool strictFixedArrays = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
@@ -149,7 +149,7 @@ public static partial class OresParser
         ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
-        var lexer = new Lexer(source, allowCaretReturn, strictBoolean);
+        var lexer = new Lexer(source, allowCaretReturn, strictBoolean, strictFixedArrays);
         var tokens = new List<Token>();
         for (;;)
         {
@@ -607,7 +607,7 @@ public static partial class OresParser
             bool exportScopeBracket =
                 (ch == '[' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*$")) ||
                 (ch == ']' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*$"));
-            if (!exportScopeBracket)
+            if (!exportScopeBracket && !strictFixedArrays)
                 SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
             // Scalar and structured CIL frontends must agree: state-changing
             // annotations are compiler effects, never inert metadata. Check
