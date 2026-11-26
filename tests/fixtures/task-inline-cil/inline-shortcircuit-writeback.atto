@@ -1,0 +1,36 @@
+fnc and_case(bool run): int {
+    let int count = 0;
+    let Option<int> state = None;
+    val bool result = run && sync task<bool> {
+        count = count + 2;
+        state = Some(40);
+        return true;
+    };
+    if run {
+        guard result, state.is_some() { return 1; }
+        return count + state.unwrap();
+    } fi
+    guard !result, state.is_none() { return 2; }
+    return count + 42;
+}
+fnc or_case(bool skip): int {
+    let int count = 0;
+    let Option<int> state = None;
+    let bool result = false;
+    result = skip || sync task<bool> {
+        count = count + 3;
+        state = Some(39);
+        return false;
+    };
+    if skip {
+        guard result, state.is_none() { return 3; }
+        return count + 42;
+    } fi
+    guard !result, state.is_some() { return 4; }
+    return count + state.unwrap();
+}
+pub fnc main(): int {
+    guard and_case(true) eq 42, and_case(false) eq 42,
+        or_case(true) eq 42, or_case(false) eq 42 { return 5; }
+    return 42;
+}

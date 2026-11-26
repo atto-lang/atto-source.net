@@ -94,33 +94,72 @@ internal static class OptionI64CompilerTests
         finally { Directory.Delete(temp, recursive: true); }
     }
 
-    private static void CheckTrapOverflowBypassesOption()
+    private static void CheckResultAbi()
     {
-        // trap yields Result<int, Error> (spec ch. 7). This backend has no
-        // verified Result/Error lowering, so every trap spelling fails closed
-        // with E_TRAP_RESULT_UNSUPPORTED. It never falls back to the retired
-        // Option<int> slice, which would also swallow nothing but give the
-        // program a type the Java and LLVM backends reject.
-        foreach (var (label, source) in new (string, string)[]
-        {
-            ("checked overflow", "fnc main():int{val Result<int, Error> x=trap (9223372036854775807+1);return x.unwrap_or(0);}"),
-            ("Result int literal", "pub fnc main():int{val Result<int, Error> wrapped=trap 42;return wrapped.unwrap_or(0);}"),
-            ("Result parenthesized", "fnc main():int{val Result<int, Error> wrapped=trap (40+2);return wrapped.unwrap();}"),
-            ("retired Option literal", "pub fnc main():int{val Option<int> wrapped=trap 42;return wrapped.unwrap_or(0);}"),
-            ("retired Option overflow", "fnc main():int{val Option<int> x=trap (9223372036854775807+1);return x.unwrap_or(0);}"),
-            ("retired is_some probe", "fnc main():int{if (trap 0).is_some(){return 42;}return 0;}"),
-            ("typed helper", "fnc add_one(int x):int{return x+1;}fnc main():int{val Result<int, Error> wrapped=trap add_one(41);return wrapped.unwrap_or(0);}"),
-        })
-        {
-            try { _ = OresStructuredCfgLowering.LowerModule(source); }
-            catch (FormatException e) when (
-                e.Message.Contains("E_TRAP_RESULT_UNSUPPORTED", StringComparison.Ordinal)
-                || e.Message.Contains("Option/Result/trap", StringComparison.Ordinal))
-            {
-                continue;
+        const string source = """
+            fnc get(bool present): Option<int> {
+                guard present { return None; }
+                return Some(-9223372036854775808);
             }
-            throw new Exception("trap reached CFG without Result<int, Error> lowering: " + label);
+            fnc main(): int { return get(true).unwrap_or(0); }
+            """;
+        var module = OresStructuredCfgLowering.LowerModule(source);
+        var producer = module.Helpers.Single();
+        if (producer.ResultType != IrValueType.OptionI64 ||
+            producer.Blocks.Count(block => block.Instructions.Any(op =>
+                op.Opcode == CfgOpcode.PackOptionI64)) != 2 ||
+            module.Main.Blocks.SelectMany(block => block.Instructions)
+                .Count(op => op.Opcode == CfgOpcode.Call) != 1)
+            throw new Exception("Option helper must package both returns and execute exactly one call");
+
+        var temp = Path.Combine(Path.GetTempPath(), "atto-option-result-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var path = Path.Combine(temp, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(module, path);
+            using var assembly = AssemblyDefinition.ReadAssembly(path);
+            var abi = assembly.MainModule.Types.Single(type => type.Name == "OptionI64Result");
+            var method = assembly.MainModule.Types.Single(type => type.Name == "OresProgram")
+                .Methods.Single(candidate => candidate.Name == "helper_get");
+            if (!abi.IsValueType || abi.IsPublic || !method.IsPrivate ||
+                method.ReturnType.FullName != abi.FullName || !abi.Fields.Select(field =>
+                    field.FieldType.MetadataType).SequenceEqual(new[] { MetadataType.Boolean, MetadataType.Int64 }))
+                throw new Exception("Option helper must return a private tagged value type");
         }
+        finally { Directory.Delete(temp, recursive: true); }
+    }
+
+    private static void CheckTrapUsesTypedResultAndNarrowHandlers()
+    {
+        const string source = """
+            fnc checked_division(int divisor): int { return 7 / divisor; }
+            fnc main(): int {
+              val Result<int, Error> result = trap! checked_division(0);
+              return result.is_err() ? 42 : 0;
+            }
+            """;
+        var cfg = OresStructuredCfgLowering.LowerModule(source);
+        var trap = cfg.Main.Blocks.SelectMany(block => block.Instructions)
+            .Single(op => op.Opcode == CfgOpcode.TrapCall);
+        if (trap.Type != IrValueType.ResultI64 || cfg.Helpers.Single(helper =>
+                helper.Name == trap.Target).ResultType != IrValueType.ResultI64)
+            throw new Exception("trap must use the same verified Result type at both call boundaries");
+        var directory = Path.Combine(Path.GetTempPath(), "atto-result-cil-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var file = Path.Combine(directory, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(cfg, file);
+            using var assembly = AssemblyDefinition.ReadAssembly(file);
+            var run = assembly.MainModule.Types.Single(type => type.Name == "OresProgram")
+                .Methods.Single(method => method.Name == "Run");
+            var catches = run.Body.ExceptionHandlers.Select(handler => handler.CatchType.FullName);
+            if (!catches.SequenceEqual(new[] { "System.OverflowException", "System.DivideByZeroException",
+                    "Ores.Net.Runtime.GuestThrowSignal" }))
+                throw new Exception("Trap must catch only ordinary guest throws and checked arithmetic faults");
+        }
+        finally { Directory.Delete(directory, recursive: true); }
     }
 
     private static void Reject(string source, string label)
@@ -291,8 +330,15 @@ internal static class OptionI64CompilerTests
             42, "name-first scalar helper MethodDef / emitted CIL");
         CheckModuleHelper("fnc sum(int x,y:int):int{return x+y;}fnc main():int{return sum(20,22);}",
             42, "mixed declaration order helper MethodDef / emitted CIL");
+        CheckModuleHelper("fnc get(Option<int> x):int{return x.unwrap_or(0);}fnc main():int{return get(Some(42));}",
+            42, "required named Option type parameter with a present payload");
+        CheckModuleHelper("fnc get(int? x):int{return x.unwrap_or(42);}fnc main():int{return get(None);}",
+            42, "required suffix Option type parameter with an absent payload");
+        CheckModuleHelper("fnc get(x:int?,bias:int):int{return x.unwrap_or(0)+bias;}fnc main():int{return get(Some(40),2);}",
+            42, "name-first Option parameter followed by an independent scalar slot");
+        CheckResultAbi();
         CheckEagerFallbackOverflow();
-        CheckTrapOverflowBypassesOption();
+        CheckTrapUsesTypedResultAndNarrowHandlers();
         CheckOptionEqualityBoundary(false, 42, false, 7, true,
             "None equals None even with different inactive payloads");
         CheckOptionEqualityBoundary(false, long.MinValue, false, long.MaxValue, true,
@@ -325,13 +371,11 @@ internal static class OptionI64CompilerTests
             ("no bool? layout alias", "fnc main():int{val bool? x=None;return 0;}"),
             ("no int?? unproved nesting", "fnc main():int{val int?? x=None;return 0;}"),
             ("no Option<int>? implicit flatten", "fnc main():int{val Option<int>? x=None;return 0;}"),
-            ("no int? helper parameter ABI", "fnc get(int? x):int{return 42;}fnc main():int{return 42;}"),
-            ("no int? helper result ABI", "fnc get():int?{return Some(42);}fnc main():int{return 42;}"),
+            ("no implicit scalar return as int?", "fnc get():int?{return 42;}fnc main():int{return 42;}"),
             ("no bare scalar omission", "fnc get(int x?):int{return x;}fnc main():int{return 42;}"),
             ("no unlowered parameter default", "fnc get(int x?=42):int{return x;}fnc main():int{return 42;}"),
             ("no tagged/untagged assignment", "fnc main():int{let Option<int> x=None;x=42;return 0;}"),
             ("no wrong fallback", "fnc main():int{return Some(42).unwrap_or(false);}"),
-            ("no unsafe unwrap", "fnc main():int{return Some(42).unwrap();}"),
             ("no unknown Option method", "fnc main():int{return None.flatten();}"),
             ("is_none rejects arguments", "fnc main():int{if None.is_none(42){return 1;}return 0;}"),
             ("is_none is bool, not i64", "fnc main():int{return None.is_none();}"),
@@ -346,9 +390,9 @@ internal static class OptionI64CompilerTests
             ("trap unary precedence is explicit", "fnc main():int{return (trap 7)+2;}"),
             ("no nested Some coercion", "fnc main():int{return Some(None).unwrap_or(0);}"),
             ("no Option<bool> erasure", "fnc main():int{val Option<bool> x=None;return 0;}"),
-            ("no Option helper argument ABI", "fnc get(Option<int> x):int{return 42;}fnc main():int{return 42;}"),
-            ("no Option helper result ABI", "fnc get():Option<int>{return Some(42);}fnc main():int{return 42;}"),
-            ("no name-first required Option helper ABI", "fnc get(x:int?):int{return 42;}fnc main():int{return 42;}"),
+            ("no omitted required Option argument", "fnc get(Option<int> x):int{return 42;}fnc main():int{return get();}"),
+            ("no implicit scalar argument promotion", "fnc get(Option<int> x):int{return 42;}fnc main():int{return get(42);}"),
+            ("no scalar use of returned Option", "fnc get():Option<int>{return Some(42);}fnc main():int{return get();}"),
             ("no name-first omittable scalar", "fnc get(x?:int):int{return 42;}fnc main():int{return 42;}"),
             ("no name-first omittable Option", "fnc get(x?:int?):int{return 42;}fnc main():int{return 42;}"),
             ("no name-first scalar default", "fnc get(x?:int=42):int{return x;}fnc main():int{return 42;}"),

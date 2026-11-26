@@ -1,0 +1,7 @@
+pub fnc main(): int {
+  do match true over
+    on true -> { return 42; }
+    on false -> { return; }
+  end
+  return 0;
+}

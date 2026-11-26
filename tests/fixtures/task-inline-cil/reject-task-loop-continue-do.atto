@@ -1,0 +1,10 @@
+pub fnc main(): int {
+    loop {
+        val int value = sync task<int> {
+            do if true then continue; fi
+            return 42;
+        };
+        return value;
+    }
+    return 0;
+}

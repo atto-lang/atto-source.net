@@ -39,6 +39,7 @@ expect_exit() {
 }
 
 for form in return caret; do
+  rm -f "$guest"
   dotnet run --no-build -c Release --project "$compiler" -- \
     "fixtures/match-return-forms-v1/native-${form}-scalar.atto" "$guest"
   test -s "$guest"
@@ -72,13 +73,22 @@ check_rejected() {
 check_rejected match-guard-no-fallback E_MATCH fail/
 check_rejected match-guard-block-fallthrough E_RETURN fail/
 check_rejected unsupported-adt-is-pattern E_UNSUPPORTED_TYPE negative/
-# Float helpers are now supported, but an int-returning match arm must not
-# silently truncate int/int -> float into integer match results.
-check_rejected int-division-float-required E_DIVISION_FLOAT_RESULT negative/
-# Intersect the two compiler changes: scalar-only match arms and subjects
-# cannot leak an unboxed float into i64 pattern comparison/result CIL.
-check_rejected float-match-result E_TYPE negative/
-check_rejected float-match-subject E_TYPE negative/
+# Standalone < is tokenized only to deliver typed unsupported diagnostics.
+# It must never silently acquire scalar comparison semantics in this profile.
+less_input=artifacts/unsupported-less.atto
+less_output=artifacts/UnsupportedLess.dll
+printf 'pub fnc main(): int { return 1 < 2; }\n' >"$less_input"
+rm -f "$less_output"
+set +e
+dotnet run --no-build -c Release --project "$compiler" -- "$less_input" "$less_output" >/tmp/atto-less.out 2>/tmp/atto-less.err
+less_status=$?
+set -e
+test "$less_status" -eq 2 && grep -Fq E_PARSE: /tmp/atto-less.err && test ! -e "$less_output"
+rm -f "$less_input"
+echo "PASS unsupported standalone less-than no-artifact"
+
+# Signed i64 division in a match is covered by checked-i64-division.atto
+# in test-cil-guest.sh. The old widening probes remain historical fixtures.
 for entry in \
     guard-not-bool:E_TYPE \
     duplicate-unreachable:E_MATCH \
@@ -94,6 +104,7 @@ done
 # match subject. This tests the callable-subject path and scoped binder reuse,
 # including a different 42 exit oracle from the two prior 4-exit guests.
 test "$(git hash-object fixtures/match-return-forms-v1/native-subject-once-scalar.atto)" = "cb9dfe11e65af466c6a520254ed789ce089d1c86"
+rm -f "$guest"
 dotnet run --no-build -c Release --project "$compiler" -- \
   fixtures/match-return-forms-v1/native-subject-once-scalar.atto "$guest"
 test -s "$guest"

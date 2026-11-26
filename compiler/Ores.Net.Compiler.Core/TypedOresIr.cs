@@ -8,13 +8,18 @@ public enum IrValueType
     Bool,
     // Method result only. Void must not be an SSA value, local, or parameter.
     Void,
-    // Source-only tagged (is_some:bool, value:i64) pair in the closed
-    // structured Option<int> slice. It NEVER occupies a single CFG SSA slot
-    // or CIL local: only its verified primitive components can be emitted.
+    // Closed structured Option<int>. Locals and parameters use scalar pairs;
+    // verified helper results use a private CIL value type at the call boundary.
     OptionI64,
     // Source-only bounded, immutable Array<int>: its elements are distinct
     // verified i64 SSA values, not CLR arrays or native guest pointers.
-    FixedArrayI64
+    FixedArrayI64,
+    GuestError,
+    ResultI64,
+    ResultOptionI64,
+    GuestText,
+    ResultI64Text,
+    ResultI64TextOrError
 }
 
 public enum IrOpcode
@@ -263,6 +268,17 @@ public static class OresIrLowering
                         results.Push(EmitDotnetAbs(results.Pop()));
                         break;
                     }
+                    case EntryScalarProjection projection:
+                    {
+                        if (results.Count < 2)
+                            throw new FormatException("IR lowering Entry operand underflow");
+                        int right = results.Pop();
+                        int left = results.Pop();
+                        // Every SSA instruction is executed in order, including
+                        // the unused value; selecting an earlier ID is legal.
+                        results.Push(projection.SelectKey ? left : right);
+                        break;
+                    }
                     case DotnetMathMaxI64:
                     {
                         if (results.Count < 2)
@@ -332,6 +348,11 @@ public static class OresIrLowering
                     case DotnetMathAbsI64 host:
                         pending.Push(new Pending(node, true));
                         pending.Push(new Pending(host.Value, false));
+                        break;
+                    case EntryScalarProjection projection:
+                        pending.Push(new Pending(node, true));
+                        pending.Push(new Pending(projection.Second, false));
+                        pending.Push(new Pending(projection.First, false));
                         break;
                     case DotnetMathMaxI64 hostMax:
                         pending.Push(new Pending(node, true));

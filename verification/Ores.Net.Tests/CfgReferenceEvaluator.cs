@@ -45,6 +45,7 @@ internal static class CfgReferenceEvaluator
                     CfgOpcode.CheckedAdd => checked(Left() + Right()),
                     CfgOpcode.CheckedSubtract => checked(Left() - Right()),
                     CfgOpcode.CheckedMultiply => checked(Left() * Right()),
+                    CfgOpcode.BitXorI64 => Left() ^ Right(),
                     CfgOpcode.ShiftLeftI64 => Left() << ShiftDistance(Right()),
                     CfgOpcode.ShiftRightLogicalI64 => (long)((ulong)Left() >> ShiftDistance(Right())),
                     CfgOpcode.ShiftRightArithmeticI64 => Left() >> ShiftDistance(Right()),

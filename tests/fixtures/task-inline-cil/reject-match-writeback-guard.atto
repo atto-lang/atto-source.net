@@ -1,0 +1,8 @@
+pub fnc main(): int {
+    let int count = 0;
+    val int result = match true over
+        on true when sync task<bool> { count = 2; return false; } -> 1;
+        on _ -> 42;
+    end;
+    return result + count;
+}
