@@ -2745,13 +2745,30 @@ public static partial class OresStructuredParser
             index++;
             Require(test, IrValueType.Bool, "Conditional test requires bool");
             bool ternaryWritebackRoot = conditionalWritebackRoot == expressionStart;
-            var yes = ReadConditionalStatementArm(depth + 1, ternaryWritebackRoot, ":");
+            var yes = ReadTernaryArm(depth + 1, ternaryWritebackRoot, ":");
             Expect(":");
-            var no = ReadConditionalStatementArm(depth + 1, ternaryWritebackRoot, ";",
+            var no = ReadTernaryArm(depth + 1, ternaryWritebackRoot, ";",
                 conditionalOnly: true);
             if (yes.Type != no.Type)
                 throw new FormatException($"Conditional result types differ at offset {at}");
             return CheckedConditional(at, test, yes, no);
+        }
+        // A direct brace always commits to an explicit result block.
+        // Single-result blocks require no new local lifetime or task writeback
+        // authority. Preserve the existing typed conditional CFG join.
+        private StructuredExpr ReadTernaryArm(int depth, bool root, string terminator,
+            bool conditionalOnly = false)
+        {
+            Budget(depth);
+            if (!Take("{"))
+                return ReadConditionalStatementArm(depth, root, terminator, conditionalOnly);
+            if (!Take("return") && !Take("^"))
+                throw Error("E_VALUE_ARM: ternary block requires explicit return or ^; lexical prefixes are not lowered");
+            var value = ReadConditionalStatementArm(depth + 1, false, "}");
+            Take(";");
+            if (!Take("}"))
+                throw Error("E_VALUE_ARM: single-result ternary block requires closing '}'");
+            return value;
         }
         private StructuredExpr LogicalOr(int depth)
         {
