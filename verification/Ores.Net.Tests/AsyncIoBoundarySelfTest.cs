@@ -56,13 +56,18 @@ internal static class AsyncIoBoundarySelfTest
         const string scalar = "internal static long ReadCompletedI64(Task<long> pending) { ArgumentNullException.ThrowIfNull(pending); if (!pending.IsCompleted) throw new InvalidOperationException(); return pending.GetAwaiter().GetResult(); }";
         bool ForbiddenWait(string value, string file) =>
             Forbidden.Any(r => r.Pattern.IsMatch(ReviewedCompletedTaskCode(value, file)));
-        if (ForbiddenWait(completed + scalar, "GuestAwaitResults.cs") ||
-            !ForbiddenWait(completed + scalar, "OtherRuntime.cs") ||
-            !ForbiddenWait(completed.Replace("!pending.IsCompleted", "pending.IsCompleted") + scalar, "GuestAwaitResults.cs") ||
-            !ForbiddenWait(completed + scalar.Replace("if (!pending.IsCompleted) throw new InvalidOperationException();", ""), "GuestAwaitResults.cs") ||
-            !ForbiddenWait(completed + scalar + " another.GetAwaiter().GetResult();", "GuestAwaitResults.cs") ||
-            !ForbiddenWait(completed + completed + scalar, "GuestAwaitResults.cs"))
-            throw new Exception("FAILED: completed-task audit admitted an unguarded or duplicate wait");
+        if (ForbiddenWait(completed + "\n" + scalar, "GuestAwaitResults.cs"))
+            throw new Exception("FAILED: reviewed completed-task pair was denied");
+        foreach (var (name, code, file) in new[] {
+            ("wrong file", completed + "\n" + scalar, "OtherRuntime.cs"),
+            ("inverted guard", completed.Replace("!pending.IsCompleted", "pending.IsCompleted") + "\n" + scalar, "GuestAwaitResults.cs"),
+            ("missing guard", completed + "\n" + scalar.Replace("if (!pending.IsCompleted) throw new InvalidOperationException();", ""), "GuestAwaitResults.cs"),
+            ("extra wait", completed + "\n" + scalar + "\n another.GetAwaiter().GetResult();", "GuestAwaitResults.cs"),
+            ("duplicate method", completed + "\n" + completed + "\n" + scalar, "GuestAwaitResults.cs")
+        }) {
+            if (!ForbiddenWait(code, file))
+                throw new Exception("FAILED: completed-task audit admitted " + name);
+        }
         string root = FindRepositoryRoot();
         string runtime = Path.Combine(root, "runtime");
         int scanned = 0;
@@ -127,7 +132,7 @@ internal static class AsyncIoBoundarySelfTest
             if (Regex.Matches(code, pattern, RegexOptions.CultureInvariant).Count != 1)
                 return code;
         foreach (var pattern in patterns)
-            code = Regex.Replace(code, pattern, "VerifiedCompletedTaskObservation", RegexOptions.CultureInvariant);
+            code = Regex.Replace(code, pattern, " VerifiedCompletedTaskObservation ", RegexOptions.CultureInvariant);
         return code;
     }
 
