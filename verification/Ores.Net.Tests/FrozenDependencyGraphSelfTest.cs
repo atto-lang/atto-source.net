@@ -91,6 +91,7 @@ internal static class FrozenDependencyGraphSelfTest
         Deny("E_UNBOUND",()=>OresStructuredParser.CompileFrozenScalar(fromB,new[]{noAuthority,c}));
         Console.WriteLine("FROZEN_PROVIDER_NAMESPACE|three-packages|warm-identical|seven-denials");
     }
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
     internal static void EmitPersistentCilGuests(string output,string lane)
     {
         if(!OperatingSystem.IsLinux())throw new PlatformNotSupportedException("Linux fixture only");
@@ -120,6 +121,19 @@ internal static class FrozenDependencyGraphSelfTest
             foreach(var file in slots){System.IO.File.Move(file,file+".saved");System.IO.File.CreateSymbolicLink(file,file+".saved");}
             try{DenyPath(()=>session.Compile(main,new[]{c,d},record,pin,master));}
             finally{foreach(var file in slots){System.IO.File.Delete(file);System.IO.File.Move(file+".saved",file);}}
+            // Test both nonregular and multiply linked inodes without opening
+            // them as streams. A bounded external process creates the fixtures.
+            static void Run(string command,params string[] args){
+                using var p=new System.Diagnostics.Process{StartInfo=new System.Diagnostics.ProcessStartInfo(command){UseShellExecute=false}};
+                foreach(var arg in args)p.StartInfo.ArgumentList.Add(arg);
+                if(!p.Start()||!p.WaitForExit(10000)||p.ExitCode!=0)throw new InvalidOperationException("fixture command failed");
+            }
+            foreach(var file in slots)Run("ln",file,file+".hard");
+            try{DenyPath(()=>session.Compile(main,new[]{c,d},record,pin,master));}
+            finally{foreach(var file in slots)System.IO.File.Delete(file+".hard");}
+            foreach(var file in slots){System.IO.File.Move(file,file+".saved");Run("mkfifo",file);System.IO.File.SetUnixFileMode(file,System.IO.UnixFileMode.UserRead|System.IO.UnixFileMode.UserWrite);}
+            try{DenyPath(()=>session.Compile(main,new[]{c,d},record,pin,master));}
+            finally{foreach(var file in slots){System.IO.File.Delete(file);System.IO.File.Move(file+".saved",file);}}
             string alias=root+"-alias";System.IO.Directory.CreateSymbolicLink(alias,root);
             try{DenyPath(()=>new PersistentFrozenCilSession(alias,"tenant/a",compiler,Sha(Bytes("fixture-net10-compiler"))));}
             finally{System.IO.Directory.Delete(alias);}
@@ -127,7 +141,7 @@ internal static class FrozenDependencyGraphSelfTest
             System.IO.Directory.CreateDirectory(root,System.IO.UnixFileMode.UserRead|System.IO.UnixFileMode.UserWrite|System.IO.UnixFileMode.UserExecute);
             try{DenyPath(()=>session.Compile(main,new[]{c,d},record,pin,master));}
             finally{System.IO.Directory.Delete(root);System.IO.Directory.Move(moved,root);}
-            Console.WriteLine("NET_DESCRIPTOR|symlink|root-swap|ancestor-denied");
+            Console.WriteLine("NET_DESCRIPTOR|symlink|hardlink|fifo|root-swap|ancestor-denied");
             foreach(var file in System.IO.Directory.GetFiles(root,"slot-*")){
                 var bytes=System.IO.File.ReadAllBytes(file);bytes[80]^=1;System.IO.File.WriteAllBytes(file,bytes);
             }
