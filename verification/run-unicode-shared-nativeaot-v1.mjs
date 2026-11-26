@@ -33,6 +33,29 @@ try{
    if(c.expect==='reject'){
     const diagnostic=r.stderr.trim();
     const stray=['postfix','composite-eq','composite-equal','unicode-not-not-a-bang-keyword'].includes(c.id)&&/expected.*;|expected.*semicolon/i.test(diagnostic);
+    // Preserve the exact-source oracle. A distinct companion fixture exercises
+    // the operator in a well-formed entrypoint profile; never counts as a
+    // replacement for the original case's diagnostic.
+    const helperIds=['postfix','composite-eq','composite-equal'];
+    let witness=null;
+    if(helperIds.includes(c.id)){
+      witness=c.source.replace('pub fnc main(bool b): bool','fnc probe(bool b): bool')+
+        ' pub fnc main(): int { return 42; }';
+    }else if(c.id==='unicode-not-not-a-bang-keyword'){
+      witness='pub fnc main(): int { val int copy = 1; return copy¬ 42; }';
+    }
+    if(witness!==null){
+      const witnessSource=join(dir,'operator-witness.atto'), witnessOut=join(dir,'operator-witness.dll');
+      writeFileSync(witnessSource,witness,'utf8');
+      const w=run('dotnet',[compiler,'compile-structured',witnessSource,'--out',witnessOut]);
+      const wDiagnostic=w.stderr.trim();
+      const passed=!w.error&&!w.signal&&w.status===1&&!existsSync(witnessOut)&&
+        /Expected ';' at offset [0-9]+$/i.test(wDiagnostic);
+      row.operatorWitness={sourceSha256:hash(readFileSync(witnessSource)),compilerExit:w.status,
+        artifact:existsSync(witnessOut),diagnostic:wDiagnostic,status:passed?'PASS':'FAIL'};
+      console.log('UNICODE_OPERATOR_WITNESS '+JSON.stringify({id:c.id,...row.operatorWitness}));
+      if(!passed)throw Error('operator witness failed: '+wDiagnostic);
+    }
     if(r.status!==1||row.artifact||!diagnostic||(!stray&&!new RegExp(c.diagnostic,'i').test(diagnostic))||/entrypoint|main must have signature|file not found|could not execute|Unhandled exception|unsupported feature/i.test(diagnostic))throw Error('unexpected rejection: '+diagnostic);
     row.diagnostic=diagnostic;
    }else{
