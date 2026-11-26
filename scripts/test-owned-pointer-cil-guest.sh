@@ -42,6 +42,9 @@ positive mutable_implicit "$mut_helper pub fnc main(): int { let mut Pointer<int
 positive mutable_explicit "$mut_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(borrow! mut p); val int a = p.read(); p.close(); return a; }"
 positive mutable_preserves_snapshot 'fnc update(mut Pointer<int> q): void { q.write(29); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(13); val int before = p.read(); update(mut p); val int after = p.read(); p.close(); return before + after; }'
 positive mutable_initializes 'fnc update(mut Pointer<int> q): void { q.write(13); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); update(mut p); val int before = p.read(); p.write(29); val int after = p.read(); p.close(); return before + after; }'
+mixed_update='fnc update(mut Pointer<int> q): void { q.write(29); }'
+positive mixed_implicit "$helper $mixed_update pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(13); val int before = inspect(p); update(mut p); val int after = inspect(p); p.close(); return before + after; }"
+positive mixed_explicit "$mixed_update $helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(13); val int before = inspect(borrow! p); update(borrow! mut p); val int after = inspect(borrow! p); p.close(); return before + after; }"
 negative() {
   local name="$1" code="$2" source="$3"
   printf '%s\n' "$source" >"$work/$name.atto"
@@ -85,4 +88,8 @@ negative mut_borrow_readonly E_POINTER_AUTHORITY "$mut_helper pub fnc main(): in
 negative mut_borrow_extra_argument E_POINTER_PROFILE "$mut_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p, mut p); p.close(); return 0; }"
 negative mut_borrow_no_close E_POINTER_LIFETIME "$mut_helper pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p); return 0; }"
 negative mut_borrow_helper_close E_POINTER_PROFILE 'fnc update(mut Pointer<int> q): void { q.close(); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p); p.close(); return 0; }'
+negative mixed_duplicate E_POINTER_ALIAS "$helper fnc inspect(mut Pointer<int> q): void { q.write(42); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); p.close(); return 0; }"
+negative mixed_excess E_POINTER_ALIAS "$helper fnc second(Pointer<int> q): int { return q.read(); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); p.close(); return 0; }"
+negative mixed_uninitialized E_POINTER_INITIALIZE "$helper $mixed_update pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); val int before = inspect(p); update(mut p); p.close(); return before; }"
+negative mixed_closed E_POINTER_LIFETIME "$helper $mixed_update pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); p.close(); update(mut p); return 0; }"
 echo ATTO_OWNED_POINTER_CIL_NATIVEAOT_PASS
