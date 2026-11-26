@@ -211,6 +211,41 @@ internal static class SelectContinuationFenceSelfTest
                 "256-round terminal lifecycle race preserves ticket isolation");
         }
 
+        // A logical claim is not physical retirement. Stop and rollover
+        // must respect the live execution lease, even after the slot clears.
+        var leased = new SelectContinuationFence(maxTickets: 2);
+        var claimedTicket = leased.Register(1);
+        var pendingTicket = leased.Register(1);
+        var execution = leased.TryClaim(claimedTicket)
+            ?? throw new Exception("execution claim unexpectedly failed");
+        Require(leased.Executing == 1 && leased.PendingTickets == 1,
+            "claim preserves physical credit");
+        Require(!leased.Advance(1) && leased.TryClaim(claimedTicket) is null,
+            "cannot advance or replay while executing");
+        Reject<InvalidOperationException>(() => _ = leased.Register(1),
+            "physical capacity retained during execution");
+        Require(leased.Close() && !pendingTicket.Active && !leased.RetirementReady,
+            "terminal close revokes pending but waits for physical execution");
+        int releases = 0;
+        Parallel.For(0, 128, _ =>
+        {
+            if (execution.Close()) Interlocked.Increment(ref releases);
+        });
+        Require(releases == 1 && leased.Executing == 0 && leased.RetirementReady,
+            "lease retires exactly once under concurrent close");
+        var reusable = new SelectContinuationFence(maxTickets: 1);
+        var previous = reusable.Register(1);
+        using (var lease = reusable.TryClaim(previous)
+            ?? throw new Exception("claim failed"))
+        {
+            Require(!reusable.Advance(1), "advance fenced by live lease");
+        }
+        Require(reusable.Advance(1), "advance succeeds after disposal");
+        var successor = reusable.Register(2);
+        Require(reusable.TryClaim(previous) is null && successor.Active,
+            "old ticket cannot claim successor generation");
+        Require(successor.Close(), "successor cleanup");
+
         Console.WriteLine("Select continuation fence lifecycle checks passed");
     }
 }
