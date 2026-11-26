@@ -309,7 +309,13 @@ internal static class StructuredStaticAbiTests
         var ctor = typeof(VerifiedCfgModule).GetConstructors(
             System.Reflection.BindingFlags.Instance |
             System.Reflection.BindingFlags.NonPublic).Single();
-        return (VerifiedCfgModule)ctor.Invoke(new object[] { main, helpers });
+        var parameters = ctor.GetParameters();
+        if (parameters.Length != 4 || !parameters[2].ParameterType.IsGenericType ||
+            !parameters[3].ParameterType.IsGenericType)
+            throw new Exception("Unexpected verified CFG module constructor contract");
+        return (VerifiedCfgModule)ctor.Invoke(new object[] { main, helpers,
+            Array.CreateInstance(parameters[2].ParameterType.GetGenericArguments()[0], 0),
+            Array.CreateInstance(parameters[3].ParameterType.GetGenericArguments()[0], 0) });
     }
 
     private static void RejectForgedModule(VerifiedCfgModule module, string label)

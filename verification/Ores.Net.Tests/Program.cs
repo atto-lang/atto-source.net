@@ -3,6 +3,15 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+if (args.Length == 1 && args[0] == "--directional-value-pipe")
+{
+    CriticalSuspendsBoundaryTests.Run();
+    DirectionalValuePipeStructuredTests.Run();
+    Console.WriteLine("DIRECTIONAL_VALUE_PIPE_AND_EFFECT_BOUNDARY_PASS");
+    return;
+}
+
+
 if (args is ["--strict-i64"])
 {
     StrictI64ProofTests.Run();

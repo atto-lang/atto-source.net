@@ -1,0 +1,83 @@
+name: Shared Boolean composition NativeAOT
+on:
+  pull_request:
+    paths:
+      - 'compiler/**'
+      - 'host/**'
+      - 'runtime/**'
+      - 'scripts/publish-linux.sh'
+      - 'scripts/publish-windows.ps1'
+      - 'verification/assert*'
+      - 'tests/fixtures/core-types-v1/bool-call-composition-positive.atto'
+      - 'contracts/logical-word-operators-v1/module-methoddef.atto'
+      - 'Directory.Build.props'
+      - 'global.json'
+      - '.github/workflows/shared-bool-nativeaot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source and canonical shared fixture
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git rev-parse HEAD:tests/fixtures/core-types-v1/bool-call-composition-positive.atto)" = 823fd7cf37b8303880057df2b3b436daf5cd08a8
+          git show HEAD:tests/fixtures/core-types-v1/bool-call-composition-positive.atto > "$RUNNER_TEMP/shared-bool.atto"
+          test "$(git hash-object --no-filters "$RUNNER_TEMP/shared-bool.atto")" = 823fd7cf37b8303880057df2b3b436daf5cd08a8
+          test "$(git rev-parse HEAD:contracts/logical-word-operators-v1/module-methoddef.atto)" = e55a0c9a1c004f4b64d318c7cdd25cc4b5873d64
+          echo "EXACT_SOURCE_SHA=$EXPECTED_HEAD EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Linux NativeAOT toolchain
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev binutils file
+      - name: Linux native control and byte-identical guest
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/publish-linux.sh contracts/logical-word-operators-v1/module-methoddef.atto artifacts/native-control --structured
+          control="$(artifacts/native-control/linux-x64/oreslang-app)"
+          test "$control" = 42
+          echo NET_NATIVE_CONTROL_42
+          bash scripts/publish-linux.sh "$RUNNER_TEMP/shared-bool.atto" artifacts/shared-bool --structured
+          observed="$(artifacts/shared-bool/linux-x64/oreslang-app)"
+          test "$observed" = 0
+          bash verification/assert-linux-native-release.sh artifacts/shared-bool/linux-x64/oreslang-app
+          control="$(artifacts/native-control/linux-x64/oreslang-app)"
+          test "$control" = 42
+          echo NET_SHARED_BOOL_NATIVEAOT_EXECUTED_0
+      - name: Windows native control and byte-identical guest
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./scripts/publish-windows.ps1 -Source contracts/logical-word-operators-v1/module-methoddef.atto -Rid win-x64 -Output artifacts/native-control -Structured
+          if ($LASTEXITCODE -ne 0) { throw 'Native control publish failed' }
+          $control = & ./artifacts/native-control/win-x64/oreslang-app.exe
+          if ($LASTEXITCODE -ne 0 -or ($control -join '').Trim() -cne '42') { throw 'Native control failed' }
+          Write-Output NET_NATIVE_CONTROL_42
+          ./scripts/publish-windows.ps1 -Source (Join-Path $env:RUNNER_TEMP 'shared-bool.atto') -Rid win-x64 -Output artifacts/shared-bool -Structured
+          if ($LASTEXITCODE -ne 0) { throw 'Shared guest publish failed' }
+          $observed = & ./artifacts/shared-bool/win-x64/oreslang-app.exe
+          if ($LASTEXITCODE -ne 0 -or ($observed -join '').Trim() -cne '0') { throw 'Shared Boolean guest failed' }
+          ./verification/assert-native-release.ps1 -Binary ./artifacts/shared-bool/win-x64/oreslang-app.exe -Rid win-x64
+          $control = & ./artifacts/native-control/win-x64/oreslang-app.exe
+          if ($LASTEXITCODE -ne 0 -or ($control -join '').Trim() -cne '42') { throw 'Native control changed' }
+          Write-Output NET_SHARED_BOOL_NATIVEAOT_EXECUTED_0
