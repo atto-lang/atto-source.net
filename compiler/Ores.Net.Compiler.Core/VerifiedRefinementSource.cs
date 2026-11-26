@@ -353,9 +353,15 @@ public static partial class OresParser
                     body.Add(new StructuredLet(at, local, IrValueType.I64, value.Expression, StructuredBindingKind.Val));
                 }
                 int returnAt = Current.Offset;
-                if (!Take("return"))
-                    throw new FormatException("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
-                var returned = VerifiedExpression(0);
+                QuantityTerm returned;
+                if (StrictVerifiedI64) returned = StrictVerifiedReturn(0);
+                else
+                {
+                    if (!Take("return"))
+                        throw new FormatException("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
+                    returned = VerifiedExpression(0);
+                    Expect(";");
+                }
                 declared.Require(returned.Type, "E_REFINEMENT_RETURN", "return from " + name);
                 guaranteed.Require(returned.Type, "E_REFINEMENT_POSTCONDITION", "ensures of " + name);
                 foreach (int upper in upperParameters)
@@ -364,7 +370,6 @@ public static partial class OresParser
                     if (!returned.UpperBounds.Contains(parameter) && !returned.Type.Range.AtMost(required[upper].Range))
                         throw new FormatException($"E_REFINEMENT_POSTCONDITION: cannot prove result <= {parameter}");
                 }
-                Expect(";");
                 Expect("}");
                 body.Add(new StructuredReturn(returnAt, returned.Expression));
                 if (main)
@@ -383,6 +388,129 @@ public static partial class OresParser
                 verifiedFunctions.Add(name, new VerifiedFunction(required, guaranteed, upperParameters));
             }
             throw new FormatException("E_REFINEMENT_EXPORT: verified source requires a public main");
+        }
+
+        private sealed record StrictPredicate(StructuredExpr Expression,
+            Dictionary<string, RefinedQuantity> Yes, Dictionary<string, RefinedQuantity> No);
+        private void StrictFacts(Dictionary<string, RefinedQuantity> facts)
+        {
+            verifiedLocals.Clear();
+            foreach (var pair in facts) verifiedLocals.Add(pair.Key, pair.Value);
+        }
+        private static Dictionary<string, RefinedQuantity> StrictJoin(
+            Dictionary<string, RefinedQuantity> a, Dictionary<string, RefinedQuantity> b)
+        {
+            var result = new Dictionary<string, RefinedQuantity>(StringComparer.Ordinal);
+            foreach (var pair in a) result.Add(pair.Key, pair.Value with { Range = pair.Value.Range.Join(b[pair.Key].Range) });
+            return result;
+        }
+        private static VerifiedI64Range StrictRestrict(VerifiedI64Range range, string op, long value)
+        {
+            try { return op == "neq" ? range.Excluding(value) : range.Constrain(op, value); }
+            catch (FormatException) { return range; } // no vacuous unreachable proof
+        }
+        private bool StrictTakePair(string symbol)
+        {
+            if (Current.Text == symbol + symbol) { _index++; return true; }
+            if (Current.Text != symbol || _index + 1 >= tokens.Count ||
+                tokens[_index+1].Text != symbol || tokens[_index+1].Offset != Current.Offset + 1)
+                return false;
+            _index += 2; return true;
+        }
+        private StrictPredicate StrictReadPredicate(Dictionary<string, RefinedQuantity> incoming, int depth)
+        {
+            if (depth > 16) throw new FormatException("E_UNIT_LIMIT: strict condition depth");
+            StrictFacts(incoming);
+            int at = Current.Offset;
+            if (Take("!"))
+            {
+                var p = StrictReadPredicate(incoming, depth+1);
+                return new(new StructuredConditional(at,p.Expression,new StructuredBool(at,false),
+                    new StructuredBool(at,true),IrValueType.Bool),p.No,p.Yes);
+            }
+            if (Take("("))
+            {
+                var p = StrictOr(incoming,depth+1); Expect(")"); return p;
+            }
+            var left = VerifiedExpression(0);
+            string op = Current.Text;
+            if (op is "=" or "!" or "<" or ">")
+            {
+                _index++;
+                if (Current.Text == "=" && Current.Offset == tokens[_index-1].Offset + op.Length)
+                { op += "="; _index++; }
+            }
+            else _index++;
+            if (op == "==") op = "eq";
+            if (op == "!=") op = "neq";
+            var (kind,inverse) = op switch
+            {
+                "eq" => (StructuredOperator.EqualI64,"neq"),
+                "neq" => (StructuredOperator.NotEqualI64,"eq"),
+                "<" => (StructuredOperator.LessThanI64,">="),
+                "<=" => (StructuredOperator.LessThanOrEqualI64,">"),
+                ">" => (StructuredOperator.GreaterThanI64,"<="),
+                ">=" => (StructuredOperator.GreaterThanOrEqualI64,"<"),
+                _ => throw new FormatException("E_VERIFY_UNSUPPORTED: expected strict comparison")
+            };
+            var right = VerifiedExpression(0);
+            left.Type.Unit.RequireCompatible(right.Type.Unit);
+            var yes = new Dictionary<string,RefinedQuantity>(incoming,StringComparer.Ordinal);
+            var no = new Dictionary<string,RefinedQuantity>(incoming,StringComparer.Ordinal);
+            if (left.Expression is StructuredRead read && incoming.TryGetValue(read.Name,out var type)
+                && right.Type.Range.Minimum == right.Type.Range.Maximum)
+            {
+                yes[read.Name] = type with { Range = StrictRestrict(type.Range,op,right.Type.Range.Minimum) };
+                no[read.Name] = type with { Range = StrictRestrict(type.Range,inverse,right.Type.Range.Minimum) };
+            }
+            return new(new StructuredBinary(at,kind,left.Expression,right.Expression,IrValueType.Bool),yes,no);
+        }
+        private StrictPredicate StrictAnd(Dictionary<string, RefinedQuantity> incoming, int depth)
+        {
+            var p = StrictReadPredicate(incoming,depth); int count=0;
+            while (StrictTakePair("&"))
+            {
+                if (++count>16) throw new FormatException("E_UNIT_LIMIT: strict conjunction budget");
+                var q=StrictReadPredicate(p.Yes,depth);
+                p=new(new StructuredConditional(Current.Offset,p.Expression,q.Expression,
+                    new StructuredBool(Current.Offset,false),IrValueType.Bool),q.Yes,StrictJoin(p.No,q.No));
+            }
+            return p;
+        }
+        private StrictPredicate StrictOr(Dictionary<string, RefinedQuantity> incoming, int depth)
+        {
+            var p=StrictAnd(incoming,depth); int count=0;
+            while (StrictTakePair("|"))
+            {
+                if (++count>16) throw new FormatException("E_UNIT_LIMIT: strict disjunction budget");
+                var q=StrictAnd(p.No,depth);
+                p=new(new StructuredConditional(Current.Offset,p.Expression,new StructuredBool(Current.Offset,true),
+                    q.Expression,IrValueType.Bool),StrictJoin(p.Yes,q.Yes),q.No);
+            }
+            return p;
+        }
+        private QuantityTerm StrictVerifiedReturn(int depth)
+        {
+            if (depth>16) throw new FormatException("E_UNIT_LIMIT: strict return depth");
+            int at=Current.Offset;
+            if (Take("if"))
+            {
+                var incoming=new Dictionary<string,RefinedQuantity>(verifiedLocals,StringComparer.Ordinal);
+                var p=StrictOr(incoming,0);
+                Expect("{");StrictFacts(p.Yes);
+                var yes=StrictVerifiedReturn(depth+1);Expect("}");
+                StrictFacts(p.No);bool alternate=Take("else");
+                if(alternate)Expect("{");
+                var no=StrictVerifiedReturn(depth+1);if(alternate)Expect("}");
+                StrictFacts(incoming);
+                yes.Type.Unit.RequireCompatible(no.Type.Unit);
+                if(yes.Type.I32!=no.Type.I32)throw new FormatException("E_VERIFY_UNSUPPORTED: mixed branch carriers");
+                return new(new StructuredConditional(at,p.Expression,yes.Expression,no.Expression,IrValueType.I64),
+                    yes.Type with { Range=yes.Type.Range.Join(no.Type.Range) },Math.Max(yes.Height,no.Height)+1,
+                    yes.UpperBounds.Intersect(no.UpperBounds).ToArray());
+            }
+            if(!Take("return"))throw new FormatException("E_VERIFY_UNSUPPORTED: strict returning branch requires return");
+            var value=VerifiedExpression(0);Expect(";");return value;
         }
 
         private QuantityTerm AttachVerifiedUnit(QuantityTerm term, string name)
@@ -486,7 +614,8 @@ public static partial class OresParser
                     StructuredOperator.Add => Fits(a+c) && Fits(b+d),
                     StructuredOperator.Subtract => Fits(a-d) && Fits(b-c),
                     StructuredOperator.Multiply => Fits(a*c) && Fits(a*d) && Fits(b*c) && Fits(b*d),
-                    StructuredOperator.DivideQuantity => (c>0 || d<0) && !(a==long.MinValue && c<=-1 && d>=-1),
+                    StructuredOperator.DivideQuantity => !right.Type.Range.ContainsValue(0) &&
+                        !(left.Type.Range.ContainsValue(long.MinValue) && right.Type.Range.ContainsValue(-1)),
                     _ => false
                 };
                 if (!proven) throw new FormatException("E_VERIFY_UNPROVEN: signed arithmetic may overflow or divide by zero");
