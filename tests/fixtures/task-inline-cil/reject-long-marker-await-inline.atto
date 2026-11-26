@@ -1,0 +1,6 @@
+pub suspends fnc main(): int {
+    val int result = sync task<int> {
+        return await 42;
+    };
+    return result;
+}

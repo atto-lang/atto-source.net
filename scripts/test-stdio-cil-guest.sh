@@ -90,7 +90,7 @@ for entry in \
   stdio-too-many-arguments:E_STDIO \
   stdio-after-return:E_RETURN \
   stdio-nonint:E_TYPE \
-  float-stdio-nonint:E_TYPE \
+  float-stdio-nonint:E_RETURN_TYPE \
   stdio-missing-return:E_PARSE; do
   name="${entry%%:*}"
   code="${entry#*:}"

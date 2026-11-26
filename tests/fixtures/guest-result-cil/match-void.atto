@@ -1,0 +1,19 @@
+fnc choose(bool enabled): int {
+  let int count = 0;
+  do match enabled over {
+    on true {
+      do match Some(39) over
+        on None -> { return; }
+        on Some(n) -> { count = n; ^ void; }
+      end
+      if count > 0 { count = count + 1; return void; } fi
+      count = 99;
+    }
+    on false { count = 1; }
+  }
+  return count + 1;
+}
+
+pub fnc main(): int {
+  return choose(true) + choose(false) - 1;
+}

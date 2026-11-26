@@ -856,8 +856,9 @@ internal static class StructuredCfgLoweringTests
             "no self-reference");
         Reject("fnc main():int{if true{return 1;}}",
             "all source paths must return");
-        Reject("fnc main():int{return 1/2;}",
-            "source int division requires float lowering");
+        Check("fnc main():int{return -7/3;}", -2, "checked signed integer quotient");
+        Check("fnc main():int{const int quotient=7/2; return quotient;}", 3,
+            "compile-time division agrees with the runtime quotient");
 
         Reject("fnc main():int{val int x=1;x=2;return x;}", "val reassignment");
         Reject("fnc main():int{const int x=1;x=2;return x;}", "const reassignment");

@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val Option<int> result = trap! 42;
+  return 0;
+}

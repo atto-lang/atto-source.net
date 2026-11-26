@@ -11,7 +11,11 @@ using Microsoft.Extensions.Logging;
 namespace Ores.Net.Runtime.Http;
 
 /// <summary>Compiler-bound handler slot; guest closures cannot populate this API.</summary>
-public sealed record ActorHttpEndpoint(ActorKind Kind, Action<ActorContext, ActorHttpExchange> Handle);
+public sealed record ActorHttpEndpoint(ActorKind Kind, Action<ActorContext, ActorHttpExchange> Handle)
+{
+    /// <summary>Optional continuation after a successful response from the initial owner.</summary>
+    public Action<ActorContext, ActorRuntime>? AfterResponse { get; init; }
+}
 
 public sealed class ActorHttpServerOptions
 {
@@ -100,6 +104,7 @@ public sealed class ActorHttpServer : IAsyncDisposable
         timeout.CancelAfter(_options.RequestTimeout);
         HttpExchangeLease? lease = null; ActorRef actor = default; byte[]? body = null;
         Task rootTermination = Task.CompletedTask;
+        Task responseContinuation = Task.CompletedTask;
         try
         {
             body = await ReadBodyAsync(http, timeout.Token).ConfigureAwait(false);
@@ -111,14 +116,31 @@ public sealed class ActorHttpServer : IAsyncDisposable
             lease = new HttpExchangeLease(_actors, http, body, _options.MaxResponseBytes, timeout.Token);
             body = null;
             HttpExchangeTicket? ticket = null;
-            actor = _actors.Spawn(endpoint.Kind, (context, _) =>
+            byte[]? responseTicket = endpoint.AfterResponse is null
+                ? null : RandomNumberGenerator.GetBytes(16);
+            bool dispatched = false, resumed = false;
+            actor = _actors.Spawn(endpoint.Kind, (context, mail) =>
             {
+                if (dispatched)
+                {
+                    if (resumed || responseTicket is null || endpoint.AfterResponse is null ||
+                        !mail.Span.SequenceEqual(responseTicket))
+                        throw new InvalidOperationException("Invalid HTTP response continuation");
+                    resumed = true;
+                    endpoint.AfterResponse(context, _actors);
+                    return;
+                }
+                if (!mail.IsEmpty)
+                    throw new InvalidOperationException("Invalid initial HTTP actor delivery");
+                dispatched = true;
                 try { endpoint.Handle(context, ActorHttpExchange.Claim(context, ticket!)); }
                 catch (Exception failure) { lease.Fail(failure); throw; }
             });
             ticket = lease.Admit(actor);
             rootTermination = lease.OwnerTermination;
             _actors.PostHostMessage(actor);
+            if (responseTicket is not null)
+                responseContinuation = EnqueueResponseContinuationAsync(lease, actor, responseTicket, timeout.Token);
             await lease.Completion.WaitAsync(timeout.Token).ConfigureAwait(false);
         }
         catch (BadHttpRequestException failure) when (failure.StatusCode == 413)
@@ -137,31 +159,67 @@ public sealed class ActorHttpServer : IAsyncDisposable
                 await lease.CloseAsync().ConfigureAwait(false);
                 if (lease.Completion.IsFaulted) _ = lease.Completion.Exception;
             }
-            Task retirement = RetireAsync(lease, actor, rootTermination, timeout);
+            Task retirement = RetireAsync(lease, actor, rootTermination, responseContinuation, timeout);
             lock (_retirementGate) _retirements.Add(retirement);
             _ = ObserveRetirementAsync(retirement);
         }
     }
 
+    private async Task EnqueueResponseContinuationAsync(HttpExchangeLease lease,
+        ActorRef actor, byte[] ticket, CancellationToken cancellation)
+    {
+        try
+        {
+            await lease.Completion.WaitAsync(cancellation).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Dispatch owns the HTTP fault/timeout and terminates the actor.
+            return;
+        }
+        if (cancellation.IsCancellationRequested || !lease.ResponseBelongsToInitialOwner(actor)) return;
+        try { _actors.PostHostMessage(actor, ticket); }
+        catch (InvalidOperationException)
+        {
+            // STOP or a dispatch fence won. Never run a guest continuation inline.
+            try { _actors.Stop(actor); } catch (InvalidOperationException) { }
+        }
+    }
+
     private async Task RetireAsync(HttpExchangeLease? lease, ActorRef actor,
-        Task rootTermination, CancellationTokenSource timeout)
+        Task rootTermination, Task responseContinuation, CancellationTokenSource timeout)
     {
         try
         {
             if (lease is not null)
             {
-                try { await lease.OwnerTermination.WaitAsync(timeout.Token).ConfigureAwait(false); }
+                try
+                {
+                    await AwaitPhysicalRetirementAsync(lease.OwnerTermination)
+                        .WaitAsync(timeout.Token).ConfigureAwait(false);
+                }
                 catch (OperationCanceledException) { }
-                await lease.StopOwner().ConfigureAwait(false);
+                await AwaitPhysicalRetirementAsync(lease.StopOwner()).ConfigureAwait(false);
             }
         }
         finally
         {
             timeout.Cancel();
             if (actor.Id != 0) { try { _actors.Stop(actor); } catch (InvalidOperationException) { } }
-            await rootTermination.ConfigureAwait(false);
+            await responseContinuation.ConfigureAwait(false);
+            await AwaitPhysicalRetirementAsync(rootTermination).ConfigureAwait(false);
             timeout.Dispose();
             _admission.Release();
+        }
+    }
+
+    private static async Task AwaitPhysicalRetirementAsync(Task termination)
+    {
+        try { await termination.ConfigureAwait(false); }
+        catch (InvalidOperationException) when (termination.IsFaulted)
+        {
+            // ActorRuntime publishes the fault outcome only after physical
+            // finalization. The HTTP 500 and the recovered permit are independent.
         }
     }
 

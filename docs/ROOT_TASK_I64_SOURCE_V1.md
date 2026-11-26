@@ -54,3 +54,7 @@ Runtime tests separately exercise preclaim owner cancellation, observer-only
 cancellation while a producer is live, and cancellation-named fault identity.
 Execution evidence is recorded in the PR; no native pass is inferred from this
 document or an old #186 receipt. Keep draft until exact-head execution.
+
+## Current-main canonical syntax forward-port
+
+The explicit root profile additionally accepts `pub susp fnc main(): int` (or `suspends`), a runtime `val` or `let Future<int>`, and `task<int> { return ...; }` (also `^`). The canonical form requires suspension permission; `async` is not a compatibility alias. Preserve the legacy Future.from_task path for existing guests. The ordinary compiler remains closed to this scheduled profile. The dedicated dual-lane workflow verifies canonical and long-marker forms, legacy compatibility, checked overflow, exact producer retirement, and no-artifact denials. This is not a general TaskFuture or actor scheduler implementation.

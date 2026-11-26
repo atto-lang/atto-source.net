@@ -1,0 +1,57 @@
+fnc brace_value(bool ready): int {
+  val bool flag = sync task<bool> {
+    guard ready { return 42; }
+    return true;
+  };
+  if flag { return 7; } fi
+  return 1;
+}
+
+fnc keyword_value(bool ready): int {
+  val int value = sync task<int> {
+    guard ready else
+      ^ 42;
+    end
+    return 7;
+  };
+  return value + 1;
+}
+
+fnc match_value(bool ready): int {
+  do match true over
+    on true -> { guard ready { return 42; } return; }
+    on false -> { return; }
+  end
+  return 7;
+}
+
+fnc nested_task(bool ready): int {
+  do sync task<void> {
+    do sync task<void> {
+      guard ready else
+        ^ 42;
+      end
+      return;
+    }
+    return;
+  }
+  return 7;
+}
+
+fnc tagged_value(bool ready): Option<int> {
+  val bool done = sync task<bool> {
+    guard ready { return Some(42); }
+    return true;
+  };
+  if done { return Some(7); } fi
+  return None;
+}
+
+pub fnc main(): int {
+  guard brace_value(false) eq 42, brace_value(true) eq 7 { return 1; }
+  guard keyword_value(false) eq 42, keyword_value(true) eq 8 { return 2; }
+  guard match_value(false) eq 42, match_value(true) eq 7 { return 3; }
+  guard nested_task(false) eq 42, nested_task(true) eq 7 { return 4; }
+  guard tagged_value(false) eq Some(42), tagged_value(true) eq Some(7) { return 5; }
+  return 42;
+}

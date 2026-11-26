@@ -1,0 +1,7 @@
+pub fnc main(): int {
+  return match Some(42) over
+    on Some(n) -> { return n; }
+    on Some(n) when n > 0 -> { return 0; }
+    on None -> { return 0; }
+  end;
+}
