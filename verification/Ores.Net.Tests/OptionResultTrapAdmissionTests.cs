@@ -66,9 +66,9 @@ internal static class OptionResultTrapAdmissionTests
         // guest behavior is NOT implemented; valid effects must fail closed.
         string[] canonical =
         [
-            "trap! parse_id(\"42\")", "trap!parse_id(\"42\")",
+            "trap! parse_id(\"42\")",
             "throw! Error(\"bad\")", "raise! Error(\"bad\")",
-            "panic! Error(\"bad\")", "throw!Error(\"bad\")"
+            "panic! Error(\"bad\")"
         ];
         foreach (string expression in canonical)
         {
@@ -80,6 +80,19 @@ internal static class OptionResultTrapAdmissionTests
                 continue;
             }
             throw new Exception("Unverified bang guest was accepted: " + expression);
+        }
+        foreach (string expression in new[] { "trap!parse_id(\"42\")", "throw!Error(\"bad\")" })
+        {
+            string source = "fnc main():int{return " + expression + ";}";
+            foreach (Action parse in new Action[] {
+                () => OresParser.Parse(source), () => OresStructuredParser.Parse(source) })
+            {
+                try { parse(); }
+                catch (FormatException error) when (
+                    error.Message.Contains("E_BANG_KEYWORD_WHITESPACE", StringComparison.Ordinal))
+                { continue; }
+                throw new Exception("Missing compact bang diagnostic: " + expression);
+            }
         }
         string[] notExceptionBang =
         [

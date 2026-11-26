@@ -109,6 +109,8 @@ internal static class StructuredSourceTests
         }
         Require(OresStructuredParser.ParseStrictConditionals(accepted).Body.Count == 3,
             "strict canonical negated conditional fixture");
+        RejectFeature("fnc main():int{if true then break; fi return 0;}",
+            "break requires an enclosing loop");
         RejectFeature("fnc main():int{return ifnot false then break; else 3 fi;}",
             "must produce a value");
         RejectFeature("fnc main():int{return unless true then 3 fi;}",
