@@ -552,6 +552,8 @@ public static partial class OresParser
                 if (Current.Text.Replace("_", "", StringComparison.Ordinal).TrimStart('0') == "9223372036854775808")
                     return VerifiedLiteral(negative: true);
                 var term = VerifiedAtom(depth + 1);
+                if (StrictVerifiedI64 && term.Type.Range.Minimum == long.MinValue)
+                    throw new FormatException("E_VERIFY_UNPROVEN: negation may overflow signed i64");
                 if (!term.Type.I32)
                     return new QuantityTerm(new StructuredNegate(at, term.Expression),
                         term.Type with { Range = VerifiedI64Range.Point(0).Subtract(term.Type.Range) }, term.Height + 1);
