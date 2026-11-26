@@ -249,6 +249,9 @@ public static partial class OresStructuredParser
             // Import discovery and structured parser must share the same raw-source rule.
             if (source[i] == (char)0x001b || source[i] == (char)0x007f)
                 throw new FormatException($"Source contains terminal control at offset {i}");
+            if (source[i] is '\u061c' or '\u200e' or '\u200f' or
+                >= '\u202a' and <= '\u202e' or >= '\u2066' and <= '\u2069')
+                throw new FormatException($"Source contains bidirectional Unicode control at offset {i}");
             if (char.IsHighSurrogate(source[i]))
             {
                 if (++i >= source.Length || !char.IsLowSurrogate(source[i]))
