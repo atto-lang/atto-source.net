@@ -14,9 +14,14 @@ public static class UnsafeStdlibImportAdmission
         // Canonicalize stdlib components before matching reserved names.
         // The typed source linker must not see std/./unsafe as an ordinary
         // local package that it then normalizes into a native stdlib import.
-        if (path.StartsWith("std/", StringComparison.Ordinal) ||
-            path.StartsWith("ores.std/", StringComparison.Ordinal) ||
-            path.StartsWith("atto.std/", StringComparison.Ordinal))
+        if (HasUnsafeSegments(path)) return true;
+        string[] slash = path.Split('/');
+        string[] head = slash[0].Split(new[] { '.', ':' }, StringSplitOptions.RemoveEmptyEntries);
+        bool vendor = head.Length > 0 && (head[0] == "atto" || head[0] == "ores");
+        int rootDepth = head.Length == 1 && head[0] == "std" ? 1 :
+            vendor && head.Length == 2 && head[1] == "std" ? 1 :
+            vendor && head.Length == 1 && slash.Length > 1 && slash[1] == "std" ? 2 : 0;
+        if (rootDepth != 0)
         {
             var parts = new System.Collections.Generic.List<string>();
             foreach (var part in path.Split('/'))
@@ -24,7 +29,7 @@ public static class UnsafeStdlibImportAdmission
                 if (part.Length == 0 || part == ".") continue;
                 if (part == "..")
                 {
-                    if (parts.Count <= 1) return true; // Reject std root escape.
+                    if (parts.Count <= rootDepth) return true; // Reject std root escape.
                     parts.RemoveAt(parts.Count - 1);
                 }
                 else parts.Add(part);
@@ -47,7 +52,11 @@ public static class UnsafeStdlibImportAdmission
             }
             path = string.Join("/", parts);
         }
-        // Normalize delimiter aliases to exact components after slash traversal.
+        return HasUnsafeSegments(path);
+    }
+
+    private static bool HasUnsafeSegments(string path)
+    {
         string[] segments = path.Split(new[] { '/', '.', ':' }, StringSplitOptions.RemoveEmptyEntries);
         int offset = segments.Length > 0 && (segments[0] == "atto" || segments[0] == "ores") ? 1 : 0;
         return segments.Length > offset + 1 &&
