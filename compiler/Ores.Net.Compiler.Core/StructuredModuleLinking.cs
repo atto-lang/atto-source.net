@@ -66,7 +66,7 @@ public static class OresSourceModuleCompiler
     // aliases. Only units this backend lowers today are registered; the rest
     // of the catalog fails closed with an explicit "not implemented" error.
     private static readonly IReadOnlyDictionary<string, (string Layer, string Resource, string Sha256)> V1Units =
-        new Dictionary<string, (string, string)>(StringComparer.Ordinal)
+        new Dictionary<string, (string, string, string)>(StringComparer.Ordinal)
         {
             ["core/num"] = ("core", "Atto.Lib.Core.Num", "42b0adc66e34c44918538e71b3b6de935ee2c48e0b047ac443191db35614e1e3"),
             ["core/cmp"] = ("core", "Atto.Lib.Core.Cmp", "bf5c656df7e539e077f6bd7cfbe4f80d0b4980c539b57e11c79414cb05501d3a"),
