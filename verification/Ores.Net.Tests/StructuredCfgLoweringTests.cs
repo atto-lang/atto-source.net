@@ -503,6 +503,22 @@ internal static class StructuredCfgLoweringTests
             "compile-time aggregate cannot escape as scalar");
         Reject("fnc main():int{const a=record{foo:2};const b=record{...a,foo:true};return b.foo;}",
             "record bool cannot return as int");
+        Check("fnc main():int{const Record<infer R> r=(a=1,b=true);const Record<R> r2=(b=false,a=10);const Tuple<infer T> t=(true,1);const Tuple<T> t2=(false,12);const struct<infer S> s={a:1};const struct<S> s2={a:20};return r2.a+t2[1]+s2.a;}",
+            42, "named scalar aggregate types through real structured CFG and CIL");
+        Check("fnc main():int{const Record r=(a=10);const Tuple t=(true,12);const struct s={a:20};return r.a+t[1]+s.a;}",
+            42, "bare aggregate annotations create no named type");
+        Reject("fnc main():int{const Record<infer> r=(a=1);return 0;}", "bare infer invalid");
+        Reject("fnc main():int{const Record<Missing> r=(a=1);return 0;}", "unknown aggregate alias");
+        Reject("fnc main():int{const Record<infer R> r=(a=1);const Tuple<infer R> t=(1,2);return 0;}", "duplicate alias");
+        Reject("fnc main():int{const Record<infer R> r=(a=1);const Record<R> r2=(a=true);return 0;}", "record field type mismatch");
+        Reject("fnc main():int{const Record<infer R> r=(a=1);const Record<R> r2=(a=1,b=2);return 0;}", "closed record extra field");
+        Reject("fnc main():int{const Record<infer R> r=(a=1,b=2);const Record<R> r2=(a=1);return 0;}", "closed record missing field");
+        Reject("fnc main():int{const Record<infer R> r=(a=1,a=2);return 0;}", "duplicate named field");
+        Reject("fnc main():int{const Tuple<infer T> t=(1,true);const Tuple<T> t2=(true,1);return 0;}", "tuple slot mismatch");
+        Reject("fnc main():int{const Tuple<infer T> t=(1,true);const Tuple<T> t2=(1);return 0;}", "tuple arity mismatch");
+        Reject("fnc main():int{const struct<infer S> s={a:1};const Record<S> r=(a=1);return 0;}", "aggregate kind mismatch");
+        Reject("fnc main():int{const Tuple<infer T> t=(1,true);const r=infer record{...t,x:1};return r.x;}", "tuple cannot spread as record");
+        Reject("fnc main():int{const Record r=(a=1);const Record<R> r2=(a=2);return 0;}", "anonymous record does not bind type");
         // Runtime-valued immutable rows snapshot scalars into private verified
         // SSA places: later mutation of the original local cannot change them.
         Check("fnc main():int{let int source=20;val row=infer struct{x:source,y:28};source=99;return row.x+row.y;}",
