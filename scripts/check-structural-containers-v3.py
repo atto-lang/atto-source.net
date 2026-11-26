@@ -49,7 +49,8 @@ def validate(data):
     require(type(data["max_fixed_extent"]) is int and data["max_fixed_extent"] == 64,
             "invalid finite extent bound")
     require(type(data["notice"]) is str
-            and "not" in data["notice"].lower(), "missing evidence disclaimer")
+            and data["notice"] == "Target semantics only. No parser/typechecker/compiler/guest parity can be claimed from this inventory.",
+            "missing or changed evidence disclaimer")
     cases = data["cases"]
     require(type(cases) is list and len(cases) == 38,
             "missing or added decision cases")
@@ -103,13 +104,17 @@ def self_test():
     altered = json.loads(json.dumps(original))
     altered["max_fixed_extent"] = 65
     tests.append(altered)
+    for notice in ("not", "Not restricted: runtime parity established.", "", None):
+        altered = json.loads(json.dumps(original))
+        altered["notice"] = notice
+        tests.append(altered)
     for i, forged in enumerate(tests):
         try:
             validate(forged)
         except ValueError:
             continue
         raise AssertionError("malformed structural v3 fixture accepted: " + str(i))
-    print("structural containers v3: 6 synthetic tamper cases rejected")
+    print(f"structural containers v3: {len(tests)} synthetic tamper cases rejected")
 
 
 def main():
