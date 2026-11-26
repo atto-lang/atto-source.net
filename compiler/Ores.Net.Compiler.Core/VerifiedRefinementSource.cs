@@ -532,28 +532,41 @@ public static partial class OresParser
             }
             if(Take("while"))
             {
-                // Only one direct scalar update is admitted on each backedge.
-                // Scan the target then independently parse the entire guard/body.
                 int brace=_index;
                 while(brace<tokens.Count&&tokens[brace].Text!=""&&tokens[brace].Text!="{")brace++;
-                if(brace+2>=tokens.Count||tokens[brace+2].Text!="="||
-                   !strictMutable.TryGetValue(tokens[brace+1].Text,out var invariant))
-                    throw new FormatException("E_VERIFY_UNSUPPORTED: strict while requires one mutable update");
-                string local=tokens[brace+1].Text;
-                invariant.Require(verifiedLocals[local],"E_REFINEMENT_BINDING","loop entry "+local);
+                if(brace>=tokens.Count||tokens[brace].Text!="{")
+                    throw new FormatException("E_VERIFY_UNSUPPORTED: loop block required");
+                var savedMutable=new Dictionary<string,RefinedQuantity>(strictMutable,StringComparer.Ordinal);
+                var writes=new HashSet<string>(StringComparer.Ordinal);
+                int nesting=1;
+                for(int k=brace+1;k<tokens.Count&&nesting>0;k++){
+                    string token=tokens[k].Text;
+                    if(token=="{")nesting++;
+                    else if(token=="}")nesting--;
+                    else if(k+1<tokens.Count&&tokens[k+1].Text=="="&&savedMutable.ContainsKey(token))
+                        writes.Add(token);
+                }
+                if(nesting!=0)throw new FormatException("E_VERIFY_UNSUPPORTED: unterminated loop");
                 var header=SnapshotStrict();
-                header[local]=invariant;
-                // Relational facts about prior values cannot survive the backedge.
-                verifiedUpperBounds[local]=Array.Empty<string>();
+                foreach(var key in writes){
+                    var invariant=savedMutable[key];
+                    invariant.Require(header[key],"E_REFINEMENT_BINDING","loop entry "+key);
+                    header[key]=invariant;verifiedUpperBounds[key]=Array.Empty<string>();
+                }
+                var headerBounds=new Dictionary<string,IReadOnlyCollection<string>>(verifiedUpperBounds,StringComparer.Ordinal);
                 var p=StrictCondition(header,0);
                 Expect("{");RestoreStrict(p.Yes);
-                if(ReadVerifiedName()!=local)throw new FormatException("E_VERIFY_UNSUPPORTED: wrong loop target");
-                Expect("=");var update=VerifiedExpression(0);Expect(";");
-                invariant.Require(update.Type,"E_REFINEMENT_BINDING","loop backedge "+local);
-                if(!Take("}"))throw new FormatException("E_VERIFY_UNSUPPORTED: one direct loop update only");
+                var loopBody=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
+                Expect("}");
+                if(!StrictAlwaysReturns(loopBody))foreach(var key in writes)
+                    savedMutable[key].Require(verifiedLocals[key],"E_REFINEMENT_BINDING","loop backedge "+key);
                 RestoreStrict(p.No);
+                verifiedUpperBounds.Clear();
+                foreach(var pair in headerBounds)verifiedUpperBounds.Add(pair.Key,pair.Value);
+                strictMutable.Clear();
+                foreach(var pair in savedMutable)strictMutable.Add(pair.Key,pair.Value);
                 var tail=ParseStrictReturns(declared,guaranteed,name,upperParameters,parameters,required,depth+1);
-                tail.Insert(0,new StructuredWhile(at,p.Test,new StructuredStmt[]{new StructuredSet(at,local,update.Expression)}));
+                tail.Insert(0,new StructuredWhile(at,p.Test,loopBody));
                 return tail;
             }
             if(Take("if"))
