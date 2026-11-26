@@ -19,8 +19,12 @@ trap 'rm -rf -- "$work"' EXIT
 run_guest() {
   local app="$1" out="$2" status=0
   timeout 15s "$app" >"$out/guest.out" 2>"$out/guest.err" || status=$?
-  [[ "$status" == 0 && "$(cat "$out/guest.out")" == 42 ]] || return 1
-  grep -Fx 'TASK_I64_RECEIPT; producers=1; observer_distinct=True; producer_body_retired=True' "$out/guest.err"
+  [[ "$status" == 0 ]] || return 1
+  # This closed Linux host emits exactly one value and one lifecycle line.
+  # Reject duplicate/contradictory receipts and extra or incomplete output.
+  printf '42\n' | cmp -s - "$out/guest.out" || return 1
+  printf '%s\n' 'TASK_I64_RECEIPT; producers=1; observer_distinct=True; producer_body_retired=True' | cmp -s - "$out/guest.err" || return 1
+  cat "$out/guest.err"
 }
 # Synthetic gate regression only; never counts as a compiled guest.
 mkdir "$work/gate-control"
@@ -44,6 +48,27 @@ if run_guest "$work/gate-control/bad-receipt" "$work/gate-control"; then
   echo "guest gate accepted incorrect physical receipt" >&2
   exit 1
 fi
+# Each control preserves exit zero and mutates just the output contract.
+for name in duplicate contradictory extra-stdout missing-lf extra-stderr; do
+  control="$work/gate-control/$name"
+  cat >"$control" <<'CONTROL'
+#!/usr/bin/env bash
+printf '42\n'
+printf '%s\n' 'TASK_I64_RECEIPT; producers=1; observer_distinct=True; producer_body_retired=True' >&2
+CONTROL
+  case "$name" in
+    duplicate) printf '%s\n' "printf '%s\\n' 'TASK_I64_RECEIPT; producers=1; observer_distinct=True; producer_body_retired=True' >&2" >>"$control";;
+    contradictory) printf '%s\n' "printf '%s\\n' 'TASK_I64_RECEIPT; producers=1; observer_distinct=True; producer_body_retired=False' >&2" >>"$control";;
+    extra-stdout) printf '%s\n' "printf '\\n'" >>"$control";;
+    missing-lf) sed -i "s/printf '42\\\\n'/printf '42'/" "$control";;
+    extra-stderr) printf '%s\n' "printf 'warning\\n' >&2" >>"$control";;
+  esac
+  chmod +x "$control"
+  if run_guest "$control" "$work/gate-control"; then
+    echo "guest gate accepted $name output" >&2
+    exit 1
+  fi
+done
 echo CLOSED_TASK_NATIVEAOT_GATE_CONTROL_PASS
 project=compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj
 host=host/Ores.Net.TaskI64NativeHost/Ores.Net.TaskI64NativeHost.csproj
