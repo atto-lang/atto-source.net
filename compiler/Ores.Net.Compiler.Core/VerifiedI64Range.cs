@@ -65,11 +65,13 @@ internal readonly record struct VerifiedI64Range
 
     internal VerifiedI64Range Constrain(string op, long value) => op switch
     {
-        "eq" => new(Math.Max(low, value), Math.Min(high, value)),
-        "<=" => new(low, Math.Min(high, value)),
-        ">=" => new(Math.Max(low, value), high),
-        "<" when value != long.MinValue => new(low, Math.Min(high, value - 1)),
-        ">" when value != long.MaxValue => new(Math.Max(low, value + 1), high),
+        "!=" when value is 0 or -1 => !Has(value) ? this : low == high ? throw Empty() : new(low, high, (byte)(holes | Bit(value))),
+        "!=" => throw new FormatException("E_REFINEMENT_CONTRACT: unsupported exclusion"),
+        "eq" => new(Math.Max(low, value), Math.Min(high, value), holes),
+        "<=" => new(low, Math.Min(high, value), holes),
+        ">=" => new(Math.Max(low, value), high, holes),
+        "<" when value != long.MinValue => new(low, Math.Min(high, value - 1), holes),
+        ">" when value != long.MaxValue => new(Math.Max(low, value + 1), high, holes),
         "<" or ">" => throw Empty(),
         _ => throw new FormatException("E_REFINEMENT_PREDICATE: expected an interval comparison"),
     };

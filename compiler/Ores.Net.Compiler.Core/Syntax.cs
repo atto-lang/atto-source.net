@@ -619,6 +619,7 @@ public static partial class OresParser
                     (text[nameEnd] is >= 'a' and <= 'z' or >= 'A' and <= 'Z'
                         or >= '0' and <= '9' or '_')) nameEnd++;
                 string name = text[(_i + 1)..nameEnd];
+                if (name is "requires" or "ensures") { _i++; return new Token("@", start); }
                 if (name is "Inject" or "StateBacked" or "MutableStateContainer" or "StateContainer")
                     throw new FormatException(
                         $"STATE_INJECTION_UNSUPPORTED: @{name} requires typed container ownership, borrow checks and Native AOT lowering at offset {start}");
@@ -1004,6 +1005,14 @@ public static partial class OresParser
             return Visit(expression, 0);
         }
         private string? _dotnetMathAlias;
+        private bool VerifiedHeaderHasNewline()
+        {
+            if (_index <= 0) return false;
+            int start = tokens[_index - 1].Offset + tokens[_index - 1].Text.Length;
+            int end = Current.Offset;
+            return start <= end && end <= source.Length &&
+                source.AsSpan(start, end - start).IndexOf('\n') >= 0;
+        }
         private Token Current => tokens[_index];
 
         private bool Take(string value)
