@@ -55,6 +55,11 @@ static class StrictI64ProofTests
         Reject(pre+"pub fnc main() -> int { val a=a; return 42; }","E_REFINEMENT_NAME");
         Reject(pre+"pub fnc main() -> int { val a=1; val a=2; return a; }","E_REFINEMENT_DUPLICATE");
         Reject(pre+"pub fnc main() -> int { val a=1; a=0; return a; }","E_VERIFY_UNSUPPORTED");
+        _ = OresParser.LowerVerifiedStrict(pre+"pub fnc main() -> int { let Bounded x=1; val int old=x; while x<42 { x=x+1; } return x+old-1; }");
+        _ = OresParser.LowerVerifiedStrict(pre+"pub fnc main() -> int { let Bounded x=1; x=2; val old=x; while x<42 { x=x+1; } val after: int=x; x=1; return old+after+x; }");
+        Reject(pre+"pub fnc main() -> int { let int x=1; val snapshot=x; x=0; return 42/x; }","E_VERIFY_UNPROVEN");
+        Reject(pre+"pub fnc main() -> int { let int x=1; val snapshot=x; snapshot=0; return snapshot; }","E_VERIFY_UNSUPPORTED");
+        Reject(pre+"pub fnc main() -> int { let int x=1; val snapshot=9223372036854775807+1; return x; }","E_VERIFY_UNPROVEN");
         Reject(Main("42"),"E_VERIFY_UNSUPPORTED");
         Reject(pre+"type Narrow = i32 where self > 0; "+Main("42"),"E_VERIFY_UNSUPPORTED");
         Console.WriteLine("PASS strict signed-i64 source-to-CFG admission (not native guest execution)");
