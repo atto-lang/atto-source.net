@@ -6,13 +6,13 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-compiler="$root/compiler/Ores.Net.Compiler/bin/Release/net10.0/oresnet.dll"
-dotnet build compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release
-# Locate the managed build product without assuming its assembly name.
-compiler="$(find "$root/compiler/Ores.Net.Compiler/bin/Release/net10.0" -maxdepth 1 -name '*.runtimeconfig.json' -print -quit)"
-test -n "$compiler"
-compiler="${compiler%.runtimeconfig.json}.dll"
+# Explicit RID and isolated output keep the executed compiler unambiguous.
+dotnet build compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -r linux-x64 -o "$tmp/compiler"
+compiler="$tmp/compiler/oresnet.dll"
 test -f "$compiler"
+test -f "$tmp/compiler/oresnet.runtimeconfig.json"
+printf 'TUPLE_COMPILER=%s\n' "$compiler"
+dotnet restore host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj -r linux-x64
 python3 - "$tmp" <<'PY'
 import json,pathlib,sys
 root=pathlib.Path(sys.argv[1])
