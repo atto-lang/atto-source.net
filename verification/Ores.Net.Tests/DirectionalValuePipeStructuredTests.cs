@@ -118,6 +118,19 @@ internal static class DirectionalValuePipeStructuredTests
         RejectStructured("fnc main():int{return true |> is int ? 30 : 20;}", "Receiver int type test requires proven int");
         RejectStructured("fnc main():int{return true |> ? 30 : false;}", "Conditional result types differ");
 
+        CheckCil("fnc main():int{return 42 |> match over { on 42 -> 100; is int -> -20; };}",
+            100, "literal before type pattern");
+        CheckCil("fnc main():int{return 7 |> await |> match over { on 42 -> 100; is int -> -20; };}",
+            -20, "bare type pattern after await");
+        CheckCil("fnc main():int{return match 7 over { on 42 -> 100; on is int -> -20; };}",
+            -20, "legacy type arm equivalent");
+        CheckCil("fnc main():int{return true |> match over { is bool -> 42; };}",
+            42, "statically proven bool type pattern");
+        RejectStructured("fnc main():int{return 7 |> match over { 7 -> 42; on _ -> 0; };}", "MATCH_SYNTAX");
+        RejectStructured("fnc main():int{return 7 |> match over { _ -> 0; };}", "MATCH_SYNTAX");
+        RejectStructured("fnc main():int{return 7 |> match over { is bool -> 42; on _ -> 0; };}", "MATCH_PATTERN_TYPE");
+        RejectStructured("fnc main():int{return 7 |> match over { is int -> 42; on _ -> 0; };}", "MATCH_UNREACHABLE_ARM");
+
         // The shipping one-main i64 compiler does not support named helper
         // definitions or tagged pipelines and must remain fail-closed.
         foreach (string op in new[] { "|>", "<|" })
