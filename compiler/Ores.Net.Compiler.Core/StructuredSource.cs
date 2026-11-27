@@ -1995,8 +1995,9 @@ public static partial class OresStructuredParser
                 if (tokens[index + 2].Text != "=") return false;
                 if (tokens[index + 3].Text == "{") return true;
                 // Do not reinterpret an ordinary grouped scalar expression.
-                return tokens[index + 3].Text == "(" && index + 5 < tokens.Count &&
-                    tokens[index + 5].Text is (":" or "=" or ":=");
+                return tokens[index + 3].Text == "(" &&
+                    (tokens[index + 4].Text == ")" ||
+                     index + 5 < tokens.Count && tokens[index + 5].Text is (":" or "=" or ":="));
             }
             if (tokens[index + 2].Text == "<") return true;
             return index + 4 < tokens.Count && tokens[index + 3].Text == "=" &&
@@ -2079,6 +2080,14 @@ public static partial class OresStructuredParser
             if (introduce && (alias == rowName || scopes.Any(scope => scope.ContainsKey(alias!)) ||
                 aggregateScopes.Any(scope => scope.ContainsKey(alias!))))
                 throw Error("E_DUPLICATE_TYPE: inferred aggregate alias collides");
+            if (!explicitWrapper && Current.Text == "(")
+            {
+                if (tokens[index + 1].Text == ")") wrapper = "Tuple";
+                else if (tokens[index + 2].Text == ":=")
+                    throw Error("E_PAIR_UNSUPPORTED: grouped Pair and Tuple of Pairs require nominal product lowering");
+                else if (tokens[index + 2].Text != ":")
+                    throw Error("E_RECORD_CONTEXT: inferred parenthesized Record fields require colon");
+            }
             string open = wrapper == "struct" || (wrapper == "Record" && Current.Text == "{") ? "{" : "(";
             string close = open == "{" ? "}" : ")";
             Expect(open);
@@ -2087,9 +2096,12 @@ public static partial class OresStructuredParser
             var values = new Dictionary<string, StructuredExpr>(StringComparer.Ordinal);
             var explicitFields = new HashSet<string>(StringComparer.Ordinal);
             var overlap = new HashSet<string>(StringComparer.Ordinal);
-            bool ordinaryField = false;
             int entries = 0;
-            do
+            if (Current.Text == close && !explicitWrapper && wrapper == "Record")
+                throw Error("E_EMPTY_AGGREGATE: untyped empty braces are ambiguous");
+            if (Current.Text == close && wrapper == "struct")
+                throw Error("E_EMPTY_AGGREGATE: empty Struct is not admitted in this scalar profile");
+            while (Current.Text != close)
             {
                 if (++entries > 64) throw Error("AGGREGATE_FIELD_BUDGET");
                 if (wrapper == "Record" && open == "{" && Take("."))
@@ -2116,10 +2128,14 @@ public static partial class OresStructuredParser
                     ? values.Count.ToString(CultureInfo.InvariantCulture) : NamedAggregateIdentifier();
                 if (wrapper == "Record")
                 {
-                    if (!Take(":="))
+                    if (!explicitWrapper && open == "(")
+                    {
+                        if (!Take(":"))
+                            throw Error("E_LITERAL_KIND: inferred parenthesized Record fields require colon");
+                    }
+                    else if (!Take(":="))
                     {
                         if (!Take(":")) Expect("=");
-                        ordinaryField = true;
                     }
                 }
                 else if (wrapper == "struct") Expect(":");
@@ -2137,11 +2153,9 @@ public static partial class OresStructuredParser
                     ? new StructuredBool(offset, value != 0) : new StructuredInt(offset, value);
                 if (values.Count > 64) throw Error("AGGREGATE_FIELD_BUDGET");
                 if (!Take(",") || Current.Text == close) break;
-            } while (true);
+            }
             Expect(close);
             Expect(";");
-            if (wrapper == "Record" && open == "(" && !ordinaryField)
-                throw Error("E_LITERAL_KIND: Pair-only parentheses are not Record");
             if (overlap.Count > 0) throw Error("E_RECORD_SPREAD: unresolved overlapping spreads");
             var shape = plan.InferShape();
             if (!introduce && expected is not null &&
