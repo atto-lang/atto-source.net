@@ -25,6 +25,7 @@ public sealed record StructuredSignal(int At, StructuredExpr Error, CfgGuestEffe
     : StructuredStmt(At);
 internal sealed record StructuredLexicalDefer(int At, IReadOnlyList<StructuredStmt> Body)
     : StructuredStmt(At);
+internal sealed record StructuredDeferredStdout(int At, string Text) : StructuredStmt(At);
 
 internal static class GuestResultTypes
 {
@@ -221,7 +222,8 @@ public static partial class OresStructuredParser
                     case StructuredLexicalDefer deferred:
                         if (inherited is not null || cleanup.Count >= 16 ||
                             deferred.Body.Count == 0 || deferred.Body.Count > 16 ||
-                            deferred.Body.Any(s => s is not StructuredSet set || !TrapInlinePure(set.Value)))
+                            deferred.Body.Any(s => s is not StructuredDeferredStdout &&
+                                (s is not StructuredSet set || !TrapInlinePure(set.Value))))
                             throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: only root scalar assignment defers are verified");
                         cleanup.Add(deferred);
                         break;

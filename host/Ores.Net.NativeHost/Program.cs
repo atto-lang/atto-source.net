@@ -35,10 +35,11 @@ if (args.Length == 1 && args[0] == "--isolate-smoke")
     await Console.Out.WriteLineAsync("native-aot-isolate-smoke: 5 statically linked CIL guest calls passed");
     return 0;
 }
-if (args.Length != 0)
+bool allowStdout = args.Length == 1 && args[0] == "--allow-stdio";
+if (args.Length != 0 && !allowStdout)
 {
     await Console.Error.WriteLineAsync("unknown native host argument");
     return 2;
 }
 // Existing default application behavior is unchanged.
-return await RuntimeHost.ExecuteAsync(Oreslang.Generated.OresProgram.Run);
+return await RuntimeHost.ExecuteAsync(Oreslang.Generated.OresProgram.Run, allowStdout);

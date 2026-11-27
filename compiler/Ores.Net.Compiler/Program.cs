@@ -50,6 +50,8 @@ if (explicitLanguageVersion.HasValue &&
 // The bootstrap CLR capability is a deliberate compiler invocation grant,
 // not an authority inferred from host type names or environment variables.
 // It is valid only for scalar check/compile, never module/structured/facts paths.
+bool stdoutGranted = args.Length >= 3 && args[^1] == "--allow-stdio";
+if (stdoutGranted) args = args[..^1];
 bool mathI64Granted = args.Length >= 4 &&
     args[^2] == "--capability" && args[^1] == "interop.dotnet.math-i64";
 if (mathI64Granted) args = args[..^2];
@@ -100,7 +102,9 @@ bool validStaticFacts = args.Length == 2 &&
 // Explicit source-only preview. Never accept actor pipes in normal check/compile.
 bool validActorPipePlan = args.Length == 2 && args[0] == "plan-actor-pipe";
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
-if ((mathI64Granted && !validCheck && !validCompile) ||
+if ((stdoutGranted && ((!validCheck && !validCompile) || mathI64Granted ||
+        explicitLanguageVersion.HasValue || !string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase))) ||
+    (mathI64Granted && !validCheck && !validCompile) ||
     (!validCheck && !validAsyncRun && !validEnumCheck && !validEnumCompile && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
      !validStaticFacts && !validTaskCheck && !validTaskCompile && !validActorPipePlan && !validDurableCounter && !validEmitActorSource && !validEmitHttpActors && !validExternalReceive && !validCounterMain && !validEmitSource && !moduleCommand))
 {
@@ -332,7 +336,7 @@ try
         string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase);
     var verifiedCfg = validStructuredCheck || validStructuredCompile
         ? OresStructuredCfgLowering.LowerModule(source)
-        : normalStructuredEntry ? OresStructuredCfgLowering.TryLowerProductionModule(source) : null;
+        : normalStructuredEntry ? OresStructuredCfgLowering.TryLowerProductionModule(source, stdoutGranted) : null;
     if (verifiedCfg is not null)
     {
         if (validCompile || validStructuredCompile)

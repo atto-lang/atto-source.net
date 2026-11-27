@@ -5,13 +5,30 @@ namespace Ores.Net.Runtime;
 /// <summary>Statically calls generated CIL; this method is compiled into the Native AOT executable.</summary>
 public static class RuntimeHost
 {
-    public static async Task<int> ExecuteAsync(Func<long> entry)
+    public static Task<int> ExecuteAsync(Func<long> entry) => ExecuteAsync(entry, false);
+
+    public static async Task<int> ExecuteAsync(Func<long> entry, bool allowStdout)
     {
         ArgumentNullException.ThrowIfNull(entry);
         try
         {
-            await Console.Out.WriteLineAsync(entry().ToString(CultureInfo.InvariantCulture));
+            long result;
+            RootGuestStdout.Begin(allowStdout);
+            try { result = entry(); }
+            finally
+            {
+                // Detach before awaiting physical output. The guest never
+                // holds a process stream or a blocking IO operation.
+                string? output = RootGuestStdout.End();
+                if (output is not null) await Console.Out.WriteAsync(output);
+            }
+            await Console.Out.WriteLineAsync(result.ToString(CultureInfo.InvariantCulture));
             return 0;
+        }
+        catch (RootGuestStdoutDeniedException)
+        {
+            await Console.Error.WriteLineAsync("E_PERMISSION: root stdout grant or budget denied");
+            return 70;
         }
         catch (OverflowException)
         {
