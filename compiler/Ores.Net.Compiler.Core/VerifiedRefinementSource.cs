@@ -338,11 +338,11 @@ public static partial class OresParser
                     int at = Current.Offset;
                     RefinedQuantity? type = null;
                     string local;
-                    if (StrictI64 && _index + 1 < tokens.Count && tokens[_index + 1].Text == "=")
+                    if (_index + 1 < tokens.Count && tokens[_index + 1].Text == "=")
                     {
                         local = ReadVerifiedName();
                     }
-                    else if (tokens[_index + 1].Text == ":")
+                    else if (_index + 1 < tokens.Count && tokens[_index + 1].Text == ":")
                     {
                         local = ReadVerifiedName();
                         Expect(":");

@@ -66,6 +66,27 @@ static class StrictI64ProofTests
         Reject(pre+"pub fnc main() -> int { let int x=1; val snapshot=9223372036854775807+1; return x; }","E_VERIFY_UNPROVEN");
         Reject(Main("42"),"E_VERIFY_UNSUPPORTED");
         Reject(pre+"type Narrow = i32 where self > 0; "+Main("42"),"E_VERIFY_UNSUPPORTED");
+        // Ordinary checked profile must infer immutable bindings too, not only strict proofs.
+        foreach (string body in new[] {
+            "pub fnc main() -> int { val a=42<Second>; return a/1<Second>; }",
+            "pub fnc main() -> int { val a=21; val b=a+a; return b; }",
+            "pub fnc main() -> int { val Bounded a=42; val b: Bounded=a; return b; }",
+        })
+            if (OresParser.TryLowerVerifiedRefinementModule(pre + body) is null)
+                throw new InvalidOperationException("Ordinary verified binding not lowered");
+        foreach (string body in new[] {
+            "pub fnc main() -> int { val a=a; return 42; }",
+            "pub fnc main() -> int { val a=b; val b=42; return a; }",
+            "pub fnc main() -> int { val a=1; val a=2; return a; }",
+            "pub fnc main() -> int { val a=42<Second>; return a; }",
+            "pub fnc main() -> int { val self=42; return self; }",
+        })
+        {
+            bool denied = false;
+            try { _ = OresParser.TryLowerVerifiedRefinementModule(pre + body); }
+            catch (FormatException) { denied = true; }
+            if (!denied) throw new InvalidOperationException("Accepted invalid ordinary binding: " + body);
+        }
         Console.WriteLine("PASS strict signed-i64 source-to-CFG admission (not native guest execution)");
     }
 
