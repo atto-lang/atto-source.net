@@ -108,6 +108,26 @@ internal static class ContextualIntSource
             if (result.Count == 0) throw Denied("empty main expression");
             return result;
         }
+        List<string> CaptureSlots()
+        {
+            Need(owner); Need(":"); Need(":"); Need("(");
+            bool named = pos + 1 < source.Count && IsName(Peek()) && source[pos + 1] == "=";
+            if (slots + captures.Count > 4) throw Denied("direct CIL local slot limit");
+            var saved = Enumerable.Repeat("", captures.Count).ToList();
+            for (int k = 0; k < captures.Count; k++) {
+                if (k > 0) Need(",");
+                int index = k;
+                if (named) {
+                    string key = Name(); Need("="); index = captures.IndexOf(key);
+                    if (index < 0 || saved[index] != "") throw Denied("unknown or duplicate named context");
+                }
+                var arg = Plain();
+                string slot = Prefix + "slot_" + slots++;
+                saved[index] = slot; output.AddRange(["val", slot, "=", .. arg, ";"]);
+            }
+            Need(")");
+            return saved;
+        }
         while (Peek() is "const" or "let" or "set")
         {
             if (Peek() != "const") {
@@ -131,25 +151,22 @@ internal static class ContextualIntSource
             if (aliases.TryGetValue(Peek(), out var existing) && pos + 1 < source.Count && source[pos + 1] == ";") {
                 pos++; aliases.Add(name, existing); Need(";"); continue;
             }
-            Need(owner); Need(":"); Need(":"); Need("(");
-            bool named = pos + 1 < source.Count && IsName(Peek()) && source[pos + 1] == "=";
-            if (slots + captures.Count > 4) throw Denied("direct CIL local slot limit");
-            var saved = Enumerable.Repeat("", captures.Count).ToList();
-            for (int k = 0; k < captures.Count; k++) {
-                if (k > 0) Need(",");
-                int index = k;
-                if (named) {
-                    string key = Name(); Need("="); index = captures.IndexOf(key);
-                    if (index < 0 || saved[index] != "") throw Denied("unknown or duplicate named context");
-                }
-                var arg = Plain();
-                string slot = Prefix + "slot_" + slots++;
-                saved[index] = slot; output.AddRange(["val", slot, "=", .. arg, ";"]);
-            }
-            Need(")"); Need(";");
+            var saved=CaptureSlots(); Need(";");
             aliases.Add(name, saved);
         }
-        Need("return"); output.Add("return"); output.AddRange(MainExpr()); Need(";"); Need("}"); Need("<eof>");
+        Need("return");
+        bool directNamed = pos+5 < source.Count && Peek()==owner && source[pos+1]==":" &&
+            source[pos+2]==":" && source[pos+3]=="(" && IsName(source[pos+4]) && source[pos+5]=="=";
+        if (directNamed) {
+            var saved=CaptureSlots(); Need("."); Need(member); var actual=Args(ordinary.Count);
+            output.AddRange(["return",Prefix+"member","("]);
+            int n=0;
+            foreach(var arg in saved.Select(x=>new List<string>{x}).Concat(actual)) {
+                if(n++>0)output.Add(","); output.AddRange(arg);
+            }
+            output.Add(")");
+        } else { output.Add("return"); output.AddRange(MainExpr()); }
+        Need(";"); Need("}"); Need("<eof>");
         output.AddRange([";", "}", "<eof>"]);
         if (output.Count > 8192) throw Denied("generated token limit");
         return output;
