@@ -448,8 +448,7 @@ pub async routine main(): void {
         }, "val can capture a runtime value without rebinding");
         Require(runtimeVals.Body[5] is StructuredSet { Name: "mutable" },
             "explicit let remains the only rebindable local");
-        // Untyped const keeps java's stage-one readonly-binding meaning: a
-        // runtime initializer stays a call; only typed scalar const is constexpr.
+        // All ordinary scalar const declarations can retain runtime calls.
         var untypedRuntimeConst = OresStructuredParser.Parse(
             "fnc inc(int p):int{return p+1;}fnc main():int{const inferred=inc(41);return inferred;}");
         Require(untypedRuntimeConst.Body[0] is StructuredLet {
@@ -459,19 +458,17 @@ pub async routine main(): void {
         Reject("fnc inc(int p):int{return p+1;}" +
                "fnc main():int{const x=inc(41);x=0;return x;}",
             "runtime-initialized untyped const must still deny assignment");
-        foreach (var source in new[] {
-            "fnc inc(int p):int{return p+1;}fnc main():int{int x=inc(41);return x;}",
-            "fnc inc(int p):int{return p+1;}fnc main():int{const int x=inc(41);return x;}"
-        })
-            RejectFeature(source, "E_NON_CONST_INITIALIZER");
-
-        // Both spellings must be rejected for the same targeted semantic reason.
-        RejectFeature("fnc runtime_value():int{return 42;}fnc main():int{int x=runtime_value();return x;}",
-            "E_NON_CONST_INITIALIZER");
-        RejectFeature("fnc runtime_value():int{return 42;}fnc main():int{const int x=runtime_value();return x;}",
-            "E_NON_CONST_INITIALIZER");
-        RejectFeature("fnc runtime_value():int{return 42;}fnc main():int{const x:int=runtime_value();return x;}",
-            "E_NON_CONST_INITIALIZER");
+        foreach (string spelling in new[] { "int x=inc(41);", "const int x=inc(41);",
+            "const x:int=inc(41);", "const x as int=inc(41);" })
+        {
+            var runtime = OresStructuredParser.Parse(
+                "fnc inc(int p):int{return p+1;}fnc main():int{" + spelling + "return x;}");
+            Require(runtime.Body[0] is StructuredLet {
+                Kind: StructuredBindingKind.Const, Initializer: StructuredCall { Name: "inc" }
+            }, "typed const preserves runtime call: " + spelling);
+            Reject("fnc inc(int p):int{return p+1;}fnc main():int{" + spelling + "x=0;return x;}",
+                "runtime const remains immutable");
+        }
         foreach (string spelling in new[] { "const mut int x=42;", "const mut x:int=42;",
             "const mut x as int=42;", "const mut x=42;", "val int x=42;" })
         {
@@ -837,8 +834,7 @@ pub async routine main(): void {
             "let x=true;x=7;return 42;",
             "const x=missing;return 42;",
             "const x=x;return 42;",
-            "val x=42;const int y=x as int;return y;",
-            "val bool x=true;const bool y=x as bool;return 42;"
+            "const x=x;return x;"
         }) Reject("fnc main():int{" + invalid + "}", "scalar cast/inference fail-closed " + invalid);
 
         var runtimeBool = OresStructuredParser.Parse("""
@@ -857,14 +853,20 @@ pub async routine main(): void {
             "const is immutable");
         Reject("fnc main():int{val bool v=true;if v {v=false;}return 1;}",
             "nested blocks cannot mutate outer val");
-        // Runtime bindings use val, not const: every const scalar requires
-        // deterministic static evaluation before CFG/CIL emission.
+        // Runtime const snapshots the current scalar value without granting
+        // authority to replace the fixed root binding.
         foreach (var source in new[] {
             "fnc main():int{let int x=2;const int c=x;return c;}",
             "fnc main():int{val int x=2;const int c=x;return c;}",
             "fnc main():int{let int x=2;int c=x;return c;}"
         })
-            RejectFeature(source, "E_NON_CONST_INITIALIZER");
+        {
+            var runtimeConst = OresStructuredParser.Parse(source);
+            Require(runtimeConst.Body[1] is StructuredLet {
+                Name: "c", Kind: StructuredBindingKind.Const,
+                Initializer: StructuredRead { Type: IrValueType.I64 }
+            }, "runtime const keeps the eager typed read");
+        }
         foreach (var source in new[] {
             "fnc main():int{let int x=2;val int c=x;return c;}",
             "fnc main():int{val int x=2;val int c=x;return c;}"
