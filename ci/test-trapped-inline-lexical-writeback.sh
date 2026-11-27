@@ -53,3 +53,12 @@ reject effectful-condition 'pub fnc main():int{let int n=0;val Result<int,Error>
 reject nested 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{return sync task<int>{return 42;};};return 0;}' E_TRAP_INLINE_TASK_UNSUPPORTED
 reject cleanup 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer stdio.stdout.write("D");return 42;};return 0;}' E_LEXICAL_CLEANUP_UNSUPPORTED
 reject helper 'fnc f():int{return 42;}pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{return f();};return 0;}' E_TRAP_INLINE_TASK_UNSUPPORTED
+
+run_guest defer-lifo 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{defer n=42;defer n=7;return n;};guard r.is_ok(),n eq 42,r.unwrap() eq 0 {return 1;}return n;}' 0 42
+run_guest defer-unwrap 'pub fnc main():int{let int n=0;val Option<int> missing=None;val Result<int,Error> r=trap! sync task<int>{n=2;defer n=42;val int v=missing.unwrap();n=100;return v;};guard r.is_err(){return 1;}return n;}' 0 42
+run_guest defer-explicit-throw 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{defer n=42;if true {throw! new Error("bad");}return 0;};guard r.is_err(){return 1;}return n;}' 0 42
+run_guest defer-registration-order 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{defer n=42;if true {throw! new Error("bad");}defer n=7;return 0;};guard r.is_err(){return 1;}return n;}' 0 42
+run_guest defer-read-at-exit 'pub fnc main():int{let int n=0;let int v=0;val Result<int,Error> r=trap! sync task<int>{defer n=v;v=42;return 0;};return n;}' 0 42
+reject deferred-checked 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{defer n=n+1;return 42;};return n;}' E_LEXICAL_CLEANUP_UNSUPPORTED
+reject deferred-branch 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{if true {defer n=42;}return 42;};return n;}' E_LEXICAL_CLEANUP_UNSUPPORTED
+reject deferred-panic 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{defer n=42;if true {panic! new Error("bad");}return 42;};return n;}' E_LEXICAL_CLEANUP_UNSUPPORTED
