@@ -163,7 +163,7 @@ public static class OresCfgVerifier
         IReadOnlyDictionary<string, CfgCallSignature>? callees = null)
     {
         ArgumentNullException.ThrowIfNull(function);
-        if (!Identifier(function.Name) ||
+        if (!FunctionIdentifier(function.Name) ||
             !(IsValueType(function.ResultType) || function.ResultType is IrValueType.Void or IrValueType.OptionI64) ||
             !Identifier(function.Entry))
             throw new FormatException("Invalid CFG function signature");
@@ -771,6 +771,10 @@ public static class OresCfgVerifier
     {
         if (actual != expected) throw new FormatException("CFG result type mismatch");
     }
+
+    // Callable names use the source scalar grammar; CFG labels stay ASCII.
+    private static bool FunctionIdentifier(string value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= 128 && PortableUnicodeIdentifier.IsName(value);
 
     private static bool Identifier(string value)
     {
