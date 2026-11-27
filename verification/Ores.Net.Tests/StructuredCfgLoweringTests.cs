@@ -681,6 +681,30 @@ internal static class StructuredCfgLoweringTests
             "const r={foo:1};return r with {foo:2};"
         }) Reject("fnc main():int{" + body + "}", "Record with/newline boundary: " + body);
         Console.WriteLine("RECORD_WITH_NEWLINE_CORECLR_PASS positives=8 negatives=13");
+        foreach (string body in new[] {
+            "const x:=42;const Pair<int> p=x;return p.value;",
+            "const x=x:=42;const Pair<int> p=x;return p.value;",
+            "const x=Pair.of(\"x\",42);const Pair<int> p=x;return p.value;",
+            "const x=\"x\" :=42;return x.value;",
+            "const int y=7;const x=y:=42;return x.value+y-7;",
+            "const x:=40;const y:=x.value+2;return y.value;"
+        }) Check("fnc main():int{" + body + "}",42,"stored Pair: " + body, executeClr: true);
+        foreach (string body in new[] {
+            "const x:=1;const x:=2;return 0;",
+            "const x:=x;return 0;",
+            "const x=x:=x;return 0;",
+            "const x:=true;return 0;",
+            "val int y=42;const x:=y;return 0;",
+            "const int x=42;const Pair<int> p=x;return 0;",
+            "const x={value:42};const Pair<int> p=x;return 0;",
+            "const x:=42;return x;",
+            "const x:=42;x.value=7;return x.value;",
+            "const x:=42;const r={...x};return 0;",
+            "const x:=42;const r=x with {a:1};return 0;",
+            "const x=Pair.of(7,42);return 0;",
+            "const x:=42;const x=Pair.of(\"x\",42);return 0;"
+        }) Reject("fnc main():int{" + body + "}", "stored Pair boundary: " + body);
+        Console.WriteLine("STORED_PAIR_CORECLR_PASS positives=6 negatives=13");
         // Runtime-valued immutable rows snapshot scalars into private verified
         // SSA places: later mutation of the original local cannot change them.
         Check("fnc main():int{let int source=20;val row=infer struct{x:source,y:28};source=99;return row.x+row.y;}",
