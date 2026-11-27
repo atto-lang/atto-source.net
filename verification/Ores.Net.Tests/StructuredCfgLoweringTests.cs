@@ -663,6 +663,22 @@ internal static class StructuredCfgLoweringTests
             "val int x=1;val r=record{foo:x};const v={...r};return 0;"
         }) Reject("fnc main():int{" + body + "}", "mixed Record safety: " + body);
         Console.WriteLine("MIXED_RECORD_CORECLR_PASS positives=13 negatives=18");
+        Check("fnc main():int{const Tuple t=(20,22);const (a,b) as r=t;return a+r[1];}",42,"scalar tuple capture",executeClr:true);
+        Check("fnc main():int{const s={a:20,b:22,c:9};const {a,b} as r=s;return a+r.b+r.c-9;}",42,"Record capture retains unselected fields",executeClr:true);
+        Check("fnc main():int{const Tuple t=(20,22);const (a,b) as Record r=t;return r.a+b;}",42,"explicit Tuple to Record capture",executeClr:true);
+        Check("fnc main():int{const x=();const () as r=x;const Record e={};const {} as s=e;return 42;}",42,"empty aggregate capture",executeClr:true);
+        foreach (string body in new[] {
+            "const Tuple t=(1,2);const (a) as r=t;return 0;",
+            "const Tuple t=(1,2);const (a,a) as r=t;return 0;",
+            "const Tuple t=(1,2);const (a,b) as a=t;return 0;",
+            "const Tuple t=(1,2);const {a,b} as r=t;return 0;",
+            "const s={a:1};const {b} as r=s;return 0;",
+            "const Tuple t=(1,2);const (a,b) as Array r=t;return 0;",
+            "const Tuple t=(1,2);const (a,let b) as r=t;return 0;",
+            "const Tuple t=(1,2);const [a,b] as r=t;return 0;",
+            "const Tuple t=(1,2);const (a,b) as r=t;a=3;return a;"
+        }) Reject("fnc main():int{"+body+"}", "scalar destructure safety: "+body);
+
         // Runtime-valued immutable rows snapshot scalars into private verified
         // SSA places: later mutation of the original local cannot change them.
         Check("fnc main():int{let int source=20;val row=infer struct{x:source,y:28};source=99;return row.x+row.y;}",
