@@ -1,0 +1,6 @@
+pub fnc main(): int {
+    val bool flag = false;
+    val bool value = sync task<bool> { return !flag; };
+    guard value, !flag, ! false, 1 !eq 2, 1 != 2 { return 1; }
+    return 42;
+}

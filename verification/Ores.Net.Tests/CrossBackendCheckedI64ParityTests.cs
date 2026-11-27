@@ -148,15 +148,18 @@ static class CrossBackendCheckedI64ParityTests
             throw new Exception("FAILED: cross-backend checked-i64 overflow did not trap: " + name);
         }
 
-        try
+        foreach (var expression in new[] { "7 / 2", "7 / 0", "-9223372036854775808 / -1" })
         {
-            _ = OresParser.Parse(Header + "define pub fnc main(): int { return 7 / 2; }");
+            try
+            {
+                _ = OresParser.Parse(Header + "define pub fnc main(): int { return " + expression + "; }");
+            }
+            catch (FormatException ex) when (ex.Message.Contains("Checked integer division requires typed guest error lowering; unsupported in the i64 source subset", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            throw new Exception("FAILED: scalar division admitted without checked guest error lowering: " + expression);
         }
-        catch (FormatException ex) when (ex.Message.Contains("float result lowering", StringComparison.Ordinal))
-        {
-            return;
-        }
-        throw new Exception("FAILED: int/int division was admitted without float lowering");
     }
 
     private static void OreslanaPortableScalarCilBoundary()
@@ -254,14 +257,6 @@ static class CrossBackendCheckedI64ParityTests
             ("7^3^1", "Reserved AttoLang operator '^'"),
             ("7^ ^3", "Reserved AttoLang operator '^'"),
             ("9223372036854775807^1", "Reserved AttoLang operator '^'"),
-            ("7^^3", "Logical operator requires bool operands"),
-            ("7 ^^ 3", "Logical operator requires bool operands"),
-            ("-7^^3", "Logical operator requires bool operands"),
-            ("7^^(1+2)", "Logical operator requires bool operands"),
-            ("7^^3^^1", "Logical operator requires bool operands"),
-            ("-9223372036854775808^^-1", "Logical operator requires bool operands"),
-            ("(7^^3)", "Logical operator requires bool operands"),
-            ("7 ^^ -3", "Logical operator requires bool operands"),
             ("20%6%3", "noncanonical '%' source operator"),
             ("7%-(1+1)", "noncanonical '%' source operator")
         };
@@ -281,6 +276,30 @@ static class CrossBackendCheckedI64ParityTests
                 { continue; }
                 throw new Exception($"FAILED: {frontend} admitted reserved operator in {expression}");
             }
+        }
+
+        // Historical v1 scalar negatives remain explicit; the canonical
+        // scalar and structured compilers must agree on the same source bytes.
+        foreach (var (expression, expected) in new (string, long)[]
+        {
+            ("7^^3", 4),
+            ("7 ^^ 3", 4),
+            ("-7^^3", -6),
+            ("7^^(1+2)", 4),
+            ("7^^3^^1", 5),
+            ("-9223372036854775808^^-1", long.MaxValue),
+            ("(7^^3)", 4),
+            ("7 ^^ -3", -6),
+        })
+        {
+            string source = "fnc main():int{return " + expression + ";}";
+            bool rejected = false;
+            try { _ = OresParser.Parse(source, languageVersion: 1); }
+            catch (FormatException ex) when (ex.Message.Contains("Integer XOR requires canonical scalar syntax", StringComparison.Ordinal)) { rejected = true; }
+            if (!rejected) throw new Exception("historical scalar v1 accepted XOR: " + expression);
+            if (OresIrReferenceEvaluator.Evaluate(OresIrLowering.Lower(OresParser.Parse(source))) != expected ||
+                CfgReferenceEvaluator.Evaluate(OresStructuredCfgLowering.Lower(source)) != expected)
+                throw new Exception("canonical XOR evaluator mismatch: " + expression);
         }
 
         // A pre-lexical substring gate would reject these legal sources.
@@ -480,7 +499,7 @@ static class CrossBackendCheckedI64ParityTests
             "unknown_value", "7 / 2", "5 ^ 3", "5 ^^ 3", "1__0"
         })
         {
-            try { _ = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}"); }
+            try { _ = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}", languageVersion: expression == "5 ^^ 3" ? 1 : null); }
             catch (FormatException) { continue; }
             throw new Exception("OresLLM unsupported expression admitted: " + expression);
         }

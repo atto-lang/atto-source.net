@@ -21,9 +21,9 @@ internal static class StructuredSourceTests
         throw new Exception("Structured source incorrectly accepted: " + reason);
     }
 
-    private static void RejectFeature(string source, string expectedDiagnostic)
+    private static void RejectFeature(string source, string expectedDiagnostic, bool strictConditionals = false)
     {
-        try { _ = OresStructuredParser.Parse(source); }
+        try { _ = strictConditionals ? OresStructuredParser.ParseStrictConditionals(source) : OresStructuredParser.Parse(source); }
         catch (FormatException error)
         {
             Require(error.Message.Contains(expectedDiagnostic, StringComparison.OrdinalIgnoreCase),
@@ -89,8 +89,34 @@ internal static class StructuredSourceTests
             "break requires an enclosing loop");
         RejectFeature("fnc main():int{do unless false then continue; fi return 0;}",
             "continue requires an enclosing loop");
-        RejectFeature("fnc main():int{loop{if true then break; fi}return 0;}",
-            "use 'do if'");
+        foreach (string head in new[] { "if", "ifnot", "unless" })
+        {
+            string legacy = "fnc main():int{loop{" + head + " true then break; fi}return 0;}";
+            Require(OresStructuredParser.Parse(legacy).Body.Count == 2,
+                "migration-only keyword statement retained");
+            RejectFeature(legacy, "use 'do if'", strictConditionals: true);
+            Require(OresStructuredParser.ParseStrictConditionals(
+                "fnc main():int{loop{do " + head + " true then break; fi}return 0;}").Body.Count == 2,
+                "strict explicit do statement");
+            Require(OresStructuredParser.ParseStrictConditionals(
+                "fnc main():int{loop{" + head + " true do break; fi}return 0;}").Body.Count == 2,
+                "strict suffix do statement");
+            Require(OresStructuredParser.ParseStrictConditionals(
+                "fnc main():int{do " + head + " true then if false {return 1;} fi return 42;}").Body.Count == 2,
+                "strict nested brace must not consume outer fi");
+            Require(OresStructuredParser.ParseStrictConditionals(
+                "fnc main():int{loop{" + head + " true {break;}}return 0;}").Body.Count == 2,
+                "strict brace statement");
+            RejectFeature("fnc main():int{loop{" + head + " true {break;}fi}return 0;}",
+                "brace statements must not end with fi", strictConditionals: true);
+            Require(OresStructuredParser.ParseStrictConditionals(
+                "fnc main():int{return " + head + " true then 42 else 7 fi;}").Body.Count == 1,
+                "strict value conditional");
+        }
+        Require(OresStructuredParser.ParseStrictConditionals(accepted).Body.Count == 3,
+            "strict canonical negated conditional fixture");
+        RejectFeature("fnc main():int{if true then break; fi return 0;}",
+            "break requires an enclosing loop");
         RejectFeature("fnc main():int{return ifnot false then break; else 3 fi;}",
             "must produce a value");
         RejectFeature("fnc main():int{return unless true then 3 fi;}",
@@ -99,9 +125,31 @@ internal static class StructuredSourceTests
             "non-boolean value-if condition");
     }
 
+    public static void RunExplicitTernaryArms()
+    {
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return true ? { return 42; } : { ^ 7; };}").Body[0]
+            is StructuredReturn { Value: StructuredConditional { ResultType: IrValueType.I64 } },
+            "explicit braced results share the typed conditional AST");
+        foreach (string arm in new[] { "{}", "{status: 42}", "{42}", "{val int x=42; return x;}" })
+            RejectFeature("fnc main():int{return true ? " + arm + " : 7;}", "E_VALUE_ARM");
+        RejectFeature("fnc main():int{return false ? 7 : {};}", "E_VALUE_ARM");
+    }
+
     public static void Run()
     {
         NegatedDoIfSyntax();
+        Require(OresStructuredParser.Parse(
+            "pub fnc main():int{val bool f=false;guard !(f), !(!true){return 0;}return 42;}").Body.Count == 3,
+            "parenthesized prefix logical not must not be confused with macro invocation");
+        RejectFeature("pub fnc main():int{return missing!(42);}",
+            "NET_STRUCTURED_MACRO_EXPANDER_REQUIRED");
+        RejectFeature("pub fnc main():int{return missing ! (42);}",
+            "NET_STRUCTURED_MACRO_EXPANDER_REQUIRED");
+        RejectFeature("pub fnc main():int{return!(42);}",
+            "NET_STRUCTURED_MACRO_EXPANDER_REQUIRED");
+        RejectFeature("pub fnc main():int{val bool x=!(42);return 42;}",
+            "Logical not requires bool");
         // Native AOT has no actor hierarchy, trait/interface witness ABI,
         // runtime-owned receive slot or actor state loan lowering yet. Every
         // source spelling must fail at the dedicated capability boundary.
@@ -260,10 +308,18 @@ pub async routine main(): void {
             ("define class Foo as x(mut self Foo)(int n):int {} x(int n):int {} end", "x/1"),
             ("define class Foo as x(self Foo, int n):int {} x(mut self Foo)(int n):int {} end", "x/1"),
             // Legacy class fnc is an instance declaration, unlike static fnc.
+            ("define class Foo as mtd():void {} mtd mtd():void {} end", "mtd/0"),
+            ("define class Foo as mtd mtd():void {} mtd():void {} end", "mtd/0"),
+            ("define class Foo as fnc mtd():void {} mtd():void {} end", "mtd/0"),
+            ("define class Foo as method():void {} mtd method():void {} end", "method/0"),
+            ("define actor Foo as mtd():void {} fnc mtd():void {} end", "mtd/0"),
+            ("define actor Foo as mtd x(int n):int {} fnc x(self,int n):int {} end", "x/1"),
+            ("define class Foo as mtd mtd(int n):int {} mtd(self,int n):int {} end", "mtd/1"),
+            ("define class Foo as mtd method():void {} method():void {} end", "method/0"),
             ("define class Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
             ("define class Foo as x(mut self)():void {} fnc x():void {} end", "x/0"),
-            ("define class Foo as fnc x(int n):int {} method x(mut self, int n):int {} end", "x/1"),
-            ("define class Foo as method x(mut self, int n):int {} fnc x(int n):int {} end", "x/1"),
+            ("define class Foo as fnc x(int n):int {} mtd x(mut self, int n):int {} end", "x/1"),
+            ("define class Foo as mtd x(mut self, int n):int {} fnc x(int n):int {} end", "x/1"),
             ("define pub class Foo as pub fnc x():void {} x(mut self)():void {} end", "x/0"),
             ("pub define class Foo as x(int n):int {} pub fnc x(mut self, int n):int {} end", "x/1"),
             ("define actor Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
@@ -274,6 +330,14 @@ pub async routine main(): void {
             ("define actor Foo as x(mut self, int n):void {} x(int n):void {} end", "x/1")
         })
             RejectFeature(source, "Duplicate nominal method slot 'Foo::Instance::" + slot + "'");
+
+        foreach (var obsolete in new[] {
+            "define class Foo as method x():void {} end",
+            "define actor Foo as method x():void {} end",
+            "define class Foo as pub method method():void {} end",
+            "define class Foo as method x(mut self, int n):int {} fnc x(int n):int {} end"
+        })
+            RejectFeature(obsolete, "Obsolete method introducer; use mtd");
 
         // Static callables have their own owner/name/value-arity identity:
         // static-static duplicates reject, but static-instance pairs coexist.
@@ -289,6 +353,10 @@ pub async routine main(): void {
         // comments are not lexical declarations, and constructor body calls
         // must not create phantom method slots.
         foreach (var validButNotExecutable in new[] {
+            "define class Foo as mtd():void {} method():void {} end",
+            "define class Foo as mtd():void {} mtd x():void {} end",
+            "define class Foo as static fnc mtd():void {} mtd():void {} end",
+            "define class Foo as mtd():void {} mtd mtd(int n):int {} end",
             "define class Foo as x(int n):int {} y(mut self, int n):int {} end",
             "define class Foo as x()->void {} y(mut self)()->void {} end",
             "define class Foo as x():void {} /* x(mut self)():void {} */ y():void {} end",
@@ -535,6 +603,7 @@ pub async routine main(): void {
             System.Reflection.BindingFlags.Static |
             System.Reflection.BindingFlags.NonPublic)
             ?? throw new Exception("Linked import admission entry point missing");
+        foreach (bool compilerOwnedCoreNamespace in new[] { false, true })
         foreach (var (source, expectedError) in new (string, string)[] {
             ("/* hidden " + '\0' + " */", "Source contains NUL"),
             ("/* hidden " + (char)0xD800 + " */", "Invalid UTF-16"),
@@ -544,7 +613,7 @@ pub async routine main(): void {
         {
             try
             {
-                _ = readLinkedImports.Invoke(null, new object?[] { source });
+                _ = readLinkedImports.Invoke(null, new object?[] { source, compilerOwnedCoreNamespace });
             }
             catch (System.Reflection.TargetInvocationException failure)
                 when (failure.InnerException is FormatException error &&
@@ -557,14 +626,15 @@ pub async routine main(): void {
                 "Linked import discovery admitted malformed source before full parse: " +
                 expectedError);
         }
-        _ = readLinkedImports.Invoke(null, new object?[] { "/* valid \uD83D\uDD12 */" });
+        foreach (bool compilerOwnedCoreNamespace in new[] { false, true })
+            _ = readLinkedImports.Invoke(null, new object?[] { "/* valid \uD83D\uDD12 */", compilerOwnedCoreNamespace });
 
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
         // by CFG/CIL lowering until value layout and construction are verified.
         var localTypes = OresStructuredParser.Parse("""
             fnc main():int {
-                struct Pair { int left; int right }
+                struct LocalPair { int left; int right }
                 record Status { bool ready, int code };
                 return 42;
             }
@@ -572,7 +642,7 @@ pub async routine main(): void {
         Require(localTypes.Body.Count == 3,
             "local struct/record declarations are preserved as statements");
         Require(localTypes.Body[0] is StructuredLocalTypeDecl {
-            Name: "Pair", Kind: StructuredLocalTypeKind.Struct, Fields.Count: 2
+            Name: "LocalPair", Kind: StructuredLocalTypeKind.Struct, Fields.Count: 2
         } pair && pair.Fields[0] == new StructuredLocalField("left", IrValueType.I64)
                && pair.Fields[1] == new StructuredLocalField("right", IrValueType.I64),
             "local struct field order and scalar types are preserved");
@@ -581,9 +651,11 @@ pub async routine main(): void {
         } status && status.Fields[0] == new StructuredLocalField("ready", IrValueType.Bool)
                  && status.Fields[1] == new StructuredLocalField("code", IrValueType.I64),
             "local record field order and scalar types are preserved");
-        Reject("fnc main():int{struct Pair{int x;int x}return 1;}",
+        RejectFeature("fnc main():int{struct Pair{int x}return 1;}",
+            "E_CORE_TYPE_LOWERING_UNSUPPORTED");
+        Reject("fnc main():int{struct LocalPair{int x;int x}return 1;}",
             "duplicate local value-type fields are forbidden");
-        Reject("fnc main():int{struct Pair{int x}if true{record Pair{int y}}return 1;}",
+        Reject("fnc main():int{struct LocalPair{int x}if true{record LocalPair{int y}}return 1;}",
             "nested local value types cannot shadow an active local type");
         foreach (var nominal in new[] {
             "fnc main():int{class Local{}return 1;}",
@@ -601,7 +673,7 @@ pub async routine main(): void {
         try
         {
             _ = OresStructuredCfgLowering.Lower(
-                "fnc main():int{struct Pair{int left;int right}return 42;}");
+                "fnc main():int{struct LocalPair{int left;int right}return 42;}");
             throw new Exception("Local value type reached CFG lowering without layout support");
         }
         catch (FormatException ex)
@@ -1219,8 +1291,9 @@ pub async routine main(): void {
         }
         catch (FormatException ex)
         {
-            Require(ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal),
-                "legacy mutable borrow diagnostic must name canonical spelling");
+            Require(ex.Message.Contains("'rt mut borrow' requires typed actor-arena lowering",
+                StringComparison.Ordinal),
+                "legacy mutable borrow must reach the typed actor-arena gate");
         }
 
         foreach (var source in new[] {
@@ -1356,6 +1429,7 @@ pub async routine main(): void {
             "fnc main():int{const bool x=true xor false;return x ? 42 : 7;}").Body[1]
             is StructuredReturn { Value: StructuredConditional { ResultType: IrValueType.I64 } },
             "conditional and compile-time boolean XOR are typed");
+        RunExplicitTernaryArms();
         Reject("fnc and():int{return 0;}fnc main():int{return 42;}",
             "logical keywords are reserved as function names");
         Reject("fnc main():int{let bool or=true;return 42;}",
@@ -1387,8 +1461,10 @@ pub async routine main(): void {
             "lowercase logical word reservation is case-sensitive");
         Reject("fnc main():int{let bool b=true;return b+1;}",
             "boolean arithmetic");
-        Reject("fnc main():int{let int x=1/2;return x;}",
-            "int division is not i64 in canonical semantics");
+        Require(CfgReferenceEvaluator.Evaluate(OresStructuredCfgLowering.Lower(
+            "fnc main():int{return -7/3;}")) == -2,
+            "signed integer division truncates toward zero");
+        Reject("fnc main():int{return 1/false;}", "division requires both operands to be int");
         Reject("fnc main():int{let int x=9223372036854775808;return x;}",
             "literal exceeding i64 range");
         Reject("fnc main():int{let int x=-9223372036854775809;return x;}",

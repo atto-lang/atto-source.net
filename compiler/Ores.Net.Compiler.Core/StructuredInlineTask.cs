@@ -1,0 +1,241 @@
+namespace Ores.Net.Compiler;
+
+internal sealed record StructuredLocalExit(int At, StructuredExpr? Value) : StructuredStmt(At);
+internal sealed record StructuredInlineCooperate(int At) : StructuredStmt(At);
+internal sealed record StructuredInlineTask(IReadOnlyList<StructuredStmt> Body, IrValueType Type, bool ExitsScope, bool WriteBack);
+internal sealed record StructuredDoSyncTask(int At, StructuredInlineTask Task) : StructuredStmt(At);
+internal sealed record StructuredSyncTaskValue(int At, StructuredInlineTask Task) : StructuredExpr(At, Task.Type);
+
+public static partial class OresStructuredParser
+{
+    private sealed partial class Reader
+    {
+        private sealed class LocalReturnScope(string diagnostic, IrValueType? type, int loopFloor)
+        {
+            public string Diagnostic { get; } = diagnostic;
+            public int LoopFloor { get; } = loopFloor;
+            public IrValueType? Type { get; set; } = type;
+            public bool HasExit { get; set; }
+        }
+
+        private LocalReturnScope? localReturn;
+        private int inlineTaskDepth;
+        private int? inlineValueBindingFloor;
+        private int? directInlineWritebackOffset;
+        private int? conditionalWritebackRoot;
+        private int? matchWritebackRoot;
+        private HashSet<int>? matchWritebackArms;
+        private HashSet<int>? conditionalWritebackArms;
+
+        // Lexical lookahead only selects the supported statement context.
+        // The ordinary typed parser still checks the complete task and result.
+        private bool IsDirectInlineStatementValue(int start, string terminator = ";")
+        {
+            if (start + 1 >= tokens.Count || tokens[start].Text != "sync" ||
+                tokens[start + 1].Text != "task") return false;
+            int cursor = start + 2;
+            while (cursor < tokens.Count && tokens[cursor].Text is not ("{" or ";" or "}" or ""))
+                cursor++;
+            if (cursor >= tokens.Count || tokens[cursor].Text != "{") return false;
+            int braces = 0;
+            for (; cursor < tokens.Count; cursor++)
+            {
+                if (tokens[cursor].Text == "{") braces++;
+                else if (tokens[cursor].Text == "}" && --braces == 0)
+                    return cursor + 1 < tokens.Count && tokens[cursor + 1].Text == terminator;
+            }
+            return false;
+        }
+
+        // Admit only an entire statement task or the immediate right operand
+        // of a top-level short-circuit expression ending at the semicolon.
+        // Tokens retain literal delimiters, so quoted punctuation is not a brace.
+        private int? StatementWritebackOffset()
+        {
+            if (IsDirectInlineStatementValue(index)) return Current.Offset;
+            // Only a complete statement RHS can carry lexical writeback
+            // through a trapped inline task, never an arbitrary operand.
+            if (Current.Text is ("trap" or "trap!") &&
+                IsDirectInlineStatementValue(index + 1))
+                return Current.Offset;
+            int parens = 0, braces = 0, brackets = 0;
+            for (int cursor = index; cursor + 2 < tokens.Count; cursor++)
+            {
+                string token = tokens[cursor].Text;
+                if (parens == 0 && braces == 0 && brackets == 0)
+                {
+                    if (token is ";" or "}" or "") break;
+                    if (token is ("and" or "&&" or "or" or "||") &&
+                        IsDirectInlineStatementValue(cursor + 1))
+                        return tokens[cursor + 1].Offset;
+                }
+                switch (token)
+                {
+                    case "(": parens++; break;
+                    case ")": if (--parens < 0) return null; break;
+                    case "{": braces++; break;
+                    case "}": if (--braces < 0) return null; break;
+                    case "[": brackets++; break;
+                    case "]": if (--brackets < 0) return null; break;
+                }
+            }
+            return null;
+        }
+
+        private static bool IsWritebackStatementShape(StructuredExpr value, int offset) =>
+            value is StructuredSyncTaskValue task && task.Offset == offset ||
+            value is StructuredBinary
+            {
+                Operator: StructuredOperator.LogicalAnd or StructuredOperator.LogicalOr,
+                Right: StructuredSyncTaskValue rhs
+            } && rhs.Offset == offset;
+
+        // A conditional's own parser selects only its immediate, complete
+        // arms. Nested conditionals and other expression nodes cannot inherit
+        // the permission. The caller verifies the resulting root AST.
+        private StructuredExpr ReadConditionalStatementArm(int depth, bool root, string terminator,
+            bool conditionalOnly = false)
+        {
+            int? previous = directInlineWritebackOffset;
+            bool selected = root && IsDirectInlineStatementValue(index, terminator);
+            directInlineWritebackOffset = selected ? Current.Offset : null;
+            if (selected) conditionalWritebackArms!.Add(Current.Offset);
+            try { return conditionalOnly ? Conditional(depth) : Expr(depth); }
+            finally { directInlineWritebackOffset = previous; }
+        }
+
+        private static bool IsConditionalWritebackShape(StructuredExpr value, HashSet<int> arms)
+        {
+            if (value is not StructuredConditional conditional) return false;
+            return arms.All(offset =>
+                conditional.WhenTrue is StructuredSyncTaskValue yes && yes.Offset == offset ||
+                conditional.WhenFalse is StructuredSyncTaskValue no && no.Offset == offset);
+        }
+
+        // Only complete, semicolon-terminated task values in immediate match
+        // arms receive permission. Neither the subject nor the guard does.
+        private StructuredExpr ReadMatchStatementArm(int depth, IrValueType? expected, bool root)
+        {
+            int? previous = directInlineWritebackOffset;
+            bool selected = root && IsDirectInlineStatementValue(index);
+            directInlineWritebackOffset = selected ? Current.Offset : null;
+            if (selected) matchWritebackArms!.Add(Current.Offset);
+            try { return expected is { } type ? ExpectedExpr(depth, type) : Expr(depth); }
+            finally { directInlineWritebackOffset = previous; }
+        }
+
+        private static bool IsMatchWritebackShape(StructuredExpr value, HashSet<int> arms) =>
+            value is StructuredMatchValue match && arms.All(offset => match.Match.Arms.Any(arm =>
+                arm.Value is StructuredSyncTaskValue task && task.Offset == offset));
+
+        // Both declarations and mutable assignments evaluate a complete RHS
+        // in the current SSA environment before installing their binding.
+        // The offset is a narrow permission, never inherited by other nodes.
+        private StructuredExpr ReadStatementValue(int depth, IrValueType? expected, bool allowWriteback)
+        {
+            int? previous = directInlineWritebackOffset;
+            int? previousRoot = conditionalWritebackRoot;
+            var previousArms = conditionalWritebackArms;
+            int? previousMatchRoot = matchWritebackRoot;
+            var previousMatchArms = matchWritebackArms;
+            bool keywordMatch = allowWriteback && Current.Text == "match";
+            matchWritebackRoot = keywordMatch ? Current.Offset : null;
+            matchWritebackArms = keywordMatch ? new HashSet<int>() : null;
+            bool keywordConditional = allowWriteback && Current.Text is ("if" or "ifnot" or "unless");
+            // The statement entry offset also identifies a possible ternary.
+            // Only its parser can grant permission after consuming '?'.
+            bool allowConditional = allowWriteback && !keywordMatch;
+            conditionalWritebackRoot = allowConditional ? Current.Offset : null;
+            conditionalWritebackArms = allowConditional ? new HashSet<int>() : null;
+            int? selected = allowWriteback && !keywordConditional && !keywordMatch ? StatementWritebackOffset() : null;
+            directInlineWritebackOffset = selected;
+            try
+            {
+                var value = expected is { } type ? ExpectedExpr(depth, type) : Expr(depth);
+                if (selected is int offset && !IsWritebackStatementShape(value, offset))
+                    throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: writeback requires a complete task or short-circuit statement value");
+                if (conditionalWritebackArms is { Count: > 0 } arms &&
+                    !IsConditionalWritebackShape(value, arms))
+                    throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: conditional writeback requires immediate statement arms");
+                if (matchWritebackArms is { Count: > 0 } matchArms &&
+                    !IsMatchWritebackShape(value, matchArms))
+                    throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: match writeback requires immediate statement arms");
+                return value;
+            }
+            finally
+            {
+                directInlineWritebackOffset = previous;
+                conditionalWritebackRoot = previousRoot;
+                conditionalWritebackArms = previousArms;
+                matchWritebackRoot = previousMatchRoot;
+                matchWritebackArms = previousMatchArms;
+            }
+        }
+
+        private bool AtSyncTask() => Current.Text == "sync" && tokens[index + 1].Text == "task";
+
+        private StructuredLocalExit ReadLocalExit(int at, int depth, LocalReturnScope scope)
+        {
+            StructuredExpr? value = null;
+            if (Current.Text == ";" || Take("void"))
+            {
+                if (scope.Type is not (null or IrValueType.Void))
+                    throw Error($"{scope.Diagnostic}: a value return is required");
+            }
+            else
+            {
+                if (scope.Type == IrValueType.Void)
+                    throw Error($"{scope.Diagnostic}: this scope requires a void return");
+                var expected = scope.Type ?? expectedExpressionType;
+                value = expected is { } type ? ExpectedExpr(depth + 1, type) : Expr(depth + 1);
+                if (value.Type is IrValueType.Void or IrValueType.FixedArrayI64)
+                    throw Error($"{scope.Diagnostic}: inline task results require a supported scalar or tagged layout");
+            }
+            Expect(";");
+            var returned = value?.Type ?? IrValueType.Void;
+            if (scope.Type is { } expectedReturn && expectedReturn != returned)
+                throw Error($"{scope.Diagnostic}: return type does not match the inline result");
+            scope.Type = returned;
+            scope.HasExit = true;
+            return new StructuredLocalExit(at, value);
+        }
+
+        private StructuredInlineTask ReadInlineTask(int depth, bool imperative, bool writeBack = false)
+        {
+            Budget(depth);
+            IrValueType? declared = imperative ? IrValueType.Void : null;
+            if (Take("<"))
+            {
+                declared = Take("void") ? IrValueType.Void : Type();
+                Expect(">");
+            }
+            if (imperative && declared != IrValueType.Void || !imperative && declared == IrValueType.Void)
+                throw Error("E_TASK_RETURN_TYPE: do sync task requires void and value-context sync task requires a value");
+            if (declared == IrValueType.FixedArrayI64)
+                throw Error("E_TASK_RETURN_TYPE: inline task array results require a verified aggregate layout");
+
+            var scope = new LocalReturnScope("E_TASK_RETURN_TYPE", declared, loopDepth);
+            var previous = localReturn;
+            var previousFloor = inlineValueBindingFloor;
+            // Never widen an inherited write restriction when a nested
+            // statement initializer is encountered inside a value expression.
+            if (!imperative && !writeBack) inlineValueBindingFloor = scopes.Count;
+            localReturn = scope;
+            inlineTaskDepth++;
+            try
+            {
+                var (body, terminal) = Block(depth + 1);
+                if (!imperative && (!terminal || !scope.HasExit || scope.Type is null or IrValueType.Void))
+                    throw Error("E_TASK_RETURN_TYPE: value-context sync task must explicitly return a value on every normal path");
+                return new StructuredInlineTask(body, scope.Type!.Value, terminal && !scope.HasExit,
+                    imperative || writeBack);
+            }
+            finally
+            {
+                inlineTaskDepth--;
+                inlineValueBindingFloor = previousFloor;
+                localReturn = previous;
+            }
+        }
+    }
+}

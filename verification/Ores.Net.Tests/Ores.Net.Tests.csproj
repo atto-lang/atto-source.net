@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <!-- Only the ordinary CLR host suite seeds the private u64 counter.
+         The linked trimmed NativeAOT probe excludes that reflection test. -->
+    <DefineConstants>$(DefineConstants);ENSEMBLE_SEQUENCE_BOUNDARY_HOST_TEST</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <!-- Rust #477 exact-blob field-loan parity; reject-only in .NET until typed lowering. -->

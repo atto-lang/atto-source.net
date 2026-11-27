@@ -1,0 +1,65 @@
+name: Root task lifecycle and managed fallback
+
+on:
+  pull_request:
+    paths:
+      - 'compiler/**'
+      - 'runtime/Ores.Net.Runtime/**'
+      - 'host/**'
+      - 'ci/test-task-inline-cil.sh'
+      - 'ci/test-guest-result-*.sh'
+      - 'ci/test-root-task-forward-port.sh'
+      - 'ci/test-root-task-lifecycle.sh'
+      - 'verification/RootTaskLifecycle/**'
+      - 'verification/Ores.Net.Tests/RootTaskI64Tests.cs'
+      - 'verification/assert-macos-native-release.sh'
+      - '.github/workflows/root-task-lifecycle-managed.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  managed-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify exact head and run managed compiled guests
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git log -1 --format='%H %T'
+          bash ci/test-task-inline-cil.sh coreclr
+          bash ci/test-root-task-forward-port.sh coreclr
+      - name: Run isolated host lifecycle tests on CoreCLR
+        if: ${{ always() }}
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git log -1 --format='%H %T'
+          bash ci/test-root-task-lifecycle.sh coreclr
+  native-lifecycle:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify exact head and execute NativeAOT lifecycle tests
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git log -1 --format='%H %T'
+          bash ci/test-root-task-lifecycle.sh macos-arm64

@@ -1,0 +1,1 @@
+pub fnc main(): int { let int a = 20; let int b = copy! a; a = 22; return a + b; }

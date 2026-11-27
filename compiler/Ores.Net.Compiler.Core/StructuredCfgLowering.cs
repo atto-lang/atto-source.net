@@ -6,7 +6,7 @@ namespace Ores.Net.Compiler;
 /// differential tests; LowerModule() retains independent CIL call boundaries.
 /// A local is represented by its current SSA value, never a mutable IL slot.
 /// </summary>
-public static class OresStructuredCfgLowering
+public static partial class OresStructuredCfgLowering
 {
     public static VerifiedCfgFunction Lower(string source)
     {
@@ -14,10 +14,24 @@ public static class OresStructuredCfgLowering
         return new Builder().Lower(parsed);
     }
 
+    // Explicit conditional-only strict admission, retaining the same verified CFG builder.
+    public static VerifiedCfgFunction LowerStrictConditionals(string source)
+        => new Builder().Lower(OresStructuredParser.ParseStrictConditionals(source));
+
     // ABI path: helpers become independent verified CFG methods. The old
     // Lower() method keeps the deliberately bounded inlining/reference path.
     public static VerifiedCfgModule LowerModule(string source)
         => LowerModule(OresStructuredParser.Parse(source));
+
+    public static VerifiedCfgModule? TryLowerGuardedModule(string source)
+        => OresStructuredParser.HasGuardToken(source)
+            ? LowerModule(OresStructuredParser.ParseProduction(source))
+            : null;
+
+    public static VerifiedCfgModule? TryLowerProductionModule(string source)
+        => OresStructuredParser.HasStructuredFeatureToken(source)
+            ? LowerModule(OresStructuredParser.ParseProduction(source))
+            : null;
 
     internal static VerifiedCfgModule LowerModule(StructuredProgram program)
     {
@@ -29,6 +43,33 @@ public static class OresStructuredCfgLowering
             throw new FormatException("Missing structured function order witness");
         if (order.Count != declarations.Count || order.Count > 64)
             throw new FormatException("Invalid structured function order witness");
+
+        int nextTrap = 0;
+        string OutlineTrap(StructuredExpr operand, IReadOnlyList<StructuredParameter> parameters)
+        {
+            string name;
+            do { name = "_atto_trap_" + nextTrap++; } while (declarations.ContainsKey(name));
+            var resultType = GuestResultTypes.Wrap(operand.Type);
+            var result = operand.Type == IrValueType.ResultI64Text
+                ? new StructuredResultWiden(operand.Offset, operand)
+                : operand.Type.IsResult() ? operand
+                : new StructuredResult(operand.Offset, operand, Success: true, resultType);
+            var function = new StructuredFunction(name, parameters, resultType, result,
+                new StructuredStmt[] { new StructuredReturn(operand.Offset, result) });
+            AddHelper(function);
+            return name;
+        }
+
+        void AddHelper(StructuredFunction helper)
+        {
+            var verified = new Builder(emitCalls: true, OutlineTrap)
+                .LowerHelper(helper, declarations, helperSignatures);
+            if (methods.Count >= 64)
+                throw new FormatException("Structured helper and trap method budget exceeded");
+            methods.Add(verified);
+            helperSignatures.Add(helper.Name, new CfgCallSignature(helper.ResultType, verified.Parameters));
+        }
+
         foreach (string name in order)
         {
             if (!declarations.TryGetValue(name, out var helper) ||
@@ -37,12 +78,9 @@ public static class OresStructuredCfgLowering
             // The method order is the exact source order, NOT the incidental
             // iteration order of a dictionary. A helper may refer only to
             // earlier, already verified signatures.
-            var verified = new Builder(emitCalls: true).LowerHelper(helper, helperSignatures);
-            methods.Add(verified);
-            helperSignatures.Add(name, new CfgCallSignature(helper.ResultType,
-                Array.AsReadOnly(helper.Parameters.Select(p => p.Type).ToArray())));
+            AddHelper(helper);
         }
-        var main = new Builder(emitCalls: true).Lower(program, helperSignatures);
+        var main = new Builder(emitCalls: true, OutlineTrap).Lower(program, helperSignatures);
         return new VerifiedCfgModule(main, methods.AsReadOnly());
     }
 
@@ -65,7 +103,8 @@ public static class OresStructuredCfgLowering
             OverflowTarget);
     }
 
-    private sealed class Builder(bool emitCalls = false)
+    private sealed partial class Builder(bool emitCalls = false,
+        Func<StructuredExpr, IReadOnlyList<StructuredParameter>, string>? outlineTrap = null)
     {
         private readonly List<Block> blocks = new();
         private IReadOnlyDictionary<string, StructuredFunction> functions =
@@ -76,17 +115,26 @@ public static class OresStructuredCfgLowering
         private readonly Stack<LoopTarget> loopTargets = new();
 
         public VerifiedCfgFunction LowerHelper(StructuredFunction helper,
+            IReadOnlyDictionary<string, StructuredFunction> declarations,
             IReadOnlyDictionary<string, CfgCallSignature> signatures)
         {
-            functions = new Dictionary<string, StructuredFunction>(StringComparer.Ordinal);
+            functions = declarations;
             callSignatures = signatures;
             var entry = NewBlock();
             var parameters = new Dictionary<string, Binding>(StringComparer.Ordinal);
-            for (int i = 0; i < helper.Parameters.Count; i++)
+            var slots = new List<IrValueType>();
+            int Argument(IrValueType type)
             {
-                var p = helper.Parameters[i];
-                int id = Emit(entry, CfgOpcode.Argument, p.Type, value: i);
-                parameters.Add(p.Name, new Binding(p.Type, id));
+                int id = Emit(entry, CfgOpcode.Argument, type, value: slots.Count);
+                slots.Add(type);
+                return id;
+            }
+            foreach (var parameter in helper.Parameters)
+            {
+                var value = parameter.Type == IrValueType.OptionI64
+                    ? new Binding(parameter.Type, Argument(IrValueType.Bool), Argument(IrValueType.I64))
+                    : new Binding(parameter.Type, Argument(parameter.Type));
+                parameters.Add(parameter.Name, value);
             }
             // Parameter values are defined once by ldarg in the entry block.
             // Branch, loop and local scope semantics reuse the verified main
@@ -95,7 +143,7 @@ public static class OresStructuredCfgLowering
                 throw new FormatException("Typed helper has unterminated return path");
             return OresCfgVerifier.Verify(new CfgFunction(helper.Name, helper.ResultType,
                 entry.Name, blocks.Select(b => b.Freeze()).ToArray(),
-                helper.Parameters.Select(p => p.Type).ToArray()), signatures);
+                slots), signatures);
         }
 
         public VerifiedCfgFunction Lower(StructuredProgram program,
@@ -134,12 +182,12 @@ public static class OresStructuredCfgLowering
         private int Emit(Block block, CfgOpcode opcode, IrValueType type,
             int? left = null, int? right = null,
             long? value = null, bool? boolean = null,
-            string? target = null, IReadOnlyList<int>? arguments = null)
+            string? target = null, IReadOnlyList<int>? arguments = null, string? text = null)
         {
             int id = NextValue();
             block.Instructions.Add(new CfgInstruction(id, opcode, type,
                 Left: left, Right: right, I64Constant: value, BoolConstant: boolean,
-                Target: target, Arguments: arguments));
+                Target: target, Arguments: arguments, TextOperand: text));
             return id;
         }
 
@@ -231,11 +279,90 @@ public static class OresStructuredCfgLowering
                         throw new FormatException("Unbound or unverified Option<int> local");
                     return (value.ValueId, value.PayloadId.Value);
                 }
+                case StructuredCall call when call.Type == IrValueType.OptionI64:
+                {
+                    var (function, parameters, slots) = PrepareCall(call, ref block, variables);
+                    if (!emitCalls)
+                        return OptionParts(InlineReturn(function), ref block, parameters);
+
+                    int result = Emit(block, CfgOpcode.Call, call.Type,
+                        target: call.Name, arguments: slots);
+                    int tag = Emit(block, CfgOpcode.ReadOptionI64Tag, IrValueType.Bool, left: result);
+                    int payload = Emit(block, CfgOpcode.ReadOptionI64Payload, IrValueType.I64, left: result);
+                    return (tag, payload);
+                }
+                case StructuredMatchValue match when match.Type == IrValueType.OptionI64:
+                {
+                    int value = MatchValue(match, ref block, variables);
+                    return (Emit(block, CfgOpcode.ReadOptionI64Tag, IrValueType.Bool, left: value),
+                        Emit(block, CfgOpcode.ReadOptionI64Payload, IrValueType.I64, left: value));
+                }
+                case StructuredConditional conditional when conditional.Type == IrValueType.OptionI64 &&
+                    HasConditionalWriteback(conditional):
+                {
+                    int value = ConditionalWritebackValue(conditional, ref block, variables);
+                    return (Emit(block, CfgOpcode.ReadOptionI64Tag, IrValueType.Bool, left: value),
+                        Emit(block, CfgOpcode.ReadOptionI64Payload, IrValueType.I64, left: value));
+                }
+                case StructuredSyncTaskValue task when task.Type == IrValueType.OptionI64:
+                {
+                    int value = InlineTaskValue(task, ref block, variables);
+                    return (Emit(block, CfgOpcode.ReadOptionI64Tag, IrValueType.Bool, left: value),
+                        Emit(block, CfgOpcode.ReadOptionI64Payload, IrValueType.I64, left: value));
+                }
+                case StructuredResultInspect result when result.ValueType == IrValueType.OptionI64:
+                    return UnwrapResultOption(Expression(result.Result, ref block, variables), block);
+                case StructuredPropagate propagation when propagation.Type == IrValueType.OptionI64:
+                {
+                    int result = PropagateResult(propagation.Operand, ref block, variables);
+                    return UnwrapResultOption(result, block);
+                }
                 default:
                     throw new FormatException(
                         "E_OPTION_I64_ONLY: unverified Option<int> expression");
             }
         }
+
+        private (StructuredFunction Function, Dictionary<string, Binding> Bindings, int[] Slots)
+            PrepareCall(StructuredCall call, ref Block block, Dictionary<string, Binding> variables)
+        {
+            if (!functions.TryGetValue(call.Name, out var function) ||
+                function.ResultType != call.Type || function.Parameters.Count != call.Arguments.Count ||
+                (emitCalls && (callSignatures is null || !callSignatures.ContainsKey(call.Name))))
+                throw new FormatException("Unverified structured helper call");
+
+            var bindings = new Dictionary<string, Binding>(StringComparer.Ordinal);
+            var slots = new List<int>();
+            // Evaluate each source operand once before starting the next one.
+            for (int i = 0; i < call.Arguments.Count; i++)
+            {
+                var parameter = function.Parameters[i];
+                var argument = call.Arguments[i];
+                if (parameter.Type != argument.Type)
+                    throw new FormatException("Unverified structured call argument type");
+                Binding binding;
+                if (argument.Type == IrValueType.OptionI64)
+                {
+                    var parts = OptionParts(argument, ref block, variables);
+                    binding = new Binding(argument.Type, parts.Tag, parts.Payload);
+                }
+                else
+                    binding = new Binding(argument.Type, Expression(argument, ref block, variables));
+
+                if (emitCalls)
+                {
+                    slots.Add(binding.ValueId);
+                    if (binding.PayloadId is int payload) slots.Add(payload);
+                }
+                else bindings.Add(parameter.Name, binding);
+            }
+            return (function, bindings, slots.ToArray());
+        }
+
+        private static StructuredExpr InlineReturn(StructuredFunction function) =>
+            function.ReturnValue ?? throw new FormatException(
+                "Statement-bodied helper requires the independent MethodDef ABI");
+
         private int Expression(StructuredExpr expression, ref Block block,
             Dictionary<string, Binding> variables)
         {
@@ -247,11 +374,50 @@ public static class OresStructuredCfgLowering
                 case StructuredBool boolean:
                     return Emit(block, CfgOpcode.ConstantBool, IrValueType.Bool,
                         boolean: boolean.Value);
+                case StructuredGuestError error:
+                    return Emit(block, CfgOpcode.GuestErrorLiteral, error.Type, text: error.Message);
+                case StructuredGuestText literal:
+                    return Emit(block, CfgOpcode.GuestTextLiteral, literal.Type, text: literal.Text);
+                case StructuredResultWiden widen:
+                {
+                    int operand = Expression(widen.Operand, ref block, variables);
+                    return Emit(block, CfgOpcode.ResultWiden, widen.Type, left: operand);
+                }
+                case StructuredErrorTest test:
+                {
+                    int error = Expression(test.Error, ref block, variables);
+                    return Emit(block, test.IsType ? CfgOpcode.GuestErrorIsType : CfgOpcode.GuestErrorHasMessage,
+                        IrValueType.Bool, left: error, text: test.Name);
+                }
+                case StructuredResult result:
+                    return ConstructResult(result, ref block, variables);
+                case StructuredTrap trap:
+                    return Trap(trap, ref block, variables);
+                case StructuredResultInspect selected:
+                {
+                    int result = Expression(selected.Result, ref block, variables);
+                    int? fallback = selected.Fallback is null ? null : Expression(selected.Fallback, ref block, variables);
+                    return Emit(block, selected.Operation, selected.Type, left: result, right: fallback);
+                }
+                case StructuredOptionUnwrap unwrap:
+                {
+                    var (tag, payload) = OptionParts(unwrap.Option, ref block, variables);
+                    return Emit(block, CfgOpcode.OptionUnwrap, IrValueType.I64, left: tag, right: payload);
+                }
+                case StructuredPropagate propagation:
+                    if (propagation.Operand.Type == IrValueType.OptionI64)
+                        return PropagateOption(propagation.Operand, ref block, variables);
+                    int propagated = PropagateResult(propagation.Operand, ref block, variables);
+                    return Emit(block, CfgOpcode.ResultUnwrap, IrValueType.I64, left: propagated);
                 case StructuredRead read:
                     if (!variables.TryGetValue(read.Name, out var variable) ||
                         variable.Type != read.Type || variable.Type == IrValueType.OptionI64)
                         throw new FormatException("Unbound or unverified scalar CFG local");
                     return variable.ValueId;
+                case StructuredMatchValue match:
+                    return MatchValue(match, ref block, variables);
+                case StructuredSyncTaskValue task:
+                    return InlineTaskValue(task, ref block, variables);
                 // Operands may short-circuit into new CFG blocks (ref block), so
                 // evaluate them fully before emitting into the current block.
                 case StructuredOptionPresent present:
@@ -285,44 +451,13 @@ public static class OresStructuredCfgLowering
                 }
                 case StructuredCall call:
                 {
+                    if (call.Type == IrValueType.OptionI64)
+                        throw new FormatException("Option<int> helper result requires a tagged consumer");
+                    var (function, parameters, slots) = PrepareCall(call, ref block, variables);
                     if (emitCalls)
-                    {
-                        if (callSignatures is null ||
-                            !callSignatures.TryGetValue(call.Name, out var signature) ||
-                            signature.ParameterTypes.Count != call.Arguments.Count ||
-                            signature.ResultType != call.Type)
-                            throw new FormatException("Unverified structured ABI call");
-                        var args = new int[call.Arguments.Count];
-                        for (int i = 0; i < args.Length; i++)
-                        {
-                            if (call.Arguments[i].Type != signature.ParameterTypes[i])
-                                throw new FormatException("Unverified structured ABI argument");
-                            args[i] = Expression(call.Arguments[i], ref block, variables);
-                        }
                         return Emit(block, CfgOpcode.Call, call.Type,
-                            target: call.Name, arguments: args);
-                    }
-                    if (!functions.TryGetValue(call.Name, out var function) ||
-                        function.ResultType != call.Type ||
-                        function.Parameters.Count != call.Arguments.Count)
-                        throw new FormatException("Unverified structured helper call");
-
-                    // Evaluate each source argument once, left-to-right, and
-                    // bind into an independent callee scope. No dynamic call
-                    // target, implicit captures, stack frames or runtime JIT.
-                    var parameters = new Dictionary<string, Binding>(StringComparer.Ordinal);
-                    for (int i = 0; i < call.Arguments.Count; i++)
-                    {
-                        var parameter = function.Parameters[i];
-                        if (parameter.Type != call.Arguments[i].Type)
-                            throw new FormatException("Unverified structured call argument type");
-                        int value = Expression(call.Arguments[i], ref block, variables);
-                        parameters.Add(parameter.Name, new Binding(parameter.Type, value));
-                    }
-                    if (function.ReturnValue is null)
-                        throw new FormatException(
-                            "Statement-bodied helper requires the independent MethodDef ABI");
-                    return Expression(function.ReturnValue, ref block, parameters);
+                            target: call.Name, arguments: slots);
+                    return Expression(InlineReturn(function), ref block, parameters);
                 }
                 case StructuredNegate negate:
                 {
@@ -333,6 +468,8 @@ public static class OresStructuredCfgLowering
                 }
                 case StructuredConditional conditional:
                 {
+                    if (HasConditionalWriteback(conditional))
+                        return ConditionalWritebackValue(conditional, ref block, variables);
                     int condition = Expression(conditional.Test, ref block, variables);
                     var yes = NewBlock();
                     var no = NewBlock();
@@ -354,6 +491,28 @@ public static class OresStructuredCfgLowering
                     {
                         int condition = Expression(binary.Left, ref block, variables);
                         var rhs = NewBlock();
+                        // Only a parser-authorized immediate task RHS can
+                        // publish writes here. Keep independent environments
+                        // for the skipped and evaluated edges.
+                        if (binary.Right is StructuredSyncTaskValue { Task.WriteBack: true })
+                        {
+                            var names = Names(variables);
+                            var merged = new Dictionary<string, Binding>(StringComparer.Ordinal);
+                            var continuation = Join(names, variables, merged);
+                            int result = NextValue();
+                            continuation.Parameters.Add(new CfgParameter(result, IrValueType.Bool));
+                            int[] skipped = [.. Values(names, variables), condition];
+                            var rhsVariables = new Dictionary<string, Binding>(variables, StringComparer.Ordinal);
+                            block.Terminator = binary.Operator == StructuredOperator.LogicalAnd
+                                ? new CfgBranch(condition, rhs.Name, [], continuation.Name, skipped)
+                                : new CfgBranch(condition, continuation.Name, skipped, rhs.Name, []);
+                            int evaluated = Expression(binary.Right, ref rhs, rhsVariables);
+                            rhs.Terminator = new CfgJump(continuation.Name,
+                                [.. Values(names, rhsVariables), evaluated]);
+                            foreach (var (name, binding) in merged) variables[name] = binding;
+                            block = continuation;
+                            return result;
+                        }
                         var join = NewBlock();
                         int joined = NextValue();
                         join.Parameters.Add(new CfgParameter(joined, IrValueType.Bool));
@@ -379,6 +538,14 @@ public static class OresStructuredCfgLowering
                         StructuredOperator.Add => CfgOpcode.CheckedAdd,
                         StructuredOperator.Subtract => CfgOpcode.CheckedSubtract,
                         StructuredOperator.Multiply => CfgOpcode.CheckedMultiply,
+                        StructuredOperator.Divide => CfgOpcode.CheckedDivide,
+                        StructuredOperator.Remainder => CfgOpcode.CheckedRemainder,
+                        StructuredOperator.Modulo => CfgOpcode.CheckedModulo,
+                        StructuredOperator.EqualGuestError => CfgOpcode.GuestErrorEqual,
+                        StructuredOperator.NotEqualGuestError => CfgOpcode.GuestErrorNotEqual,
+                        StructuredOperator.EqualGuestText => CfgOpcode.GuestTextEqual,
+                        StructuredOperator.NotEqualGuestText => CfgOpcode.GuestTextNotEqual,
+                        StructuredOperator.BitXor => CfgOpcode.BitXorI64,
                         StructuredOperator.ShiftLeft => CfgOpcode.ShiftLeftI64,
                         StructuredOperator.ShiftRightLogical => CfgOpcode.ShiftRightLogicalI64,
                         StructuredOperator.ShiftRightArithmetic => CfgOpcode.ShiftRightArithmeticI64,
@@ -398,6 +565,29 @@ public static class OresStructuredCfgLowering
                 default:
                     throw new FormatException("Unsupported structured CFG expression");
             }
+        }
+
+        private static bool HasConditionalWriteback(StructuredConditional conditional) =>
+            conditional.WhenTrue is StructuredSyncTaskValue { Task.WriteBack: true } ||
+            conditional.WhenFalse is StructuredSyncTaskValue { Task.WriteBack: true };
+
+        private int ConditionalWritebackValue(StructuredConditional conditional, ref Block block,
+            Dictionary<string, Binding> variables)
+        {
+            int condition = Expression(conditional.Test, ref block, variables);
+            var yes = NewBlock();
+            var no = NewBlock();
+            block.Terminator = new CfgBranch(condition, yes.Name, [], no.Name, []);
+            var yesVariables = new Dictionary<string, Binding>(variables, StringComparer.Ordinal);
+            var noVariables = new Dictionary<string, Binding>(variables, StringComparer.Ordinal);
+            var continuation = new LexicalContinuation(this, variables, conditional.Type, writeBack: true);
+            int yesValue = PackedValue(conditional.WhenTrue, ref yes, yesVariables);
+            continuation.Finish(yes, yesVariables, yesValue);
+            int noValue = PackedValue(conditional.WhenFalse, ref no, noVariables);
+            continuation.Finish(no, noVariables, noValue);
+            var (join, value) = continuation.Complete();
+            block = join ?? throw new FormatException("Conditional writeback has no continuation");
+            return value;
         }
 
         private static string[] Names(Dictionary<string, Binding> variables) =>
@@ -458,7 +648,8 @@ public static class OresStructuredCfgLowering
         }
 
         private Block? EmitStatements(IReadOnlyList<StructuredStmt> statements,
-            Block start, Dictionary<string, Binding> variables)
+            Block start, Dictionary<string, Binding> variables,
+            Action<Block, Dictionary<string, Binding>, int?>? localExit = null)
         {
             Block? current = start;
             foreach (var stmt in statements)
@@ -542,7 +733,7 @@ public static class OresStructuredCfgLowering
                     case StructuredReturn returned:
                     {
                         Block evalBlock = current;
-                        int result = Expression(returned.Value, ref evalBlock, variables);
+                        int result = PackedValue(returned.Value, ref evalBlock, variables);
                         evalBlock.Terminator = new CfgReturn(result);
                         current = null;
                         break;
@@ -551,15 +742,42 @@ public static class OresStructuredCfgLowering
                         current.Terminator = new CfgReturnVoid();
                         current = null;
                         break;
+                    case StructuredSignal signal:
+                    {
+                        Block evalBlock = current;
+                        int error = Expression(signal.Error, ref evalBlock, variables);
+                        evalBlock.Terminator = new CfgSignal(error, signal.Effect);
+                        current = null;
+                        break;
+                    }
                     case StructuredOverflowCatchReturn caught:
                         current = OverflowCatch(caught, current, variables);
                         break;
                     case StructuredIf conditional:
-                        current = If(conditional, current, variables);
+                        current = If(conditional, current, variables, localExit);
                         break;
                     case StructuredWhile loop:
-                        current = While(loop, current, variables);
+                        current = While(loop, current, variables, localExit);
                         break;
+                    case StructuredDoMatch match:
+                        current = LowerMatch(match.Match, current, variables).Join;
+                        break;
+                    case StructuredDoSyncTask task:
+                        current = LowerInlineTask(task.Task, current, variables).Join;
+                        break;
+                    case StructuredInlineCooperate:
+                        Emit(current, CfgOpcode.InlineCooperate, IrValueType.Bool);
+                        break;
+                    case StructuredLocalExit returned:
+                    {
+                        if (localExit is null) throw new FormatException("Unscoped lexical return");
+                        Block evalBlock = current;
+                        int? value = returned.Value is { } expression
+                            ? PackedValue(expression, ref evalBlock, variables) : null;
+                        localExit(evalBlock, variables, value);
+                        current = null;
+                        break;
+                    }
                     case StructuredBreak:
                     {
                         if (loopTargets.Count == 0)
@@ -627,7 +845,7 @@ public static class OresStructuredCfgLowering
         }
 
         private Block? If(StructuredIf statement, Block origin,
-            Dictionary<string, Binding> variables)
+            Dictionary<string, Binding> variables, Action<Block, Dictionary<string, Binding>, int?>? localExit)
         {
             Block conditionBlock = origin;
             int condition = Expression(statement.Condition, ref conditionBlock, variables);
@@ -635,7 +853,7 @@ public static class OresStructuredCfgLowering
             var thenBlock = NewBlock();
             var thenEnvironment = new Dictionary<string, Binding>(
                 variables, StringComparer.Ordinal);
-            Block? thenEnd = EmitStatements(statement.Then, thenBlock, thenEnvironment);
+            Block? thenEnd = EmitStatements(statement.Then, thenBlock, thenEnvironment, localExit);
 
             Block? elseBlock = null;
             Block? elseEnd = null;
@@ -644,7 +862,7 @@ public static class OresStructuredCfgLowering
             if (statement.Else is not null)
             {
                 elseBlock = NewBlock();
-                elseEnd = EmitStatements(statement.Else, elseBlock, elseEnvironment);
+                elseEnd = EmitStatements(statement.Else, elseBlock, elseEnvironment, localExit);
             }
 
             if (thenEnd is null && statement.Else is not null && elseEnd is null)
@@ -674,7 +892,7 @@ public static class OresStructuredCfgLowering
         }
 
         private Block While(StructuredWhile statement, Block origin,
-            Dictionary<string, Binding> variables)
+            Dictionary<string, Binding> variables, Action<Block, Dictionary<string, Binding>, int?>? localExit)
         {
             var names = Names(variables);
             var headerVariables = new Dictionary<string, Binding>(StringComparer.Ordinal);
@@ -692,7 +910,7 @@ public static class OresStructuredCfgLowering
                 headerVariables, StringComparer.Ordinal);
             loopTargets.Push(new LoopTarget(header, exit, names));
             Block? bodyEnd;
-            try { bodyEnd = EmitStatements(statement.Body, body, bodyVariables); }
+            try { bodyEnd = EmitStatements(statement.Body, body, bodyVariables, localExit); }
             finally { loopTargets.Pop(); }
             if (bodyEnd is not null)
                 bodyEnd.Terminator = new CfgJump(header.Name, Values(names, bodyVariables));

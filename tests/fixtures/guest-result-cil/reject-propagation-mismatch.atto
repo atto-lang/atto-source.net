@@ -1,0 +1,2 @@
+fnc value(): Result<int, Error> { return Ok(42); }
+pub fnc main(): int { return value()?; }

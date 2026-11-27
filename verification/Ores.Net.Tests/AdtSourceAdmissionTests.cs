@@ -59,6 +59,21 @@ internal static class AdtSourceAdmissionTests
             throw new Exception("Unsupported ADT shape was admitted to scalar IR");
         }
 
+        // Require the lexical diagnostic, not merely a later parser refusal.
+        foreach (var keyword in new[] { "trap!", "throw!", "raise!", "panic!", "copy!", "copy!!",
+            "take!", "move!", "borrow!", "share!", "pin!", "drop!", "pipe!", "rpipe!", "stop!", "expand!" })
+        foreach (var tail in new[] { "value", "(42)", "/*comment*/ value", "", "\u00a0value" })
+        {
+            var source = $"fnc main():int {{ return {keyword}{tail}; }}";
+            foreach (Action parse in new Action[] { () => OresParser.Parse(source), () => OresStructuredParser.Parse(source) })
+            {
+                try { parse(); }
+                catch (FormatException ex) when (ex.Message.Contains("E_BANG_KEYWORD_WHITESPACE", StringComparison.Ordinal))
+                { continue; }
+                throw new Exception("Missing mandatory bang whitespace diagnostic: " + source);
+            }
+        }
+
         // The lexical guard cannot treat comments as code.
         foreach (var source in new[]
         {

@@ -23,7 +23,7 @@ static async Task Until(Func<bool> condition, Func<string>? describe = null)
 using var actors = new ActorRuntime(new ActorRuntimeOptions
 {
     MaxActors = 32, ActorPersistentBytes = 4096, ActorScratchBytes = 1024,
-    NativeBudgetBytes = 1024 * 1024,
+    NativeBudgetBytes = 1024 * 1024, ActorMaxLifetimePins = 1,
     Dispatcher = new ActorDispatcherOptions
     { PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1, QueueCapacityPerDomain = 32 }
 });
@@ -97,6 +97,13 @@ ActorHttpEndpoint Resolve(string method, string path) => new(
             Require(BadHeader(() => exchange.SetResponseHeader(context, "X-Extra-Header", "no")),
                 "header count bounded");
         }
+        if (path == "/pin-quota")
+        {
+            using var occupied = context.PinLifetime();
+            Require(Denied(() => exchange.Respond(context, 200, "text/plain", "not-admitted")),
+                "pin quota rejects before response commitment");
+            exchange.SetResponseHeader(context, "X-Pin-Retry", "admitted");
+        }
         exchange.Respond(context, 200, "text/plain", response);
         if (path == "/metadata")
             Require(Denied(() => exchange.SetResponseHeader(context, "X-Probe-0", "late")),
@@ -127,6 +134,11 @@ Require(Denied(() => retained!.SetResponseHeader(retainedContext!, "X-Stale-Turn
     "retained turn cannot edit headers");
 Interlocked.Increment(ref denials);
 Require(await client.GetStringAsync("/duplicate") == "shared", "duplicate response rejected");
+using (var retry = await client.GetAsync("/pin-quota"))
+    Require(await retry.Content.ReadAsStringAsync() == "shared" &&
+        retry.Headers.GetValues("X-Pin-Retry").Single() == "admitted",
+        "quota denial preserves exchange and retry succeeds");
+Console.WriteLine("ATTO_NET_HTTP_PIN_QUOTA_RETRY_PASS");
 Require(await client.GetStringAsync("/resume") == "shared", "response precedes continuation");
 using (var metadata = await client.GetAsync("/metadata"))
     Require(metadata.IsSuccessStatusCode &&

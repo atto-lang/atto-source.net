@@ -29,7 +29,7 @@ void Reject(string source, string expected)
 }
 foreach (var source in new[]
 {
-    "fnc main():int{return match<int> 99 over on 1 -> {11;} default -> {42;} end;}",
+    "fnc main():int{return match<int> 99 over on 1 -> {return 11;} default -> {42;} end;}",
     "fnc main():int{return match 99 over default -> {42;} end;}",
     "fnc main():int{return match 1 over on default -> {42;} end;}"
 }) Reject(source, "MATCH_DEFAULT_BACKEND_UNSUPPORTED");

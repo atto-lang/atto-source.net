@@ -90,6 +90,11 @@ public static class CilEmitter
     public static void EmitLibrary(VerifiedCfgModule module, string outputFile) =>
         CfgCilEmitter.EmitLibrary(module, outputFile);
 
+    /// <summary>Build actual verified deterministic CIL in memory, with the
+    /// same independent module linkage verification as file emission.</summary>
+    public static byte[] BuildLibrary(VerifiedCfgModule module) =>
+        CfgCilEmitter.BuildLibrary(module);
+
     private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il,
         MetadataBuilder metadata)
     {
@@ -342,14 +347,13 @@ public static class CilEmitter
     // Experimental multi-method Native AOT assembly. MethodDef handles are
     // reserved before body emission so statically resolved calls target only
     // verified methods in this exact module, never reflection/dynamic code.
-    internal static void EmitLibraryModuleCore(string outputFile,
+    internal static byte[] BuildLibraryModuleCore(
         VerifiedCfgModule module,
         Func<VerifiedCfgFunction, MetadataBuilder, MethodBodyStreamEncoder,
-            IReadOnlyDictionary<string, MethodDefinitionHandle>,
+            IReadOnlyDictionary<string, MethodDefinitionHandle>, CfgGuestResultEmitter?,
             (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody)
     {
         ArgumentNullException.ThrowIfNull(module);
-        ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
         var methods = new[] { module.Main }.Concat(module.Helpers).ToArray();
         if (methods.Length is < 1 or > 65 || methods[0].Name != "main" ||
             methods[0].ResultType != IrValueType.I64 ||
@@ -373,6 +377,12 @@ public static class CilEmitter
         var ilStream = new BlobBuilder();
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
         var metadata = new MetadataBuilder();
+        var runtime = metadata.AddAssemblyReference(
+            metadata.GetOrAddString("System.Runtime"),
+            new Version(10, 0, 0, 0), default,
+            metadata.GetOrAddBlob(new byte[] { 0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A }),
+            default, default);
+        var guest = methods.Any(CfgGuestResultEmitter.Uses) ? new CfgGuestResultEmitter(metadata, runtime) : null;
         var bodies = new List<(int Offset, BlobBuilder? Locals)>();
         long instructions = 0;
         foreach (var method in methods)
@@ -380,7 +390,7 @@ public static class CilEmitter
             instructions += method.Blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
             if (instructions > 100_000)
                 throw new FormatException("CFG module total instruction budget exceeded");
-            var (offset, _, locals) = buildBody(method, metadata, bodyStream, handles);
+            var (offset, _, locals) = buildBody(method, metadata, bodyStream, handles, guest);
             bodies.Add((offset, locals));
         }
         if (ilStream.Count > 8 * 1024 * 1024)
@@ -397,6 +407,9 @@ public static class CilEmitter
                     if (method.ResultType == IrValueType.I64) returnType.Type().Int64();
                     else if (method.ResultType == IrValueType.Bool) returnType.Type().Boolean();
                     else if (method.ResultType == IrValueType.Void) returnType.Void();
+                    else if (method.ResultType == IrValueType.OptionI64)
+                        returnType.Type().Type(CfgCilEmitter.OptionResultType, isValueType: true);
+                    else if (guest is not null) guest.Encode(returnType.Type(), method.ResultType);
                     else throw new FormatException("Unsupported CIL method result");
                 },
                 parameters =>
@@ -406,6 +419,7 @@ public static class CilEmitter
                         var encoded = parameters.AddParameter().Type();
                         if (parameter == IrValueType.I64) encoded.Int64();
                         else if (parameter == IrValueType.Bool) encoded.Boolean();
+                        else if (guest is not null) guest.Encode(encoded, parameter);
                         else throw new FormatException("Unsupported CIL method parameter");
                     }
                 });
@@ -421,18 +435,24 @@ public static class CilEmitter
         // The MVID must also change when a method is renamed but its body
         // and signature stay byte-for-byte identical.
         foreach (var method in methods)
+        {
             hash.AppendData(System.Text.Encoding.UTF8.GetBytes(method.Name + "\0"));
+            foreach (var op in method.Blocks.SelectMany(block => block.Instructions))
+            {
+                if (op.TextOperand is not string literal) continue;
+                byte[] literalBytes = System.Text.Encoding.UTF8.GetBytes(literal);
+                var length = new BlobBuilder();
+                length.WriteInt32(literalBytes.Length);
+                hash.AppendData(length.ToArray());
+                hash.AppendData(literalBytes);
+            }
+        }
         var mvid = new Guid(hash.GetHashAndReset().AsSpan(0, 16));
         metadata.AddModule(0, metadata.GetOrAddString("OresGenerated.dll"),
             metadata.GetOrAddGuid(mvid), default, default);
         metadata.AddAssembly(metadata.GetOrAddString("OresGenerated"),
             new Version(1, 0, 0, 0), default, default, default,
             System.Reflection.AssemblyHashAlgorithm.None);
-        var runtime = metadata.AddAssemblyReference(
-            metadata.GetOrAddString("System.Runtime"),
-            new Version(10, 0, 0, 0), default,
-            metadata.GetOrAddBlob(new byte[] { 0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A }),
-            default, default);
         var systemObject = metadata.AddTypeReference(runtime,
             metadata.GetOrAddString("System"), metadata.GetOrAddString("Object"));
 
@@ -470,6 +490,8 @@ public static class CilEmitter
             metadata.GetOrAddString("Oreslang.Generated"),
             metadata.GetOrAddString("OresProgram"), systemObject,
             MetadataTokens.FieldDefinitionHandle(1), run);
+        if (methods.Any(CfgCilEmitter.UsesOptionResult))
+            CfgCilEmitter.DefineOptionResult(metadata, runtime, methods.Length);
         var pe = new ManagedPEBuilder(
             new PEHeaderBuilder(imageCharacteristics:
                 Characteristics.ExecutableImage | Characteristics.Dll),
@@ -478,13 +500,18 @@ public static class CilEmitter
             deterministicIdProvider: DeterministicImageId);
         var bytes = new BlobBuilder();
         pe.Serialize(bytes);
+        return bytes.ToArray();
+    }
 
+    internal static void PublishLibraryBytes(string outputFile,byte[] bytes)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
         string full = Path.GetFullPath(outputFile);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         string temporary = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            File.WriteAllBytes(temporary, bytes.ToArray());
+            File.WriteAllBytes(temporary, bytes);
             File.Move(temporary, full, overwrite: true);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
@@ -528,7 +555,7 @@ public static class CilEmitter
 
             foreach (var op in caller.Blocks.SelectMany(b => b.Instructions))
             {
-                if (op.Opcode != CfgOpcode.Call) continue;
+                if (op.Opcode is not (CfgOpcode.Call or CfgOpcode.TrapCall)) continue;
                 if (op.Target is null || op.Arguments is null ||
                     !positions.TryGetValue(op.Target, out int targetIndex) ||
                     !handles.ContainsKey(op.Target) ||
@@ -561,7 +588,7 @@ public static class CilEmitter
         return BlobContentId.FromHash(hash.GetHashAndReset());
     }
 
-    private readonly record struct Pending(Expression Node, bool EmitOperator);
+    private readonly record struct Pending(Expression Node, bool EmitOperator, bool Discard = false);
 
     // A flat expression such as a+b+c+... may create thousands of AST nodes,
     // even with shallow source nesting. Traversal MUST NOT recurse on the CLR
@@ -577,7 +604,14 @@ public static class CilEmitter
         while (pending.Count > 0)
         {
             var work = pending.Pop();
-            if (work.EmitOperator)
+            if (work.Discard)
+            {
+                if (evaluationDepth < 1)
+                    throw new FormatException("Invalid CIL discard stack");
+                il.OpCode(ILOpCode.Pop);
+                evaluationDepth--;
+            }
+            else if (work.EmitOperator)
             {
                 if (evaluationDepth < 2)
                     throw new FormatException("Invalid CIL operator stack");
@@ -613,6 +647,21 @@ public static class CilEmitter
                         evaluationDepth++;
                         pending.Push(new Pending(unary, true));
                         pending.Push(new Pending(unary.Value, false));
+                        break;
+                    case EntryScalarProjection projection:
+                        // key: first, second, pop; value: first, pop, second.
+                        // Both are evaluated once, left-to-right.
+                        if (projection.SelectKey)
+                        {
+                            pending.Push(new Pending(projection, false, true));
+                            pending.Push(new Pending(projection.Second, false));
+                        }
+                        else
+                        {
+                            pending.Push(new Pending(projection.Second, false));
+                            pending.Push(new Pending(projection, false, true));
+                        }
+                        pending.Push(new Pending(projection.First, false));
                         break;
                     case NamedBitXor bitXor:
                         pending.Push(new Pending(bitXor, true));

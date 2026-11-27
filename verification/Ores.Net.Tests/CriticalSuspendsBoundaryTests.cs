@@ -4,6 +4,27 @@ internal static class CriticalSuspendsBoundaryTests
 {
     public static void Run()
     {
+        foreach (string spelling in new[] { "suspends", "susp", "⧖", "∂" })
+        {
+            foreach (var (source, diagnostic) in new (string, string)[] {
+                ($"{spelling} fnc main():int{{return 42;}}", "E_SUSPENDS_UNSUPPORTED"),
+                ($"critical {spelling} fnc main():int{{return 42;}}", "E_CALLABLE_MODIFIERS"),
+                ($"{spelling} critical fnc main():int{{return 42;}}", "E_CALLABLE_MODIFIERS")
+            })
+            {
+                try { _ = OresParser.Parse(source); }
+                catch (FormatException error) when (error.Message.Contains(diagnostic, StringComparison.Ordinal))
+                {
+                    try { _ = OresStructuredParser.Parse(source); }
+                    catch (FormatException structured) when (structured.Message.Contains(diagnostic, StringComparison.Ordinal))
+                    { continue; }
+                    throw new Exception($"Structured parser did not reject with {diagnostic}: {source}");
+                }
+                throw new Exception($"Scalar parser did not reject with {diagnostic}: {source}");
+            }
+            _ = OresStructuredCfgLowering.LowerModule(
+                $"pub {spelling} fnc main():int{{val int result=sync task<int>{{return 42;}};return result;}}");
+        }
         foreach (var (source, diagnostic) in new (string, string)[] {
             ("async fnc main():int{return 42;}", "E_CALLABLE_MODIFIERS"),
             ("critical suspends fnc main():int{return 42;}", "E_CALLABLE_MODIFIERS"),
@@ -36,6 +57,9 @@ internal static class CriticalSuspendsBoundaryTests
         if (OresParser.Parse("fnc main():int{return 42;} // critical suspends await") is not Literal { Value: 42 })
             throw new Exception("Line comment must not trigger critical effect rejection");
 
+        _ = OresStructuredCfgLowering.LowerModule(
+            "pub suspends fnc main():int{val int result=sync task<int>{return 42;};return result;}");
+
         // Experimental structured/CIL lowering is an independent public
         // compiler entrypoint. It must not accept these unsupported effects
         // just because the scalar CLI's parser is strict.
@@ -44,9 +68,12 @@ internal static class CriticalSuspendsBoundaryTests
             ("suspends critical fnc main():int{return 1;}", "E_CALLABLE_MODIFIERS"),
             ("async fnc main():int{return 1;}", "E_CALLABLE_MODIFIERS"),
             ("pub suspends fnc main():int{return 1;}", "E_SUSPENDS_UNSUPPORTED"),
+            ("pub suspends fnc main():int{return 1;} /* sync task */", "E_SUSPENDS_UNSUPPORTED"),
+            ("pub suspends fnc main():int{return sync task<int>{return await 1;};}", "E_SYNC_TASK_SUSPEND"),
+            ("pub critical suspends fnc main():int{return sync task<int>{return 1;};}", "E_CALLABLE_MODIFIERS"),
             ("pub critical fnc main():int{return 1;}", "E_CRITICAL_UNSUPPORTED"),
             ("fnc main():int{critical {return 1;}}", "E_CRITICAL_UNSUPPORTED"),
-            ("fnc main():int{return await 1;}", "E_SUSPENDS_UNSUPPORTED")
+            ("fnc main():int{return await true;}", "E_SUSPENDS_UNSUPPORTED")
         })
         {
             try

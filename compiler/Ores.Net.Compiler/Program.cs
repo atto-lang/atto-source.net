@@ -3,8 +3,18 @@ using System.Text;
 using System.Globalization;
 using Ores.Net.Runtime;
 
-// The shipping default stays byte-for-byte unchanged. Only the scalar
-// check/compile lane may select the preview v1/v2 callable-body contract.
+if(args.Length>0 && args[0] is "check-frozen" or "compile-frozen")
+{
+    try { return FrozenPackageCommand.Run(args); }
+    catch(Exception ex) when(ex is FormatException or IOException or UnauthorizedAccessException or ArgumentException or System.IO.InvalidDataException)
+    {
+        Console.Error.WriteLine("oresnet: "+ex.Message);
+        return 1;
+    }
+}
+
+// Only the scalar check/compile lane may select the preview v1/v2
+// callable-body contract.
 int? explicitLanguageVersion = null;
 var retainedArgs = new List<string>();
 for (int index = 0; index < args.Length; index++)
@@ -49,6 +59,7 @@ var dotnetPolicy = mathI64Granted
 
 // Reject invalid shapes before indexing args[3]. Previously "compile file.ores"
 // passed validation then crashed with IndexOutOfRangeException instead of usage.
+bool validOwnedUnwind = args.Length == 4 && args[0] == "emit-owned-unwind-v1" && args[2] == "--out";
 bool validCheck = args.Length == 2 && args[0] == "check";
 bool validAsyncRun = args.Length == 2 && args[0] == "run-async";
 bool validDeclaredReceiveSyntax = args.Length == 2 &&
@@ -67,15 +78,16 @@ bool validDeclaredReceiveSyntax = args.Length == 2 &&
 bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--out";
 bool validTaskCheck = args.Length == 2 && args[0] == "check-task-i64";
 bool validTaskCompile = args.Length == 4 && args[0] == "compile-task-i64" && args[2] == "--out";
-// Opt-in verification lane only: never silently broaden shipping scalar check/compile.
-// Separate opt-in nominal enum guest/compiler slice; shipping scalar and
-// structured entrypoints retain their fail-closed ADT admission boundaries.
+// Nominal enums are a separate opt-in guest compiler slice. Normal
+// check/compile only admit guards via the verified standalone CFG profile.
 bool validEnumCheck = args.Length == 2 && args[0] == "check-enum-v1";
 bool validEnumCompile = args.Length == 4 &&
     args[0] == "compile-enum-v1" && args[2] == "--out";
 bool validStructuredCheck = args.Length == 2 && args[0] == "check-structured";
 bool validStructuredCompile = args.Length == 4 &&
     args[0] == "compile-structured" && args[2] == "--out";
+bool scalarCodec = args.Length == 4 && args[0] == "emit-durable-scalar-codec-v1" && args[2] == "--out";
+bool validDurableCounter = scalarCodec || (args.Length == 4 && args[0] == "emit-durable-counter-v1" && args[2] == "--out");
 bool validEmitActorSource = args.Length == 4 && args[0] == "emit-actor-csharp" && args[2] == "--out";
 bool validEmitHttpActors = args.Length == 4 && args[0] == "emit-http-actors-csharp" && args[2] == "--out";
 // This separate mode only binds the verified external receive slice of the
@@ -90,8 +102,8 @@ bool validStaticFacts = args.Length == 2 &&
 bool validActorPipePlan = args.Length == 2 && args[0] == "plan-actor-pipe";
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
 if ((mathI64Granted && !validCheck && !validCompile) ||
-    (!validCheck && !validAsyncRun && !validEnumCheck && !validEnumCompile && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
-     !validStaticFacts && !validTaskCheck && !validTaskCompile && !validActorPipePlan && !validEmitActorSource && !validEmitHttpActors && !validExternalReceive && !validCounterMain && !validEmitSource && !moduleCommand))
+    (!validOwnedUnwind && !validCheck && !validAsyncRun && !validEnumCheck && !validEnumCompile && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
+     !validStaticFacts && !validTaskCheck && !validTaskCompile && !validActorPipePlan && !validDurableCounter && !validEmitActorSource && !validEmitHttpActors && !validExternalReceive && !validCounterMain && !validEmitSource && !moduleCommand))
 {
     Console.Error.WriteLine("       oresnet emit-http-actors-csharp input.atto --out path/HttpActors.g.cs");
     Console.Error.WriteLine("usage: oresnet check-enum-v1 FILE.atto | oresnet compile-enum-v1 FILE.atto --out path/OresGenerated.dll | oresnet check input.atto|input.ores | oresnet run-async input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-task-i64 input.ores | oresnet compile-task-i64 input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet plan-actor-pipe input.atto (typed plan only, not executable actors) | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet emit-external-counter-csharp ROOT --out path/DeclaredActor_Counter.g.cs | oresnet emit-counter-main-csharp ROOT --out path/GeneratedCounterMainV2.g.cs | oresnet check-declared-receive-syntax receive.atto (syntax only, NOT guest execution)");
@@ -189,7 +201,25 @@ try
         !string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase) &&
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
         throw new FormatException("Static-facts export requires a .atto or .ores source file");
-    var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts);
+    var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts || validDurableCounter);
+    if (validOwnedUnwind)
+    {
+        if (Path.GetExtension(args[1]) != ".atto" || Path.GetExtension(args[3]) != ".cs")
+            throw new ArgumentException("usage: oresnet emit-owned-unwind-v1 input.atto --out Guest.g.cs");
+        WriteAtomicSource(args[3], OresStructuredParser.EmitOwnedUnwindV1(source));
+        return 0;
+    }
+    if (validDurableCounter)
+    {
+        if (Path.GetExtension(args[1]) != ".atto" || Path.GetExtension(args[3]) != ".cs")
+            throw new ArgumentException("usage: oresnet "+args[0]+" input.atto --out path/Codec.g.cs");
+        // Unlike normal managed-source publication, require a fresh output
+        // path: a rejected source must not leave a previously admitted guest.
+        if (File.Exists(args[3]) || Directory.Exists(args[3]))
+            throw new FormatException("E_DURABLE_COUNTER_ACTOR_ABI: output must not exist");
+        WriteAtomicSource(args[3], scalarCodec ? OresParser.EmitDurableScalarV1(source) : OresParser.EmitDurableCounterV1(source));
+        return 0;
+    }
     if (validEmitHttpActors)
     {
         if (Path.GetExtension(args[1]) != ".atto" || Path.GetExtension(args[3]) != ".cs")
@@ -305,20 +335,23 @@ try
         Console.WriteLine($"Emitted experimental static actor C# from verified increment IR: {Path.GetFullPath(args[3])}");
         return 0;
     }
-    if (validStructuredCheck || validStructuredCompile)
+    bool normalStructuredEntry = (validCheck || validCompile) && !mathI64Granted &&
+        !explicitLanguageVersion.HasValue &&
+        string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase);
+    var verifiedCfg = validStructuredCheck || validStructuredCompile
+        ? OresStructuredCfgLowering.LowerModule(source)
+        : normalStructuredEntry ? OresStructuredCfgLowering.TryLowerProductionModule(source) : null;
+    if (verifiedCfg is not null)
     {
-        // Experimental typed source -> verified CFG -> deterministic CIL.
-        // Never enter the shipping scalar path or accept unsupported effects.
-        var verifiedCfg = OresStructuredCfgLowering.LowerModule(source);
-        if (validStructuredCompile)
+        if (validCompile || validStructuredCompile)
         {
             if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll",
                 StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("Generated assembly must be named OresGenerated.dll");
             CilEmitter.EmitLibrary(verifiedCfg, args[3]);
-            Console.WriteLine($"Emitted experimental structured CIL: {Path.GetFullPath(args[3])}");
+            Console.WriteLine($"Emitted verified CFG CIL: {Path.GetFullPath(args[3])}");
         }
-        else Console.WriteLine("Experimental structured source and verified CFG: OK");
+        else Console.WriteLine("AttoLang source and verified CFG: OK");
         return 0;
     }
     var expression = OresParser.Parse(source, dotnetPolicy, explicitLanguageVersion);
