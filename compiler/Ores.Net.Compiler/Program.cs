@@ -59,6 +59,7 @@ var dotnetPolicy = mathI64Granted
 
 // Reject invalid shapes before indexing args[3]. Previously "compile file.ores"
 // passed validation then crashed with IndexOutOfRangeException instead of usage.
+bool validOwnedUnwind = args.Length == 4 && args[0] == "emit-owned-unwind-v1" && args[2] == "--out";
 bool validCheck = args.Length == 2 && args[0] == "check";
 bool validAsyncRun = args.Length == 2 && args[0] == "run-async";
 bool validDeclaredReceiveSyntax = args.Length == 2 &&
@@ -101,7 +102,7 @@ bool validStaticFacts = args.Length == 2 &&
 bool validActorPipePlan = args.Length == 2 && args[0] == "plan-actor-pipe";
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
 if ((mathI64Granted && !validCheck && !validCompile) ||
-    (!validCheck && !validAsyncRun && !validEnumCheck && !validEnumCompile && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
+    (!validOwnedUnwind && !validCheck && !validAsyncRun && !validEnumCheck && !validEnumCompile && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
      !validStaticFacts && !validTaskCheck && !validTaskCompile && !validActorPipePlan && !validDurableCounter && !validEmitActorSource && !validEmitHttpActors && !validExternalReceive && !validCounterMain && !validEmitSource && !moduleCommand))
 {
     Console.Error.WriteLine("       oresnet emit-http-actors-csharp input.atto --out path/HttpActors.g.cs");
@@ -201,6 +202,13 @@ try
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
         throw new FormatException("Static-facts export requires a .atto or .ores source file");
     var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts || validDurableCounter);
+    if (validOwnedUnwind)
+    {
+        if (Path.GetExtension(args[1]) != ".atto" || Path.GetExtension(args[3]) != ".cs")
+            throw new ArgumentException("usage: oresnet emit-owned-unwind-v1 input.atto --out Guest.g.cs");
+        WriteAtomicSource(args[3], OresStructuredParser.EmitOwnedUnwindV1(source));
+        return 0;
+    }
     if (validDurableCounter)
     {
         if (Path.GetExtension(args[1]) != ".atto" || Path.GetExtension(args[3]) != ".cs")

@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><PublishAot>true</PublishAot><SelfContained>true</SelfContained><InvariantGlobalization>true</InvariantGlobalization><AssemblyName>OwnedUnwindHost</AssemblyName></PropertyGroup>
+  <ItemGroup><Compile Include="$(GuestSource)" Link="Guest.g.cs" /></ItemGroup>
+</Project>
