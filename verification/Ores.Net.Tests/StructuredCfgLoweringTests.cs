@@ -283,6 +283,24 @@ internal static class StructuredCfgLoweringTests
 
     public static void Run()
     {
+        foreach (var body in new[]{
+            "let int x=40; set x++; set ++x; return x;",
+            "let int x=44; set x--; set --x; return x;",
+            "let int x=20; set x+=2; set x-=1; set x*=2; return x;",
+            "let int x=40; set! (x=x+2); return x;",
+            "let int x=0; while x<42 { set x++; } return x;"})
+            Check("fnc main():int{"+body+"}",42,"explicit update "+body);
+        foreach (var body in new[]{
+            "val int x=40; set x++; return x;",
+            "set missing++; return 42;",
+            "let bool x=true; set x++; return 42;",
+            "let int x=40; set x+ =2; return x;",
+            "let int x=40; set ++x++; return x;"})
+            Reject("fnc main():int{"+body+"}","explicit update "+body);
+        CheckOverflow("fnc main():int{let int x=9223372036854775807;set x++;return x;}",
+            "explicit counter overflow");
+        Console.WriteLine("EXPLICIT_SCALAR_UPDATE_CFG_CIL_PASS positives=5 negatives=5 overflow=1");
+
         Check("fnc main():int{return match 42 over on _ as int z -> z end;}", 42, "typed scalar alias");
         Check("fnc main():int{return match 42 over on 41 as z when z==42 -> 0, on _ as const z -> z end;}", 42, "guard fallback scalar alias");
         Check("fnc main():int{let n=20;let r=0;do match n over on _ as rebind int z -> {z=z+2;r=z;} end return n+r;}", 42, "rebind alias does not write back subject");
