@@ -8,6 +8,10 @@ project=verification/Ores.Net.AttachedStructFixtures/Ores.Net.AttachedStructFixt
 dotnet build "$project" -c Release
 source=verification/Ores.Net.AttachedStructFixtures/nested.atto
 compile(){ dotnet run --no-build --project "$project" -c Release -- "$1" "$2"; }
+for fixture in nested:42 mutable:1316; do
+  source=verification/Ores.Net.AttachedStructFixtures/${fixture%:*}.atto
+  expected=${fixture#*:}
+  rm -rf "$work/published"
 compile "$source" "$work/OresGenerated.dll"
 compile "$source" "$work/repro.dll"
 cmp "$work/OresGenerated.dll" "$work/repro.dll"
@@ -21,8 +25,10 @@ file "$app" | grep -q 'ELF 64-bit'
 test ! -e "$work/published/OresGenerated.dll"
 test ! -e "$work/published/oreslang-app.runtimeconfig.json"
 test ! -e "$work/published/oreslang-app.deps.json"
-test "$("$app")" = 42
-echo 'NET_ATTACHED_STRUCT_NATIVE_AOT_PASS nested nominal copy result=42'
+test "$("$app")" = "$expected"
+echo "NET_ATTACHED_STRUCT_NATIVE_AOT_PASS $source result=$expected"
+
+done
 
 for input in verification/Ores.Net.AttachedStructFixtures/negative/*.atto; do
   name="$(basename "$input" .atto)"
@@ -32,6 +38,6 @@ for input in verification/Ores.Net.AttachedStructFixtures/negative/*.atto; do
   set -e
   test "$status" = 1
   test ! -e "$work/$name.dll"
-  grep -Eq 'E_(TYPE|STRUCT_INIT|STRUCT_SYNTAX|DUPLICATE)' "$work/$name.log"
+  grep -Eq 'E_(TYPE|STRUCT_INIT|STRUCT_SYNTAX|DUPLICATE|BORROW_MUT_REQUIRED)' "$work/$name.log"
   echo "NET_ATTACHED_STRUCT_REJECT $name"
 done

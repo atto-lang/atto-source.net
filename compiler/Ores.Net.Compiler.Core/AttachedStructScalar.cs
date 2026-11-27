@@ -19,6 +19,8 @@ public static partial class OresStructuredParser
         private sealed record Leaf(string Path, IrValueType Type);
         private sealed record Constructor(List<Field> Parameters, List<(string Field, string Parameter)> Assignments);
         private sealed record Method(string Internal, IrValueType Type);
+        private sealed record Mutation(List<Field> Parameters, List<(string Path,string Helper)> Writes);
+
         private sealed class Owner(string name)
         {
             public string Name { get; } = name;
@@ -26,8 +28,9 @@ public static partial class OresStructuredParser
             public List<Leaf> Leaves { get; } = new();
             public List<Constructor> Constructors { get; } = new();
             public Dictionary<string, Method> Methods { get; } = new(StringComparer.Ordinal);
+            public Dictionary<string, Mutation> Mutations { get; } = new(StringComparer.Ordinal);
         }
-        private sealed record Value(Owner Owner, Dictionary<string, StructuredExpr> Slots);
+        private sealed record Value(Owner Owner, Dictionary<string, StructuredExpr> Slots, bool Mutable);
         private sealed record Argument(string Type, Dictionary<string, StructuredExpr> Slots);
         private readonly Lexer lexer;
         private Token current;
@@ -105,6 +108,7 @@ public static partial class OresStructuredParser
         }
         private void Member(Owner owner)
         {
+            if (Eat("mut")) { MutableMember(owner); return; }
             if (Eat("constructor"))
             {
                 var parameters = Formals();
@@ -143,7 +147,7 @@ public static partial class OresStructuredParser
                     if (!Eat("->") && !Eat(":")) throw Error("E_STRUCT_SYNTAX","expected postfix return separator");
                     type = TypeName();
                 }
-                Require(!owner.Methods.ContainsKey(name),"E_DUPLICATE","method signature");
+                Require(!owner.Methods.ContainsKey(name) && !owner.Mutations.ContainsKey(name),"E_DUPLICATE","method signature");
                 Require(order.Count < 64,"E_SOURCE_LIMIT","method budget");
                 string generated = "_atto_struct_method_" + order.Count;
                 var parameters = new List<StructuredParameter>();
@@ -161,7 +165,72 @@ public static partial class OresStructuredParser
                 order.Add(generated);
                 owner.Methods.Add(name,new Method(generated,result.Type));
             }
-            Require(owner.Constructors.Count + owner.Methods.Count <= 64,"E_SOURCE_LIMIT","member budget");
+            Require(owner.Constructors.Count + owner.Methods.Count + owner.Mutations.Count <= 64,"E_SOURCE_LIMIT","member budget");
+        }
+        // Each leaf write is a separately checked pure scalar helper. Calls
+        // snapshot arguments once, and later writes observe earlier writes.
+        // No mutable alias, pointer, aggregate escape or nested call is admitted.
+        private void MutableMember(Owner owner)
+        {
+            Expect("mtd"); string name = Word(); var formals = Formals();
+            Require(formals.All(p=>Scalar(p.Type)), "E_TYPE","scalar mutation parameters required");
+            Require(owner.Leaves.Count + formals.Count <= 16,"E_SOURCE_LIMIT","mutation parameter slots");
+            Require(!owner.Methods.ContainsKey(name) && !owner.Mutations.ContainsKey(name),"E_DUPLICATE","method signature");
+            if (!Eat(":") && !Eat("->")) throw Error("E_STRUCT_SYNTAX","mutable method result separator");
+            Expect("void"); Expect("{");
+            var writes = new List<(string Path,string Helper)>();
+            while (!Eat("}"))
+            {
+                if (Eat("return")) { Expect(";"); Expect("}"); break; }
+                Expect("self"); Expect("."); string field = Word();
+                while(Eat(".")) field=Path(field,Word());
+                var leaf=owner.Leaves.Find(l=>l.Path==field);
+                Require(leaf is not null,"E_TYPE","unknown mutable leaf");
+                Expect("=");
+                var ps=new List<StructuredParameter>();
+                var env=new Dictionary<string,StructuredExpr>(StringComparer.Ordinal);
+                foreach(var l in owner.Leaves) {
+                    string slot=Slot(); ps.Add(new(slot,l.Type));
+                    env.Add(l.Path,new StructuredRead(current.Offset,slot,l.Type));
+                }
+                foreach(var formal in formals) {
+                    var type=ScalarType(formal.Type); string slot=Slot(); ps.Add(new(slot,type));
+                    env.Add("$arg."+formal.Name,new StructuredRead(current.Offset,slot,type));
+                }
+                var expression=Expression(env); Expect(";");
+                Require(expression.Type==leaf!.Type,"E_TYPE","mutable leaf type mismatch");
+                Require(order.Count<64,"E_SOURCE_LIMIT","mutation helper budget");
+                string helper="_atto_struct_method_"+order.Count;
+                functions.Add(helper,new StructuredFunction(helper,ps,expression.Type,expression,new StructuredStmt[]{new StructuredReturn(expression.Offset,expression)}));
+                order.Add(helper); writes.Add((field,helper));
+            }
+            Require(writes.Count>0,"E_STRUCT_SYNTAX","empty mutation outside profile");
+            Require(owner.Constructors.Count + owner.Methods.Count + owner.Mutations.Count <64,"E_SOURCE_LIMIT","member budget");
+            owner.Mutations.Add(name,new(formals,writes));
+        }
+        private void InvokeMutation()
+        {
+            string name=Word(); Expect("."); string member=Word();
+            if(!values.TryGetValue(name,out var value))throw Error("E_TYPE","unknown receiver");
+            if(!value.Owner.Mutations.TryGetValue(member,out var mutation))throw Error("E_TYPE","unknown mutable method");
+            Require(value.Mutable,"E_BORROW_MUT_REQUIRED","immutable receiver");
+            Expect("("); var args=new List<StructuredExpr>();
+            if(!Eat(")")){
+                do{
+                    Require(args.Count<mutation.Parameters.Count,"E_TYPE","mutation arity");
+                    var expression=Expression();
+                    Require(expression.Type==ScalarType(mutation.Parameters[args.Count].Type),"E_TYPE","mutation argument type");
+                    args.Add(Snapshot(expression));
+                }while(Eat(","));
+                Expect(")");
+            }
+            Require(args.Count==mutation.Parameters.Count,"E_TYPE","mutation arity");
+            Expect(";");
+            foreach(var write in mutation.Writes) {
+                var operands=value.Owner.Leaves.Select(l=>value.Slots[l.Path]).Concat(args).ToArray();
+                var result=new StructuredCall(current.Offset,write.Helper,operands,functions[write.Helper].ResultType);
+                value.Slots[write.Path]=Snapshot(result);
+            }
         }
         private void Declaration()
         {
@@ -199,7 +268,9 @@ public static partial class OresStructuredParser
             if(++depth>64) throw Error("E_SOURCE_LIMIT","expression depth");
             try {
                 var a=Atom(self);
+                int chain=0;
                 while(Prec(current.Text)>=minimum) {
+                    if(++chain>32)throw Error("E_SOURCE_LIMIT","scalar expression chain");
                     string op=current.Text; int at=current.Offset, precedence=Prec(op); Next();
                     var b=Expression(self,precedence+1);
                     Require(a.Type==b.Type,"E_TYPE","mixed scalar operands");
@@ -232,6 +303,7 @@ public static partial class OresStructuredParser
             string root;
             if(Eat("self")){root="self";Require(self is not null,"E_TYPE","self outside method");}
             else root=Word();
+            if(self is not null && root!="self" && self.TryGetValue("$arg."+root,out var parameter))return parameter;
             Expect("."); string name=Word();
             if(self is null && values.TryGetValue(root,out var value)){
                 if(Eat("(")){
@@ -249,7 +321,7 @@ public static partial class OresStructuredParser
         }
         private void Binding()
         {
-            Expect("let"); string first=Word(),name=first; Owner? annotated=null;
+            Expect("let"); bool mutable=Eat("mut"); string first=Word(),name=first; Owner? annotated=null;
             if(owners.TryGetValue(first,out annotated)) name=Word();
             Require(!values.ContainsKey(name)&&!owners.ContainsKey(name),"E_DUPLICATE","local shadow");
             Expect("="); bool explicitCopy=Eat("copy!");
@@ -289,7 +361,7 @@ public static partial class OresStructuredParser
                 }
             }
             Require(annotated is null || ReferenceEquals(annotated,owner),"E_TYPE","nominal binding mismatch");
-            Expect(";"); values.Add(name,new(owner,slots));
+            Expect(";"); values.Add(name,new(owner,slots,mutable));
         }
         public StructuredProgram Parse()
         {
@@ -298,7 +370,7 @@ public static partial class OresStructuredParser
             Eat("pub"); Expect("fnc"); Expect("main"); Expect("("); Expect(")");
             if(!Eat(":")&&!Eat("->"))throw Error("E_STRUCT_SYNTAX","main return separator");
             Expect("int"); Expect("{");
-            while(current.Text=="let")Binding();
+            while(current.Text!="return") { if(current.Text=="let")Binding(); else InvokeMutation(); }
             Expect("return"); var result=Expression();
             Require(result.Type==IrValueType.I64,"E_TYPE","int main result required");
             Expect(";"); Expect("}"); Expect("");
