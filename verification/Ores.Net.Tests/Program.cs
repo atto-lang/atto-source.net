@@ -3,6 +3,40 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+if (args.Length == 1 && args[0] == "--grouped-spawn-admission")
+{
+    foreach (string expression in new[] {
+        "spawn Worker()", "spawn Worker() with {}",
+        "spawn Worker() with { schedule { max_parallelism = 2; } }",
+        "spawn Worker() with { resources { heap_size = 1024; } }",
+        "spawn Worker() with { init { seed = 42; } }",
+        "spawn Worker() /* trivia */ with { init {} }"
+    })
+    {
+        string source = "fnc main():int{return " + expression + ";}";
+        // Grouped options currently encounter the existing lexical with guard
+        // before expression parsing. Preserve that guard and its exact location.
+        bool grouped = expression.Contains("with {", StringComparison.Ordinal);
+        string diagnostic = grouped ? "WITH_BACKEND_UNSUPPORTED" : "E_SPAWN_OPTIONS_UNSUPPORTED";
+        int at = grouped ? source.IndexOf('{', source.IndexOf("with {", StringComparison.Ordinal))
+            : source.IndexOf("spawn", StringComparison.Ordinal);
+        string offset = $"offset {at}";
+        foreach (Action parse in new Action[] {
+            () => OresParser.Parse(source), () => OresStructuredParser.Parse(source)
+        })
+        {
+            try { parse(); }
+            catch (FormatException error) when (error.Message.Contains(diagnostic, StringComparison.Ordinal)
+                    && error.Message.Contains(offset, StringComparison.Ordinal)) { continue; }
+            throw new Exception("grouped spawn was not rejected: " + source);
+        }
+    }
+    _ = OresParser.Parse("fnc main():int{return 42;} // spawn Worker() with {}");
+    _ = OresStructuredParser.Parse("fnc main():int{return 42;} // spawn Worker() with {}");
+    Console.WriteLine("NET_GROUPED_SPAWN_ADMISSION_PASS 12 denials, 2 scalar controls");
+    return;
+}
+
 if (args.Length == 1 && args[0] == "--unicode-identifiers")
 {
     StructuredCfgLoweringTests.RunUnicodeIdentifierNegation();
