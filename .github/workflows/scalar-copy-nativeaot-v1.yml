@@ -1,0 +1,55 @@
+name: Exact-head NativeAOT scalar-copy ownership boundary
+on:
+  pull_request:
+    paths:
+      - 'compiler/**'
+      - 'runtime/**'
+      - 'host/**'
+      - 'scripts/publish-linux.sh'
+      - 'verification/assert-linux-native-release.sh'
+      - 'ci/test-scalar-copy-nativeaot.sh'
+      - 'tests/fixtures/scalar-copy-nativeaot-v1/**'
+      - '.github/workflows/scalar-copy-nativeaot-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'compiler/**'
+      - 'runtime/**'
+      - 'host/**'
+      - 'scripts/publish-linux.sh'
+      - 'verification/assert-linux-native-release.sh'
+      - 'ci/test-scalar-copy-nativeaot.sh'
+      - 'tests/fixtures/scalar-copy-nativeaot-v1/**'
+      - '.github/workflows/scalar-copy-nativeaot-v1.yml'
+permissions:
+  contents: read
+jobs:
+  native-ownership:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Authenticate exact source checkout
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "source_head=$(git rev-parse HEAD) source_tree=$(git rev-parse HEAD^{tree})"
+          git diff --exit-code HEAD
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Native toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev binutils
+          dotnet --version
+          clang --version
+      - name: Real compiled guests and artifact denial
+        run: bash ci/test-scalar-copy-nativeaot.sh
+      - name: Verify tracked source unchanged
+        run: git diff --exit-code HEAD
