@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Compile the REAL host source into this isolated test binary so an
+         internal-only adapter does not become a public guest capability. -->
+    <Compile Include="../../runtime/Ores.Net.Runtime/Net/UdpLoopbackHost.cs"
+             Link="UdpLoopbackHost.cs" />
+  </ItemGroup>
+</Project>
