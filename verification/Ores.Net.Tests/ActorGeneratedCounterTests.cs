@@ -72,8 +72,11 @@ internal static class ActorGeneratedCounterTests
         runtime.Send(actor, new byte[] { 1 });
         Require(observed.Task.Wait(TimeSpan.FromSeconds(5)) &&
             observed.Task.Result == 42L, "owned native schema guest turn did not finish");
+        // Register the observer while the actor is live. STOP can retire the
+        // reference synchronously or on a faster native carrier.
+        Task termination = runtime.ObserveTermination(actor);
         runtime.Stop(actor);
-        Require(runtime.ObserveTermination(actor).Wait(TimeSpan.FromSeconds(5)),
+        Require(termination.Wait(TimeSpan.FromSeconds(5)),
             "owned schema actor failed to terminate");
 
         foreach (var (values, tags) in new (long[], byte[])[]
