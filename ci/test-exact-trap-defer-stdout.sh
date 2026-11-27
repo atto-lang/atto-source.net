@@ -15,19 +15,23 @@ deny() {
   local source="$1" diagnostic="$2"; shift 2
   local status=0
   oresnet check "$source" "$@" > "$work/check.log" 2>&1 || status=$?
-  test "$status" = 1; grep -F "$diagnostic" "$work/check.log"
+  if [[ "$status" != 1 ]]; then cat "$source" "$work/check.log" >&2; echo "expected check rejection, got $status" >&2; return 1; fi
+  grep -F "$diagnostic" "$work/check.log"
   status=0
   oresnet compile "$source" --out "$work/Rejected/OresGenerated.dll" "$@" > "$work/denied.log" 2>&1 || status=$?
-  test "$status" = 1; grep -F "$diagnostic" "$work/denied.log"
+  if [[ "$status" != 1 ]]; then cat "$source" "$work/denied.log" >&2; echo "expected compile rejection, got $status" >&2; return 1; fi
+  grep -F "$diagnostic" "$work/denied.log"
   test ! -e "$work/Rejected/OresGenerated.dll"
 }
 mkdir "$work/Rejected"
 deny "$source" E_PERMISSION
-for variant in 'stdio.stdout.write(42)' 'stdio.stderr.write("D")' 'stdio.stdout.write("D", "X")' 'stdio.stdout.write("\\n")'; do
+for variant in 'stdio.stdout.write(42)' 'stdio.stderr.write("D")' 'stdio.stdout.write("D", "X")' 'stdio.stdout.write("\n")'; do
   printf 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer %s;return 42;};return 42;}\n' "$variant" > "$work/reject.atto"
+  echo "Rejecting $variant"
   # Each must be a semantic source failure; an infrastructure error is not proof.
   deny "$work/reject.atto" 'offset' --capability stdio.stdout.write
 done
+echo "Compiling exact granted fixture"
 oresnet check "$source" --capability stdio.stdout.write
 oresnet compile "$source" --out "$work/OresGenerated.dll" --capability stdio.stdout.write
 if [[ "$mode" == nativeaot ]]; then
