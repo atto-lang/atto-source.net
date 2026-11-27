@@ -108,8 +108,22 @@ internal static class ContextualIntSource
             if (result.Count == 0) throw Denied("empty main expression");
             return result;
         }
-        while (Eat("const"))
+        while (Peek() is "const" or "let" or "set")
         {
+            if (Peek() != "const") {
+                bool declaration = Eat("let");
+                if (!declaration) Need("set");
+                string target = Name();
+                if (target == owner || aliases.ContainsKey(target) || (!declaration && !locals.ContainsKey(target)))
+                    throw Denied("set requires existing scalar let; contextual aliases immutable");
+                Need("="); var rhs = Plain(); Need(";");
+                if (slots >= 4) throw Denied("direct CIL local slot limit");
+                string local = Prefix + "slot_" + slots++;
+                output.AddRange(["val", local, "=", .. rhs, ";"]);
+                locals[target] = local;
+                continue;
+            }
+            Need("const");
             string name = Name();
             if (name == owner || aliases.ContainsKey(name) || locals.ContainsKey(name) || aliases.Count >= 64)
                 throw Denied("duplicate or excessive context binding");
