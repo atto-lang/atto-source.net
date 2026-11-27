@@ -1,0 +1,13 @@
+pub fnc main(): int {
+    let int answer = 0;
+    if true do answer = answer + 7; fi
+    do if true then
+        if false { return 1; }
+    fi
+    if false { return 2; } else { answer = answer + 7; }
+    answer = answer + (if true then 7 else 1 fi);
+    answer = answer + (false ? 1 : 7);
+    answer = answer + (true ? { return 7; } : { return 1; });
+    if false do return 3; else answer = answer + 7; fi
+    return answer;
+}

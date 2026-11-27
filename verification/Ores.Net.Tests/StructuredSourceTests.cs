@@ -99,6 +99,12 @@ internal static class StructuredSourceTests
                 "fnc main():int{loop{do " + head + " true then break; fi}return 0;}").Body.Count == 2,
                 "strict explicit do statement");
             Require(OresStructuredParser.ParseStrictConditionals(
+                "fnc main():int{loop{" + head + " true do break; fi}return 0;}").Body.Count == 2,
+                "strict suffix do statement");
+            Require(OresStructuredParser.ParseStrictConditionals(
+                "fnc main():int{do " + head + " true then if false {return 1;} fi return 42;}").Body.Count == 2,
+                "strict nested brace must not consume outer fi");
+            Require(OresStructuredParser.ParseStrictConditionals(
                 "fnc main():int{loop{" + head + " true {break;}}return 0;}").Body.Count == 2,
                 "strict brace statement");
             RejectFeature("fnc main():int{loop{" + head + " true {break;}fi}return 0;}",
