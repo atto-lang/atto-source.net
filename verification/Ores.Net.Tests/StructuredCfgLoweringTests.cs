@@ -56,7 +56,7 @@ internal static class StructuredCfgLoweringTests
                     var method = guest.GetType("Oreslang.Generated.OresProgram", throwOnError: true)!
                         .GetMethod("Run", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
                         ?? throw new Exception("Generated CLR guest entry not found");
-                    if (Convert.ToInt64(method.Invoke(null, null), CultureInfo.InvariantCulture) != expected)
+                    if (Convert.ToInt64(method.Invoke(null, null), System.Globalization.CultureInfo.InvariantCulture) != expected)
                         throw new Exception("Structured CoreCLR guest mismatch: " + label);
                 }
                 finally { context.Unload(); }
