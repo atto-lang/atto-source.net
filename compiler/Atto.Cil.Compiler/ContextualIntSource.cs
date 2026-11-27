@@ -75,7 +75,23 @@ internal static class ContextualIntSource
             if (args.Count != count) throw Denied("argument arity");
             return args;
         }
-        output.AddRange(Plain()); Need(";"); Need("}"); Need("end");
+        var memberBody=Plain(); output.AddRange(memberBody); Need(";"); Need("}"); Need("end");
+        int mainHeaderAt=output.Count+2;
+        var variants=new Dictionary<string,string>(StringComparer.Ordinal);
+        var variantTokens=new List<string>();
+        string Variant(List<int> order) {
+            string key=string.Join(",",order);
+            if(variants.TryGetValue(key,out string? found))return found;
+            if(variants.Count>=16)throw Denied("named specialization budget");
+            string target=Prefix+"order_"+variants.Count;
+            variantTokens.AddRange(["fnc",target,"("]);
+            int n=0;
+            foreach(var p in order.Select(j=>captures[j]).Concat(ordinary)){
+                if(n++>0)variantTokens.Add(",");variantTokens.AddRange(["int",p]);
+            }
+            variantTokens.AddRange([")","->","int","{","return",..memberBody,";","}"]);
+            variants.Add(key,target);return target;
+        }
         output.AddRange([";", "}", "fnc", "main", "(", ")", "->", "int", "{"]);
         locals.Clear();
         Need("fnc"); Need("main"); Need("("); Need(")"); Need("->"); Need("int"); Need("{");
@@ -88,10 +104,23 @@ internal static class ContextualIntSource
                 if (t == owner || aliases.ContainsKey(t)) {
                     pos++;
                     List<List<string>> context;
-                    if (t == owner) { Need(":"); Need(":"); context = Args(captures.Count); }
-                    else context = aliases[t].Select(x => new List<string> { x }).ToList();
+                    string target=Prefix+"member";
+                    if (t == owner) {
+                        Need(":"); Need(":");
+                        bool named=pos+2<source.Count&&Peek()=="("&&IsName(source[pos+1])&&source[pos+2]=="=";
+                        if(named){
+                            Need("(");context=[];List<int> order=[];
+                            for(int k=0;k<captures.Count;k++){
+                                if(k>0)Need(",");
+                                string key=Name();Need("=");int j=captures.IndexOf(key);
+                                if(j<0||order.Contains(j))throw Denied("unknown or duplicate named context");
+                                order.Add(j);context.Add(Plain());
+                            }
+                            Need(")");target=Variant(order);
+                        }else context=Args(captures.Count);
+                    }else context = aliases[t].Select(x => new List<string> { x }).ToList();
                     Need("."); Need(member); var actual = Args(ordinary.Count);
-                    result.AddRange([Prefix + "member", "("]);
+                    result.AddRange([target, "("]);
                     int i = 0;
                     foreach (var arg in context.Concat(actual)) { if (i++ > 0) result.Add(","); result.AddRange(arg); }
                     result.Add(")");
@@ -155,20 +184,11 @@ internal static class ContextualIntSource
             aliases.Add(name, saved);
         }
         Need("return");
-        bool directNamed = pos+5 < source.Count && Peek()==owner && source[pos+1]==":" &&
-            source[pos+2]==":" && source[pos+3]=="(" && IsName(source[pos+4]) && source[pos+5]=="=";
-        if (directNamed) {
-            var saved=CaptureSlots(); Need("."); Need(member); var actual=Args(ordinary.Count);
-            output.AddRange(["return",Prefix+"member","("]);
-            int n=0;
-            foreach(var arg in saved.Select(x=>new List<string>{x}).Concat(actual)) {
-                if(n++>0)output.Add(","); output.AddRange(arg);
-            }
-            output.Add(")");
-        } else { output.Add("return"); output.AddRange(MainExpr()); }
+        output.Add("return"); output.AddRange(MainExpr());
         Need(";"); Need("}"); Need("<eof>");
         output.AddRange([";", "}", "<eof>"]);
-        if (output.Count > 8192) throw Denied("generated token limit");
+        if (output.Count+variantTokens.Count > 8192) throw Denied("generated token limit");
+        output.InsertRange(mainHeaderAt,variantTokens);
         return output;
     }
 }
