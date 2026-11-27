@@ -14,11 +14,11 @@ for file in "$corpus"/pass/*.atto; do
   name="$(basename "$file" .atto)"
   blob="$(git hash-object "$file")"
   case "$name" in
-    direct|immutable-alias|legacy-body) expected=42;;
+    direct|immutable-alias|legacy-body|reordered-names) expected=42;;
     independent-bindings) expected=20;;
     multi-independent) expected=50;;
     snapshot-reuse) expected=41;;
-    multi-snapshot) expected=34;;
+    multi-snapshot|canonical-set-snapshot) expected=34;;
     *) exit 2;;
   esac
   rm -f "$guest"
@@ -33,7 +33,7 @@ for file in "$corpus"/pass/*.atto; do
   status=0; dotnet run --no-build -c Release --project "$host" || status=$?
   test "$status" = "$expected"
   echo "SHARED_EXECUTED_CORECLR $name $blob $status"
-  if [[ "$name" == immutable-alias || "$name" == multi-independent ]]; then
+  if [[ "$name" == immutable-alias || "$name" == multi-independent || "$name" == reordered-names || "$name" == canonical-set-snapshot ]]; then
     dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true --self-contained true -o "$work/native-$name"
     status=0; "$work/native-$name/Atto.Cil.Guest.Host" || status=$?
     test "$status" = "$expected"
@@ -52,5 +52,6 @@ for file in "$corpus"/fail/*.atto; do
   echo "SHARED_REJECT_UNCLASSIFIED $name $blob $(cat "$work/err")"; reject=$((reject+1))
 done
 echo "SHARED_SUMMARY executed=$execute rejectedUnclassified=$reject outside=$outside"
-test "$((execute+outside))" = 7
-test "$reject" = 13
+test "$((execute+outside))" = "${ATTO_CONTEXT_EXPECT_POSITIVE:-7}"
+test "$reject" = "${ATTO_CONTEXT_EXPECT_NEGATIVE:-13}"
+if [[ "${ATTO_CONTEXT_EXPECT_POSITIVE:-7}" == 2 ]]; then test "$outside" = 0; fi
