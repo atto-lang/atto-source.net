@@ -39,8 +39,62 @@ internal static class ActorGeneratedCounterTests
         return scheduler.DispatchNext(isolate, actor, Actor_Counter.ActorLayoutIdentity, generatedMethod);
     }
 
+    private static void OwnedNativeStateSchemaSnapshot()
+    {
+        // A caller-owned array is not immutable merely because it was
+        // accepted through ReadOnlySpan. Neither default nor kind can be
+        // altered between construction and lazy actor initialization.
+        long[] defaults = [41L, 1L];
+        byte[] kinds = [1, 2];
+        var state = new ActorNativeScalarState(defaults, kinds);
+        defaults[0] = 999L;
+        defaults[1] = 7L;
+        kinds[0] = 2;
+        kinds[1] = 1;
+
+        using var runtime = new ActorRuntime();
+        var observed = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var actor = runtime.Spawn(ActorKind.Private, (context, message) =>
+        {
+            try
+            {
+                long result = state.AddInt64(context, 0, 1L);
+                Require(result == 42L && state.ReadInt64(context, 0) == 42L,
+                    "caller mutation changed owned native defaults or field kinds");
+                bool boolDenied = false;
+                try { _ = state.AddInt64(context, 1, 1L); }
+                catch (InvalidOperationException) { boolDenied = true; }
+                Require(boolDenied, "caller mutation converted bool cell to int64");
+                observed.TrySetResult(result);
+            }
+            catch (Exception e) { observed.TrySetException(e); }
+        });
+        runtime.Send(actor, new byte[] { 1 });
+        Require(observed.Task.Wait(TimeSpan.FromSeconds(5)) &&
+            observed.Task.Result == 42L, "owned native schema guest turn did not finish");
+        runtime.Stop(actor);
+        Require(runtime.ObserveTermination(actor).Wait(TimeSpan.FromSeconds(5)),
+            "owned schema actor failed to terminate");
+
+        foreach (var (values, tags) in new (long[], byte[])[]
+        {
+            (new long[] { 7 }, new byte[] { 2 }),
+            (new long[] { 0 }, new byte[] { 0 }),
+            (new long[] { 0 }, new byte[] { 3 }),
+            (new long[] { 0 }, Array.Empty<byte>()),
+            (Array.Empty<long>(), Array.Empty<byte>())
+        })
+        {
+            bool denied = false;
+            try { _ = new ActorNativeScalarState(values, tags); }
+            catch (ArgumentException) { denied = true; }
+            Require(denied, "invalid native scalar schema admitted");
+        }
+    }
+
     public static void Run()
     {
+        OwnedNativeStateSchemaSnapshot();
         ActorGeneratedRuntimeCounterChecks.Run();
         var ir = OresParser.InspectSynchronousActorIncrement(CounterSource);
         Require(ir.Schema.ActorName == "Counter" && ir.MethodName == "increment" &&
