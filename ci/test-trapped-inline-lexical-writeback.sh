@@ -43,7 +43,13 @@ run_guest error-writeback 'pub fnc main():int{let int n=0; val Result<int,Error>
 run_guest normal-writeback 'pub fnc main():int{let int n=0; val Result<int,Error> r=trap! sync task<int>{n=2;if false {throw! new Error("bad");} return 40;};guard r.is_ok(),n eq 2 {return 1;} return r.unwrap()+n;}' 0 42
 run_guest branch-writeback 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{if n eq 0 {n=42;throw! new Error("bad");} else {n=7;return 9;}};guard r.is_err() {return 1;} return n;}' 0 42
 run_guest terminal-panic 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{n=2;if true {panic! new Error("terminal");} return 42;};return 1;}' 70 'Oreslang panic: terminal'
-reject arithmetic 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{n=n+2;return 42;};return n;}' E_TRAP_INLINE_TASK_UNSUPPORTED
+run_guest arithmetic-writeback 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{n=n+2;return 40;};guard r.is_ok(),n eq 2 {return 1;} return r.unwrap()+n;}' 0 42
+run_guest unwrap-error-writeback 'pub fnc main():int{let int n=0;val Option<int> missing=None;val Result<int,Error> r=trap! sync task<int>{n=n+2;val int x=missing.unwrap();n=n+100;return x;};guard r.is_err(),n eq 2 {return 1;} return n+40;}' 0 42
+run_guest unwrap-success-writeback 'pub fnc main():int{let int n=0;val Option<int> present=Some(40);val Result<int,Error> r=trap! sync task<int>{n=n+2;val int x=present.unwrap();return x;};guard r.is_ok(),n eq 2 {return 1;} return r.unwrap()+n;}' 0 42
+run_guest failed-assignment 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{n=42;n=9223372036854775807+1;return 0;};guard r.is_err() {return 1;} return n;}' 0 42
+run_guest zero-division 'pub fnc main():int{let int n=0;let int zero=0;val Result<int,Error> r=trap! sync task<int>{n=42;return 7/zero;};guard r.is_err() {return 1;} return n;}' 0 42
+run_guest failed-return 'pub fnc main():int{let int n=0;val Option<int> missing=None;val Result<int,Error> r=trap! sync task<int>{n=42;return missing.unwrap();};guard r.is_err(){return 1;}return n;}' 0 42
+reject effectful-condition 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{if n+2 eq 2 {return 42;}return 0;};return 0;}' E_TRAP_INLINE_TASK_UNSUPPORTED
 reject nested 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{return sync task<int>{return 42;};};return 0;}' E_TRAP_INLINE_TASK_UNSUPPORTED
 reject cleanup 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer stdio.stdout.write("D");return 42;};return 0;}' E_LEXICAL_CLEANUP_UNSUPPORTED
 reject helper 'fnc f():int{return 42;}pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{return f();};return 0;}' E_TRAP_INLINE_TASK_UNSUPPORTED
