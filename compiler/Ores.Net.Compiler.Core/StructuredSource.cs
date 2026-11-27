@@ -2387,11 +2387,12 @@ public static partial class OresStructuredParser
                 inlineTaskDepth == 1 && trapOperandDepth == 1 && guardFailureDepth == 0)
             {
                 index++;
-                if (Current.Text == "stdio")
+                if (Current.Text is "stdio" or "process")
                 {
                     if (!allowDeferredStdout)
                         throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: E_PERMISSION: deferred stdout requires explicit host compile grant");
-                    Expect("stdio"); Expect("."); Expect("stdout"); Expect("."); Expect("write"); Expect("(");
+                    bool processStdout = Current.Text == "process";
+                    Expect(processStdout ? "process" : "stdio"); Expect("."); Expect(processStdout ? "stdout" : "out"); Expect("."); Expect("write"); Expect("(");
                     string literal = ErrorMessage();
                     if (literal.Length > 256 || literal.Any(ch => ch < ' ' || ch > '~'))
                         throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: deferred stdout slice accepts bounded printable ASCII literals");
