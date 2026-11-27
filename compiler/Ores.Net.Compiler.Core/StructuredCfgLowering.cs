@@ -28,9 +28,9 @@ public static partial class OresStructuredCfgLowering
             ? LowerModule(OresStructuredParser.ParseProduction(source))
             : null;
 
-    public static VerifiedCfgModule? TryLowerProductionModule(string source)
+    public static VerifiedCfgModule? TryLowerProductionModule(string source, bool allowStdout = false)
         => OresStructuredParser.HasStructuredFeatureToken(source)
-            ? LowerModule(OresStructuredParser.ParseProduction(source))
+            ? LowerModule(OresStructuredParser.ParseProduction(source, allowStdout))
             : null;
 
     internal static VerifiedCfgModule LowerModule(StructuredProgram program)
@@ -764,6 +764,9 @@ public static partial class OresStructuredCfgLowering
                         break;
                     case StructuredDoSyncTask task:
                         current = LowerInlineTask(task.Task, current, variables).Join;
+                        break;
+                    case StructuredDeferredStdout stdout:
+                        Emit(current, CfgOpcode.RootStdoutLiteral, IrValueType.Bool, text: stdout.Text);
                         break;
                     case StructuredInlineCooperate:
                         Emit(current, CfgOpcode.InlineCooperate, IrValueType.Bool);

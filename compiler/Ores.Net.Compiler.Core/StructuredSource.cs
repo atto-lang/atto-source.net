@@ -189,8 +189,8 @@ public static partial class OresStructuredParser
     public static StructuredProgram ParseStrictConditionals(string source)
         => ParseCore(source, null, strictConditionals: true).Program;
 
-    internal static StructuredProgram ParseProduction(string source)
-        => ParseCore(source, null, productionGuard: true).Program;
+    internal static StructuredProgram ParseProduction(string source, bool allowStdout = false)
+        => ParseCore(source, null, productionGuard: true, allowStdout: allowStdout).Program;
 
     internal static bool HasGuardToken(string source)
         => HasStructuredFeatureToken(source, guardOnly: true);
@@ -310,7 +310,7 @@ public static partial class OresStructuredParser
         string frozenMethodPrefix = "", Func<string,string,StructuredFunction>? frozenResolve = null,
         bool productionGuard = false,
         Func<string,string,Func<string,StructuredFunction>>? frozenNamespaceResolve = null,
-        bool strictConditionals = false)
+        bool strictConditionals = false, bool allowStdout = false)
     {
         ValidateSourceInput(source);
         ActorPubSubSourceAdmission.RejectUnsupported(source);
@@ -635,7 +635,7 @@ public static partial class OresStructuredParser
         }
         RejectUnsupportedMacros(tokens);
         var reader = new Reader(tokens, linking, productionGuard: productionGuard,
-            strictConditionals: strictConditionals);
+            strictConditionals: strictConditionals, allowStdout: allowStdout);
         if (frozenNamespace is not null)
             return reader.ReadFrozenNamespace(frozenNamespace, frozenExports!, frozenMethodPrefix, frozenResolve, frozenNamespaceResolve);
         return linking is null
@@ -1221,7 +1221,7 @@ public static partial class OresStructuredParser
 
     private sealed partial class Reader(List<Token> tokens, LinkedModuleContext? linking = null,
         bool allowCoreNamespace = false, bool productionGuard = false,
-        bool strictConditionals = false)
+        bool strictConditionals = false, bool allowStdout = false)
     {
         private sealed record LocalBinding(IrValueType Type, StructuredBindingKind Kind,
             long? ConstantValue);
@@ -2390,6 +2390,20 @@ public static partial class OresStructuredParser
                 inlineTaskDepth == 1 && trapOperandDepth == 1 && guardFailureDepth == 0)
             {
                 index++;
+                // Narrow standalone-root stdout profile: literal text only,
+                // with explicit compile and host grants. No synchronous host IO.
+                if (Current.Text == "stdio")
+                {
+                    if (!allowStdout)
+                        throw Error("E_PERMISSION: deferred stdout requires explicit --allow-stdio");
+                    Expect("stdio"); Expect("."); Expect("stdout"); Expect("."); Expect("write"); Expect("(");
+                    string text = ErrorMessage();
+                    if (text.Length > 1024)
+                        throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: stdout literal budget exceeded");
+                    Expect(")"); Expect(";");
+                    return (new StructuredLexicalDefer(at,
+                        new StructuredStmt[] { new StructuredDeferredStdout(at, text) }), false);
+                }
                 if (Current.Text != "{")
                     throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: only braced scalar assignment defer is verified");
                 var (cleanup, terminal) = Block(depth + 1);

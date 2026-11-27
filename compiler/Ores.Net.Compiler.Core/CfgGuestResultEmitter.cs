@@ -9,6 +9,7 @@ internal sealed class CfgGuestResultEmitter
     private readonly TypeReferenceHandle result;
     private readonly TypeReferenceHandle error;
     private readonly TypeReferenceHandle operations;
+    private readonly TypeReferenceHandle stdout;
     private readonly TypeReferenceHandle arithmetic;
     private readonly TypeReferenceHandle overflow;
     private readonly TypeReferenceHandle divideByZero;
@@ -27,6 +28,7 @@ internal sealed class CfgGuestResultEmitter
         result = Reference(guestRuntime, "Ores.Net.Runtime", "GuestResultI64");
         error = Reference(guestRuntime, "Ores.Net.Runtime", "GuestError");
         operations = Reference(guestRuntime, "Ores.Net.Runtime", "GuestResults");
+        stdout = Reference(guestRuntime, "Ores.Net.Runtime", "RootGuestStdout");
         arithmetic = Reference(guestRuntime, "Ores.Net.Runtime", "StrictSigned64Arithmetic");
         ordinaryThrow = Reference(guestRuntime, "Ores.Net.Runtime", "GuestThrowSignal");
         overflow = Reference(systemRuntime, "System", "OverflowException");
@@ -37,7 +39,8 @@ internal sealed class CfgGuestResultEmitter
     internal static bool Uses(VerifiedCfgFunction graph) =>
         Uses(graph.ResultType) || graph.Parameters.Any(Uses) || graph.Blocks.Any(block =>
             block.Terminator is CfgSignal || block.Instructions.Any(op =>
-                Uses(op.Type) || op.Opcode is >= CfgOpcode.TrapCall and <= CfgOpcode.CheckedModulo));
+                Uses(op.Type) || op.Opcode == CfgOpcode.RootStdoutLiteral ||
+                op.Opcode is >= CfgOpcode.TrapCall and <= CfgOpcode.CheckedModulo));
 
     private static bool Uses(IrValueType type) => type.IsResult() ||
         type is IrValueType.GuestError or IrValueType.GuestText;
@@ -75,7 +78,7 @@ internal sealed class CfgGuestResultEmitter
             {
                 foreach (var input in inputs) Encode(pros.AddParameter().Type(), input);
             });
-        var owner = name is "Rem" or "Mod" ? arithmetic : operations;
+        var owner = name == "Append" ? stdout : name is "Rem" or "Mod" ? arithmetic : operations;
         method = metadata.AddMemberReference(owner, metadata.GetOrAddString(name),
             metadata.GetOrAddBlob(signature));
         methods.Add(name, method);
@@ -111,6 +114,7 @@ internal sealed class CfgGuestResultEmitter
 
         var method = op.Opcode switch
         {
+            CfgOpcode.RootStdoutLiteral => Method("Append", Slot.Bool, Slot.Text),
             CfgOpcode.GuestErrorLiteral => Method("CreateError", Slot.Error, Slot.Text),
             CfgOpcode.GuestErrorIsType => Method("IsErrorType", Slot.Bool, Slot.Error, Slot.Text),
             CfgOpcode.GuestErrorHasMessage => Method("ErrorHasMessage", Slot.Bool, Slot.Error, Slot.Text),
