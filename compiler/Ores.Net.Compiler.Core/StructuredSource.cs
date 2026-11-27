@@ -2714,7 +2714,9 @@ public static partial class OresStructuredParser
             if (!increment && compound is null && Take("^^=")) compound = StructuredOperator.BitXor;
             if (compound is null) Expect("=");
             if (compound is not null && binding.Type != IrValueType.I64)
-                throw Error("Compound update requires a mutable int local");
+                throw Error(compound == StructuredOperator.BitXor
+                    ? "Compound XOR requires a mutable int local"
+                    : "Compound update requires a mutable int local");
             // A compound RHS must not acquire complete-statement writeback permission.
             StructuredExpr assigned = increment ? new StructuredInt(variableAt, 1) :
                 ReadStatementValue(depth + 1, binding.Type, allowWriteback: compound is null);
