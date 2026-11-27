@@ -302,6 +302,22 @@ internal static class StructuredCfgLoweringTests
 
     public static void Run()
     {
+        Check("denote type Count = int; denote type Total = Count; fnc main():Total{val Count a=42;return a;}",
+            42, "denoted scalar CIL identity");
+        CheckModule("denote type Count = int; denote type Total = Count; fnc id(Count n):Total{return n;} pub fnc main():Total{val Count a=42;return id(a);}",
+            42, "denoted helper ABI");
+        CheckModule("denote type Flag = bool; fnc id(Flag b):Flag{return b;} pub fnc main():int{if id(true) then return 42; else return 0; fi}",
+            42, "denoted bool helper ABI");
+        foreach (var (source, diagnostic) in new[] {
+            ("denote type Count = int; fnc main():int{val Count a=true;return a;}", "Local initializer has wrong type"),
+            ("denote type Count = Count; fnc main():int{return 42;}", "E_DENOTE_RHS_UNSUPPORTED"),
+            ("denote type Count = Missing; fnc main():int{return 42;}", "E_DENOTE_RHS_UNSUPPORTED"),
+            ("denote type Count = 5 | 6 | 7; fnc main():int{return 42;}", "E_DENOTE_RHS_UNSUPPORTED"),
+            ("denote type Count = int; denote type Count = bool; fnc main():int{return 42;}", "E_DENOTE_NAME"),
+            ("denote pub type Count = int; fnc main():int{return 42;}", "E_DENOTE_VISIBILITY_UNSUPPORTED"),
+            ("denote type Count = int; fnc main():int{struct Count{int a;}return 42;}", "Duplicate local value type"),
+            ("denote type Count = int; fnc main():int{val Count? a=42;return a;}", "E_DENOTE_RHS_UNSUPPORTED")
+        }) RejectWithDiagnostic(source, diagnostic, "denotation rejection");
         NegatedDoIfAotControlFlow();
         Check("""
             fnc main(): int {
