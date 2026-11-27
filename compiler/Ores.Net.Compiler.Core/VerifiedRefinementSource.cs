@@ -124,7 +124,8 @@ public static partial class OresParser
 
             public void Require(RefinedQuantity actual, string category, string operation)
             {
-                if (Unit.IsScalar && !actual.Unit.IsScalar)
+                // A binding compares its declared type; a scalar return is an erasure boundary.
+                if (category != "E_REFINEMENT_BINDING" && Unit.IsScalar && !actual.Unit.IsScalar)
                     throw new FormatException($"E_UNIT_ERASURE: {operation} requires dimensionless scale one");
                 Unit.RequireCompatible(actual.Unit);
                 if (!Range.Includes(actual.Range))
