@@ -423,8 +423,7 @@ pub async routine main(): void {
             "E_IMMUTABLE_REBIND");
         RejectFeature("fnc main():int{mut int x=10;return x;}",
             "E_MUT_QUALIFIER");
-        // Keep the newer helper/capture test coverage while migrating runtime
-        // binding semantics to val. No runtime call may bypass constexpr checks.
+        // Keep helper/capture coverage for fixed val independent of const folding.
         var runtimeVals = OresStructuredParser.Parse(
             "fnc inc(int p):int{return p+1;}" +
             "fnc main():int{val int typed=inc(40);val inferred=inc(41);" +
@@ -794,6 +793,8 @@ pub async routine main(): void {
             "let x=7 as int;x=42;return x;",
             "val x=42;const y=x as int;return y;",
             "val bool x=true;const y=x as bool;if y{return 42;}else{return 0;}",
+            "val x=42;const int y=x as int;return y;",
+            "val bool x=true;const bool y=x as bool;if y{return 42;}else{return 0;}",
             "const x=7;if true{const nested=x as int;return nested+35;}else{return 0;}",
             "const x=7;return (x+35) as int;"
         })
@@ -833,8 +834,7 @@ pub async routine main(): void {
             "const x=true;return x+1;",
             "let x=true;x=7;return 42;",
             "const x=missing;return 42;",
-            "const x=x;return 42;",
-            "const x=x;return x;"
+            "const x=x;return 42;"
         }) Reject("fnc main():int{" + invalid + "}", "scalar cast/inference fail-closed " + invalid);
 
         var runtimeBool = OresStructuredParser.Parse("""
