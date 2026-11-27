@@ -113,6 +113,23 @@ internal static class ShiftOperatorTests
         Reject("let bool a=true;a ^^=false;return 0;", "Compound XOR requires a mutable int local", "Boolean compound XOR");
         Reject("val int a=12;a ^^=10;return a;", "E_IMMUTABLE_REBIND", "immutable compound XOR");
 
+        // Exercise the actual emitted assembly, not merely an AST or interpreter.
+        Expect("let int x=21;set x <<<=1;return x;",42,"explicit left");
+        Expect("let int x=84;set x >>>=1;return x;",42,"explicit logical right");
+        Expect("let int x=-84;set x ashr=1;return 84+x;",42,"explicit arithmetic right");
+        Expect("let int x=40;set x ^^=2;return x;",42,"explicit XOR");
+        Expect("let int x=21;for let i=1;i<2;set i <<<=1{set x <<<=1;}return x;",42,"explicit shift loop");
+        Expect("let int x=-1;set x >>>=63;return x;",1,"logical sign bit");
+        Expect("let int x=1;set x <<<=63;return x;",long.MinValue,"left sign bit");
+        ExpectTrap("let int x=1;let int d=64;set x <<<=d;return x;","explicit distance 64");
+        ExpectTrap("let int x=1;let int d=-1;set x ashr=d;return x;","explicit negative distance");
+        ExpectTrap("let int x=1;let int d=9223372036854775807;set x >>>=d;return x;","explicit huge distance");
+        Reject("val int x=21;set x <<<=1;return x;","E_IMMUTABLE_REBIND","fixed shift");
+        Reject("let bool x=true;set x <<<=1;return 42;","Compound update requires a mutable int local","bool shift");
+        Reject("let int x=21;set x <<< =1;return x;","Expected","spaced equals");
+        Reject("let int x=21;set x ashr =1;return x;","Expected","spaced ashr equals");
+        Reject("let int x=21;set x << =1;return x;","Expected","stream operator cannot be shift");
+        Console.WriteLine("EXPLICIT_SHIFT_COMPOUND_CLR_PASS positives=7 traps=3 rejects=5");
         Console.WriteLine("PASS ShiftOperatorTests: checked shifts and canonical integer/compound XOR on the real CLR");
     }
 }
