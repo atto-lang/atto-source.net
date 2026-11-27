@@ -37,6 +37,15 @@ for variant in 'stdio.out.write(42)' 'process.stdout.write(42)' 'stdio.stderr.wr
   # Each must be a semantic source failure; an infrastructure error is not proof.
   deny "$work/reject.atto" 'offset' --capability stdio.out.write
 done
+# Lexical receiver bindings must not be promoted to host endpoint capabilities.
+for receiver in stdio process; do
+  alias="$receiver.out.write"
+  if [[ "$receiver" == process ]]; then alias=process.stdout.write; fi
+  printf 'pub fnc main():int{let int %s=0;val Result<int,Error> r=trap! sync task<int>{defer %s("D");return 42;};return 42;}\n' "$receiver" "$alias" > "$work/shadow-outer.atto"
+  deny "$work/shadow-outer.atto" 'deferred stdout requires an unshadowed endpoint' --capability stdio.out.write
+  printf 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{let int %s=0;defer %s("D");return 42;};return 42;}\n' "$receiver" "$alias" > "$work/shadow-inner.atto"
+  deny "$work/shadow-inner.atto" 'deferred stdout requires an unshadowed endpoint' --capability stdio.out.write
+done
 for source in "$source" "$work/process-alias.atto" "$mixed"; do
 expected=D
 if [[ "$source" == "$mixed" ]]; then expected=ED; fi
