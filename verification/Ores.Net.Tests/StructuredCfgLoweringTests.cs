@@ -465,6 +465,16 @@ internal static class StructuredCfgLoweringTests
             42, "runtime const snapshots before later assignment");
         Check("fnc main():int{const mut x as int=42;return x;}", 42,
             "const mut normalizes to fixed val in CIL");
+        Check("fnc main():int{let int z=10;let z:int=z+10;let z as int=z+22;return z;}",
+            42, "root let shadow initializer resolves the previous lexical binding");
+        Check("fnc main():int{let bool z=false;let int z=42;return z;}",
+            42, "scalar let shadow may change type");
+        Check("fnc main():int{let int z=20;const int saved=z;let int z=22;return saved+z;}",
+            42, "old scalar snapshot survives fresh lexical storage");
+        Reject("fnc main():int{const int z=1;let int z=42;return z;}",
+            "fixed binding collision remains rejected");
+        Reject("fnc main():int{let int z=1;const int z=42;return z;}",
+            "mixed fixed binding collision remains rejected");
         RejectWithDiagnostic("fnc main():int{int x=7;x=8;return x;}",
             "E_IMMUTABLE_REBIND", "type-first constant cannot rebind");
         RejectWithDiagnostic("fnc main():int{const int x=7;x=8;return x;}",
