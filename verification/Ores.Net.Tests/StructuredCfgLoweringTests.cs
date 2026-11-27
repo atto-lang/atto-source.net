@@ -25,7 +25,7 @@ internal static class StructuredCfgLoweringTests
         }
     }
 
-    private static void Check(string source, long expected, string label)
+    private static void Check(string source, long expected, string label, bool executeClr = false)
     {
         var graph = OresStructuredCfgLowering.Lower(source);
         if (CfgReferenceEvaluator.Evaluate(graph) != expected)
@@ -44,6 +44,23 @@ internal static class StructuredCfgLoweringTests
                 .Methods.Single(m => m.Name == "Run");
             if (CfgCilTestInterpreter.Evaluate(entry) != expected)
                 throw new Exception("Structured CIL mismatch: " + label);
+            if (executeClr)
+            {
+                // This is a test-only bridge. Load the actual emitted DLL,
+                // not a host reconstruction of the guest calculation.
+                var context = new System.Runtime.Loader.AssemblyLoadContext("record-guest", isCollectible: true);
+                try
+                {
+                    using var bytes = new MemoryStream(File.ReadAllBytes(output));
+                    var guest = context.LoadFromStream(bytes);
+                    var method = guest.GetType("Oreslang.Generated.OresProgram", throwOnError: true)!
+                        .GetMethod("Run", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+                        ?? throw new Exception("Generated CLR guest entry not found");
+                    if (Convert.ToInt64(method.Invoke(null, null), CultureInfo.InvariantCulture) != expected)
+                        throw new Exception("Structured CoreCLR guest mismatch: " + label);
+                }
+                finally { context.Unload(); }
+            }
             string second = Path.Combine(folder, "OresGenerated.second.dll");
             CilEmitter.EmitLibrary(graph, second);
             if (!File.ReadAllBytes(output).AsSpan().SequenceEqual(
@@ -614,13 +631,13 @@ internal static class StructuredCfgLoweringTests
         // Mixed Record construction uses the real checked CFG and emitted CIL.
         foreach (string literal in new[] {"{foo:=40,bar:2}", "(foo:=40,bar=2)", "(foo:40,bar:=2)", "{foo=40,bar:=2,}"})
         {
-            Check("fnc main():int{const Record r=" + literal + ";return r.foo+r.bar;}", 42, "mixed explicit Record " + literal);
-            Check("fnc main():int{const r=" + literal + ";return r.foo+r.bar;}", 42, "mixed inferred Record " + literal);
+            Check("fnc main():int{const Record r=" + literal + ";return r.foo+r.bar;}", 42, "mixed explicit Record " + literal, executeClr: true);
+            Check("fnc main():int{const r=" + literal + ";return r.foo+r.bar;}", 42, "mixed inferred Record " + literal, executeClr: true);
         }
-        Check("fnc main():int{const r={foo:40};const Record<T> v=infer {...r,bar:2};const Record<T> w=(bar:2,foo=40);return w.foo+v.bar;}",42,"inferred extended lexical Record shape");
-        Check("fnc main():int{const r={foo:true};const v={...r,foo:=42};return v.foo;}",42,"explicit spread override changes type");
-        Check("fnc main():int{const r={foo:40};const s={foo:1};const v={...r,...s,foo:42};return v.foo;}",42,"explicitly resolved spread overlap");
-        Check("fnc main():int{const r={foo:40};const v={...r,foo:42};return v.foo+r.foo-40;}",42,"spread leaves original unchanged");
+        Check("fnc main():int{const r={foo:40};const Record<T> v=infer {...r,bar:2};const Record<T> w=(bar:2,foo=40);return w.foo+v.bar;}",42,"inferred extended lexical Record shape", executeClr: true);
+        Check("fnc main():int{const r={foo:true};const v={...r,foo:=42};return v.foo;}",42,"explicit spread override changes type", executeClr: true);
+        Check("fnc main():int{const r={foo:40};const s={foo:1};const v={...r,...s,foo:42};return v.foo;}",42,"explicitly resolved spread overlap", executeClr: true);
+        Check("fnc main():int{const r={foo:40};const v={...r,foo:42};return v.foo+r.foo-40;}",42,"spread leaves original unchanged", executeClr: true);
         foreach (string body in new[] {
             "const r={foo:=1,foo:2};return 0;",
             "const r=(foo:=1,bar:=2);return 0;",
@@ -637,6 +654,7 @@ internal static class StructuredCfgLoweringTests
             "const r={foo:1};return r;",
             "val int x=1;val r=record{foo:x};const v={...r};return 0;"
         }) Reject("fnc main():int{" + body + "}", "mixed Record safety: " + body);
+        Console.WriteLine("MIXED_RECORD_CORECLR_PASS positives=12 negatives=14");
         // Runtime-valued immutable rows snapshot scalars into private verified
         // SSA places: later mutation of the original local cannot change them.
         Check("fnc main():int{let int source=20;val row=infer struct{x:source,y:28};source=99;return row.x+row.y;}",
