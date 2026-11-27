@@ -1233,7 +1233,7 @@ public static partial class OresStructuredParser
         bool strictConditionals = false)
     {
         private sealed record LocalBinding(IrValueType Type, StructuredBindingKind Kind,
-            long? ConstantValue);
+            long? ConstantValue, string? StorageName = null);
         private readonly List<Dictionary<string, LocalBinding>> scopes = new();
         private readonly List<HashSet<string>> localTypeScopes = new();
         // Constant scalar aggregates are compile-time values only; no hidden
@@ -2548,7 +2548,15 @@ public static partial class OresStructuredParser
                         }
                     }
                 }
-                if (scopes.Any(scope => scope.ContainsKey(name)) ||
+                // Root scalar let-over-let only. Preserve parameter, capability,
+                // aggregate, task and nested-scope admission restrictions.
+                bool shadow = scopes[^1].TryGetValue(name, out var previous) &&
+                    previous.Kind == StructuredBindingKind.Let &&
+                    kind == StructuredBindingKind.Let && depth == 1 &&
+                    !commaBindingTerminator && inlineValueBindingFloor is null &&
+                    previous.Type is (IrValueType.I64 or IrValueType.Bool) &&
+                    !tokens.Any(token => token.Text is "task" or "sync" or "await");
+                if ((!shadow && scopes.Any(scope => scope.ContainsKey(name))) ||
                     aggregateScopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
                 Expect("=");
@@ -2588,8 +2596,15 @@ public static partial class OresStructuredParser
                 }
                 if (!commaBindingTerminator || Current.Text != ",") Expect(";");
                 // Bind only after checking initializer (no self-reference).
-                scopes[^1].Add(name, new LocalBinding(type, kind, constantValue));
-                return (new StructuredLet(at, name, type, initializer, kind), false);
+                if (shadow && type is not (IrValueType.I64 or IrValueType.Bool))
+                    throw new FormatException($"Unsupported scalar let shadow at offset {nameAt}");
+                // Source cannot spell '$'; offsets uniquely identify declarations
+                // within this source. Preserve the old SSA name for earlier reads.
+                string storage = shadow ? "$let_shadow_" + nameAt.ToString(CultureInfo.InvariantCulture) : name;
+                var local = new LocalBinding(type, kind, constantValue, storage);
+                if (shadow) scopes[^1][name] = local;
+                else scopes[^1].Add(name, local);
+                return (new StructuredLet(at, storage, type, initializer, kind), false);
             }
             bool explicitDo = Take("do");
             if (Current.Text is "if" or "ifnot" or "unless")
@@ -2739,9 +2754,9 @@ public static partial class OresStructuredParser
             Require(assigned, binding.Type, "Assignment has wrong type");
             if (compoundXor)
                 assigned = CheckedBinary(variableAt, StructuredOperator.BitXor,
-                    new StructuredRead(variableAt, variable, IrValueType.I64), assigned, IrValueType.I64);
+                    new StructuredRead(variableAt, binding.StorageName ?? variable, IrValueType.I64), assigned, IrValueType.I64);
             Expect(";");
-            return (new StructuredSet(at, variable, assigned), false);
+            return (new StructuredSet(at, binding.StorageName ?? variable, assigned), false);
         }
         // The compatibility spelling remains a contextual type name. A value
         // named boolean followed by = or : retains its existing interpretation.
@@ -3789,7 +3804,7 @@ public static partial class OresStructuredParser
                     ? new StructuredBool(offset, constant != 0)
                     : new StructuredInt(offset, constant);
             }
-            return new StructuredRead(offset, name, binding.Type);
+            return new StructuredRead(offset, binding.StorageName ?? name, binding.Type);
         }
         private static void Require(StructuredExpr expression,
             IrValueType expected, string reason)
