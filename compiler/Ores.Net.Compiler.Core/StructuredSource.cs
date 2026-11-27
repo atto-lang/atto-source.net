@@ -2673,6 +2673,28 @@ public static partial class OresStructuredParser
                 // Even a constant-true loop is not accepted as a return proof.
                 return (new StructuredWhile(at, condition, body), false);
             }
+            // Contextual explicit update, using existing typed local authority.
+            // A local actually named set followed by '=' remains compatible.
+            bool Pair(string a, string b)
+            {
+                if (index + 1 >= tokens.Count || Current.Text != a ||
+                    tokens[index + 1].Text != b ||
+                    Current.Offset + a.Length != tokens[index + 1].Offset) return false;
+                index += 2;
+                return true;
+            }
+            bool explicitSet = Current.Text == "set" && index + 1 < tokens.Count &&
+                tokens[index + 1].Text is { Length: > 0 } following &&
+                (Alpha(following[0]) || following[0] == '_' || following is "!" or "+" or "-");
+            bool wrapped = false, increment = false;
+            StructuredOperator? compound = null;
+            if (explicitSet)
+            {
+                index++;
+                if (Take("!")) wrapped = Take("(");
+                if (Pair("+", "+")) { compound = StructuredOperator.Add; increment = true; }
+                else if (Pair("-", "-")) { compound = StructuredOperator.Subtract; increment = true; }
+            }
             int variableAt = Current.Offset;
             string variable = Name();
             var binding = Lookup(variable, variableAt);
@@ -2681,18 +2703,26 @@ public static partial class OresStructuredParser
                     $"E_IMMUTABLE_REBIND: Cannot reassign {binding.Kind.ToString().ToLowerInvariant()} binding '{variable}' at offset {variableAt}");
             if (inlineValueBindingFloor is int floor && scopes.Take(floor).Any(scope => scope.ContainsKey(variable)))
                 throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: value-context sync task cannot yet assign a surrounding local");
-            bool compoundXor = Take("^^=");
-            if (!compoundXor) Expect("=");
-            if (compoundXor && binding.Type != IrValueType.I64)
-                throw Error("Compound XOR requires a mutable int local");
-            // A compound RHS must not acquire the special complete-statement
-            // writeback permission of an ordinary assignment. Preserve the
-            // existing lexical task, suspension and ownership gates.
-            var assigned = ReadStatementValue(depth + 1, binding.Type, allowWriteback: !compoundXor);
+            if (!increment && explicitSet)
+            {
+                if (Pair("+", "+")) { compound = StructuredOperator.Add; increment = true; }
+                else if (Pair("-", "-")) { compound = StructuredOperator.Subtract; increment = true; }
+                else if (Pair("+", "=")) compound = StructuredOperator.Add;
+                else if (Pair("-", "=")) compound = StructuredOperator.Subtract;
+                else if (Pair("*", "=")) compound = StructuredOperator.Multiply;
+            }
+            if (!increment && compound is null && Take("^^=")) compound = StructuredOperator.BitXor;
+            if (compound is null) Expect("=");
+            if (compound is not null && binding.Type != IrValueType.I64)
+                throw Error("Compound update requires a mutable int local");
+            // A compound RHS must not acquire complete-statement writeback permission.
+            StructuredExpr assigned = increment ? new StructuredInt(variableAt, 1) :
+                ReadStatementValue(depth + 1, binding.Type, allowWriteback: compound is null);
             Require(assigned, binding.Type, "Assignment has wrong type");
-            if (compoundXor)
-                assigned = CheckedBinary(variableAt, StructuredOperator.BitXor,
+            if (compound is { } op)
+                assigned = CheckedBinary(variableAt, op,
                     new StructuredRead(variableAt, variable, IrValueType.I64), assigned, IrValueType.I64);
+            if (wrapped) Expect(")");
             Expect(";");
             return (new StructuredSet(at, variable, assigned), false);
         }
