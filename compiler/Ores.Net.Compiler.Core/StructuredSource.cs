@@ -3448,6 +3448,8 @@ public static partial class OresStructuredParser
         {
             Budget(depth);
             int offset = Current.Offset;
+            if (Current.Text == "spawn")
+                throw new FormatException($"E_SPAWN_OPTIONS_UNSUPPORTED: actor spawn requires typed initialization, resource admission and runtime lowering at offset {offset}");
             if (Take("match")) return ReadMatchValue(offset, depth);
             if (AtSyncTask())
             {
