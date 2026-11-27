@@ -743,6 +743,7 @@ VmActorHeapModelTests.Run(); // atto-spec ch. 27 actor heap model for OresVmHost
 ShiftOperatorTests.Run(); // atto-spec bitwise-and-stream-operators-v1 shifts on the real CLR
 DeclaredActorCounterV2Tests.Run();
 CounterMainV2Tests.Run();
+ActorSpawnQuotaGateSelfTest.Run();
 SourceByteBudgetTests.Run();
 ExecutionGraphV1Tests.Run();
 OwnedF32RegionV1Tests.Run();
