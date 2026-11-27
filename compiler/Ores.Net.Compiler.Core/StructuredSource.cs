@@ -944,6 +944,9 @@ public static partial class OresStructuredParser
         private bool insideBooleanLiteralPack;
         private bool previousWasConst;
         private bool sawTupleDeclaration;
+        private bool sawPatternDeclaration;
+        private int patternBracketDepth;
+        private bool scalarAliasLexicalCandidate;
         public Token Read()
         {
             while (index < source.Length)
@@ -1018,7 +1021,24 @@ public static partial class OresStructuredParser
                 insideBooleanLiteralPack = false;
                 booleanPackBracket = true;
             }
-            if (!booleanPackBracket && !(allowStaticTupleProjection && sawTupleDeclaration))
+            // Only the standalone reader owns the final per-offset proof.
+            // Lexically admit candidate pattern brackets, not general arrays.
+            bool patternBracket = false;
+            if (allowStaticTupleProjection && ch == '[' &&
+                (patternBracketDepth > 0 || previousToken == "in" ||
+                 previousToken == "Pattern" && beforePreviousToken == "const" ||
+                 sawPatternDeclaration && previousToken == "="))
+            {
+                if (++patternBracketDepth > 32)
+                    throw new FormatException($"Pattern bracket nesting limit at offset {offset}");
+                patternBracket = true;
+            }
+            else if (allowStaticTupleProjection && ch == ']' && patternBracketDepth > 0)
+            {
+                patternBracketDepth--;
+                patternBracket = true;
+            }
+            if (!patternBracket && !booleanPackBracket && !(allowStaticTupleProjection && sawTupleDeclaration))
                 SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, offset);
             // Injection changes ownership and lifetime authority. The scalar
             // CIL bootstrap cannot treat an annotation as harmless metadata.
@@ -1189,7 +1209,7 @@ public static partial class OresStructuredParser
                      ((ch == '|' && source[index + 1] == '>') ||
                       (ch == '<' && source[index + 1] == '|')))
                 index += 2;
-            else if (ch == '|' && !moduleMode && !precededByString && !ownedUnwind)
+            else if (ch == '|' && !moduleMode && !precededByString && !ownedUnwind && !scalarAliasLexicalCandidate)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
             // Prefix logical not already has typed boolean lowering in Unary.
@@ -1197,8 +1217,8 @@ public static partial class OresStructuredParser
             // fail-closed macro and ownership admission gates.
             else if (ch is '!' or '¬') index++;
             else if (ch is '⧖' or '∂') index++;
-            else if (booleanPackBracket || "()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
-                (ch == '|' && (precededByString || ownedUnwind)) ||
+            else if (patternBracket || booleanPackBracket || "()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
+                (ch == '|' && (precededByString || ownedUnwind || scalarAliasLexicalCandidate)) ||
                 (allowStaticTupleProjection && sawTupleDeclaration && ch is ('[' or ']')) ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
@@ -1221,6 +1241,13 @@ public static partial class OresStructuredParser
             previousWasString = tokenText is "String" or "string";
             previousWasSync = tokenText == "sync";
             sawTupleDeclaration |= previousWasConst && tokenText == "Tuple";
+            sawPatternDeclaration |= previousWasConst && tokenText == "Pattern";
+            // A single bar is only a candidate union separator in a
+            // standalone type declaration. Reader checks exact token usage.
+            if (tokenText == ";") scalarAliasLexicalCandidate = false;
+            else if (allowStaticTupleProjection && tokenText == "type" &&
+                (previousToken.Length == 0 || previousToken == ";"))
+                scalarAliasLexicalCandidate = true;
             previousWasConst = tokenText == "const";
             beforePreviousToken = previousToken;
             previousToken = tokenText;
@@ -1330,10 +1357,26 @@ public static partial class OresStructuredParser
         private readonly HashSet<int> verifiedBooleanPackBrackets = new();
         public StructuredProgram ReadProgram()
         {
+            while (true)
+            {
+                if (Current.Text == "const" && index + 1 < tokens.Count && tokens[index + 1].Text == "Pattern")
+                    ReadPatternConstant();
+                else if (Current.Text == "type" && index + 3 < tokens.Count && tokens[index + 2].Text == "=" &&
+                    tokens[index + 3].Text is not ("struct" or "record"))
+                    ReadPatternTypeAlias();
+                else break;
+            }
             var program = ReadDeclarations(true);
             foreach (var token in tokens)
-                if (token.Text is "[" or "]" && !verifiedTupleBrackets.Contains(token.Offset) && !verifiedBooleanPackBrackets.Contains(token.Offset))
+            {
+                if (token.Text is "[" or "]" && !verifiedTupleBrackets.Contains(token.Offset) &&
+                    !verifiedBooleanPackBrackets.Contains(token.Offset) && !verifiedPatternBrackets.Contains(token.Offset))
                     SafeCollectionSourceAdmission.RejectUnverifiedBracket(token.Text[0], token.Offset);
+                if (patternTypeAliases.ContainsKey(token.Text) && !patternAliasUses.Contains(token.Offset))
+                    throw new FormatException($"PATTERN_TYPE: alias requires a resolved pattern type position at offset {token.Offset}");
+                if (patternConstants.ContainsKey(token.Text) && !patternNameUses.Contains(token.Offset))
+                    throw new FormatException($"PATTERN_ESCAPE: compile-time Pattern name cannot escape or be shadowed at offset {token.Offset}");
+            }
             return program;
         }
 

@@ -8,6 +8,51 @@ internal static class StructuredCfgLoweringTests
 {
     public static void RunUnicodeIdentifierNegation()
     {
+        // Exercise production structured CFG + emitted CIL, not a host matcher.
+        foreach (var (patternSource, label) in new[] {
+            ("type X = int | bool; const Pattern p = is X; fnc main():int{return match 7 over on p -> 42 end;}", "named union type"),
+            ("type X = int; type Y = X | bool; const Pattern[] z = [is Y]; fnc main():int{return match true over is in z -> 42 end;}", "chained alias"),
+            ("type X = int | bool; fnc main():int{return match 7 over is X -> 42 end;}", "direct alias test"),
+            ("const Pattern p = on 5; fnc main():int{return match 5 over on p -> 42, on _ -> 0 end;}", "named pattern"),
+            ("const Pattern[] z = [on 1,in [2,3],on true]; fnc main():int{return match 3 over in z -> 42, on _ -> 0 end;}", "mixed set int"),
+            ("const Pattern[] z = [on 1,on true]; fnc main():int{return match true over in z -> 42, on _ -> 0 end;}", "mixed set bool"),
+            ("const Pattern[] z = [on true,on false]; fnc main():int{return match false over in z -> 42 end;}", "exhaustive bool set"),
+            ("const Pattern[] z = [is Int,is bool]; fnc main():int{return match 7 over is in z -> 42 end;}", "named type set"),
+            ("fnc main():int{return match 2 over in [on 1,in [2,3]] -> 42, on _ -> 0 end;}", "inline set"),
+            ("fnc main():int{return match 2 over in [0,1,2] -> 42, on _ -> 0 end;}", "membership hit"),
+            ("fnc main():int{return match 7 over in [0,1,2] -> 0, on _ -> 42 end;}", "membership miss"),
+            ("fnc main():int{return match 2 over on 2 -> 42, in [1,2,3] -> 0, on _ -> 0 end;}", "membership priority"),
+            ("fnc main():int{return match 2 over in [1,2] when false -> 0, in [1,2] -> 42, on _ -> 0 end;}", "membership guard fallback"),
+            ("fnc main():int{return match 7 over is in [bool,int] -> 42 end;}", "static type-list coverage"),
+            ("fnc main():int{return match true over is in [int,bool] -> 42 end;}", "static bool type-list coverage")
+        }) Check(patternSource, 42, label);
+        foreach (var invalid in new[] {
+            "type X = Y; type Y = X; fnc main():int{return 42;}",
+            "type X = int; type Y = X | Int; fnc main():int{return 42;}",
+            "type X = int; const Pattern X = on 5; fnc main():int{return 42;}",
+            "type X = int; fnc main():int{return X;}",
+            "const Pattern p = on 5; fnc main():int{return p;}",
+            "const Pattern p = on q; const Pattern q = on p; fnc main():int{return 42;}",
+            "const Pattern[] z = [is int,on 1]; fnc main():int{return match 2 over is in z -> 42 end;}",
+            "const Pattern[] z = [on 1,2]; fnc main():int{return 42;}",
+            "const Pattern[] z = [on 1,on 1]; fnc main():int{return 42;}",
+            "const Pattern p = on 1; fnc main():int{return match 1 over in p -> 42,on _ -> 0 end;}",
+            "const Pattern[] z = [on 1]; fnc main():int{return match 1 over on z -> 42,on _ -> 0 end;}",
+            "const Pattern p = on 1; fnc main():int{return [1,2];}",
+            "fnc main():int{return match 2 over in [] -> 42, on _ -> 0 end;}",
+            "fnc main():int{return match 2 over in [2,2] -> 42, on _ -> 0 end;}",
+            "fnc main():int{return match 2 over in [1,2] -> 42, on 2 -> 0, on _ -> 0 end;}",
+            "fnc main():int{return match 2 over in [1,2] -> 42 end;}",
+            "fnc main():int{return match 7 over is in [int,int] -> 42 end;}",
+            "fnc main():int{return match 7 over is in [] -> 42 end;}",
+            "fnc main():int{return match 7 over is in [int,42] -> 42 end;}"
+        })
+        {
+            try { _ = OresStructuredCfgLowering.Lower(invalid); }
+            catch (FormatException) { continue; }
+            throw new Exception("Membership accepted invalid source: " + invalid);
+        }
+
         const string source = "pub fnc main(): int { val int Φ = 10; val int φ = 20; val int 数量 = 30; val int 𠮷 = 40; if ¬false && ¬¬true then return Φ + φ + 数量 + 𠮷; else return 0; fi }";
         Check(source, 100, "Unicode names and negation");
         Check(source.Replace("¬", "!", StringComparison.Ordinal), 100, "ASCII negation alias");
