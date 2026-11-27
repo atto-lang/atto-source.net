@@ -305,6 +305,74 @@ internal static class SelectContinuationFenceSelfTest
         Require(failingDispatch.Executing == 0 && failingDispatch.Advance(1),
             "failing callback retires execution credit");
 
+        // 64 independent asynchronous failures: physical completion and
+        // generation/owner identity must remain independent of other fences.
+        var owners = new SelectContinuationFence[64];
+        var tickets = new SelectContinuationFence.Ticket[64];
+        var pending = new SelectContinuationFence.Ticket[64];
+        var gates = new TaskCompletionSource<bool>[64];
+        var invocations = new Task<bool>[64];
+        for (int i = 0; i < owners.Length; i++)
+        {
+            var owner = owners[i] = new SelectContinuationFence(maxTickets: 2);
+            tickets[i] = owner.Register(1);
+            pending[i] = owner.Register(1);
+            var gate = gates[i] = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            invocations[i] = owner.TryInvokeAsync(tickets[i],
+                async () => { await gate.Task.ConfigureAwait(false); }).AsTask();
+        }
+        for (int i = 0; i < owners.Length; i++)
+        {
+            var owner = owners[i];
+            Require(owner.TryClaim(pending[(i + 1) % owners.Length]) is null,
+                "foreign pending identity rejected");
+            Require(!owner.Advance(1) && owner.Close() &&
+                !pending[i].Active && !owner.RetirementReady,
+                "terminal close retains physical credit");
+        }
+        for (int i = owners.Length - 1; i >= 0; i--)
+        {
+            int index = i;
+            gates[index].SetException(new InvalidOperationException("actor failure"));
+            Reject<InvalidOperationException>(() => invocations[index].GetAwaiter().GetResult(),
+                "callback failure must propagate");
+            Require(owners[index].Executing == 0 && owners[index].PendingTickets == 0 &&
+                owners[index].RetirementReady, "failed invocation retires only its owner");
+            if (index > 0)
+                Require(!owners[index - 1].RetirementReady, "unsettled peer retains credit");
+            var next = new SelectContinuationFence(maxTickets: 2);
+            var fresh = next.Register(1);
+            Require(next.TryClaim(tickets[index]) is null &&
+                next.TryClaim(pending[index]) is null && fresh.Active,
+                "successor refuses old owner tickets");
+            Require(fresh.Close() && next.Close() && next.RetirementReady,
+                "successor cleanup");
+        }
+
+        // Match the native and JS fixed-capacity generation stress target.
+        var stress = new SelectContinuationFence(maxTickets: 4);
+        SelectContinuationFence.Ticket? oldTicket = null;
+        for (int i = 0; i < 1_000_000; i++)
+        {
+            var generation = stress.Generation;
+            var current = stress.Register(generation);
+            using var lease = stress.TryClaim(current) ??
+                throw new Exception("stress claim failed");
+            Require(stress.Executing == 1 && !stress.Advance(generation),
+                "live execution fences generation");
+            Require(stress.TryClaim(current) is null && !current.Close(),
+                "duplicate completion rejected");
+            if (oldTicket is not null)
+                Require(stress.TryClaim(oldTicket) is null && !oldTicket.Close(),
+                    "stale completion rejected");
+            Require(lease.Close() && !lease.Close() && stress.Advance(generation) &&
+                stress.PendingTickets == 0 && stress.Executing == 0,
+                "exactly-once release and reusable capacity");
+            oldTicket = current;
+        }
+        Require(stress.Close() && stress.RetirementReady, "stress retirement");
+
         if (print) Console.WriteLine("Select continuation fence lifecycle checks passed");
     }
 }
