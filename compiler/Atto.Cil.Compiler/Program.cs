@@ -130,6 +130,8 @@ internal sealed class Parser
     }
     internal List<Function> Parse()
     {
+        var records = NominalRecordSource.Lower(_tokens);
+        if (records is not null) { _tokens.Clear(); _tokens.AddRange(records); }
         var contextual = ContextualIntSource.Lower(_tokens);
         if (contextual is not null) { _tokens.Clear(); _tokens.AddRange(contextual); }
         // A lexed Pointer token is admitted only by the closed local read-lease profile.
