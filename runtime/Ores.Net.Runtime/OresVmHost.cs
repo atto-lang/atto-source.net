@@ -325,7 +325,9 @@ public sealed partial class OresVmHost
 
     /// <summary>
     /// A state loan can only be minted for an active unsuspended actor turn.
-    /// Nested scopes fence the parent loan until the child is returned.
+    /// Nested host scopes fence the parent loan until the child is returned.
+    /// Read-only authority cannot be escalated by nesting. This host API
+    /// does not grant source-level permission to nest state intrinsics.
     /// </summary>
     public ActorStateLoan BeginActorStateLoan(
         IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn,
@@ -335,6 +337,8 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckTurn(s, actor, turn);
             if (turn.Suspended)
                 throw new InvalidOperationException("actor state access while suspended");
+            if (writable && turn.ActiveStateLoan is { Writable: false })
+                throw new InvalidOperationException("nested state loan cannot escalate read-only authority");
             if (turn.StateLoanDepth >= 32)
                 throw new InvalidOperationException("bounded actor state loan nesting exceeded");
             if (turn.NextStateLoanGeneration == ulong.MaxValue)
