@@ -64,6 +64,7 @@ internal sealed class Parser
     private readonly List<string> _tokens = [];
     private readonly List<int> _offsets = [];
     private int _position;
+    internal List<int> RedundantReturnOffsets { get; } = [];
     private string Peek => _tokens[_position];
     private bool Eat(string s) { if (Peek != s) return false; _position++; return true; }
     private void Require(string s)
@@ -75,7 +76,7 @@ internal sealed class Parser
         var name = Peek;
         if (name.Length == 0 || !(name[0] is >= 'a' and <= 'z' or '_') ||
             name.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_')) ||
-            name is "fnc" or "pub" or "return" or "int" or "float" or "bool" or "val" or "let" or "seq"
+            name is "fnc" or "pub" or "return" or "int" or "float" or "bool" or "val" or "let"
                 or "true" or "false" or "actor" or "unsafe" or "await" or "async"
                 or "susp" or "suspends" or "critical" or "trap" or "panic"
                 or "raise" or "throw" or "borrow" or "take" or "share"
@@ -121,6 +122,12 @@ internal sealed class Parser
             // typed E_UNSUPPORTED_TYPE gate; it is not a scalar operator.
             else if (!"(){}:;,+-*/^<>=.!".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
+            // Only the contiguous seq! spelling is a sequence marker.
+            // Do not absorb the start of != or turn separated bangs into keywords.
+            if (source.AsSpan(start, i - start).SequenceEqual("seq".AsSpan())
+                && i < source.Length && source[i] == '!'
+                && (i + 1 == source.Length || source[i + 1] != '='))
+                i++;
             _tokens.Add(source[start..i]);
             _offsets.Add(start);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
@@ -214,7 +221,7 @@ internal sealed class Parser
             {
                 if (statements.Count >= 64)
                     throw new CompilerError("E_LIMIT", "64 function statement limit");
-                if (Eat("return") || Eat("^"))
+                if (EatReturnMarker())
                 {
                     var expression = ParseReturnExpr();
                     if (!Eat(";") && expression is not ValueMatch)
@@ -646,7 +653,23 @@ internal sealed class Parser
         return ArgumentsAfterOpen(depth);
     }
 
-    private bool StartsBareSequence() => Peek == "seq" && _tokens[_position + 1] != "(";
+    private bool StartsBareSequence() => (Peek is "seq" or "seq!") && _tokens[_position + 1] != "(";
+
+    private bool EatReturnMarker()
+    {
+        if (Eat("return"))
+        {
+            if (Peek == "^")
+            {
+                RedundantReturnOffsets.Add(_offsets[_position]);
+                _position++;
+            }
+        }
+        else if (!Eat("^")) return false;
+        if (Peek is "^" or "return")
+            throw new CompilerError("E_RETURN_MARKER_ORDER", "only one redundant caret after return is permitted");
+        return true;
+    }
 
     // A bare sequence consumes the remaining comma list as one final argument.
     // Grouped seq remains an ordinary expression at any argument position.
@@ -771,7 +794,7 @@ internal sealed class Parser
             Require(";"); Require("}");
             if (Peek == "(") throw new CompilerError("E_VALUE_LOOP_PROFILE", "computed value is not callable");
         }
-        else if (Eat("seq")) { Require("("); left = ParseSequenceItems(depth); }
+        else if (Eat("seq!")) { Require("("); left = ParseSequenceItems(depth); }
         else if (Eat("("))
         {
             if (Eat(">")) left = ParseSequenceItems(depth);
@@ -899,9 +922,14 @@ internal sealed class Parser
             {
                 // Scope is deliberately narrow: only an explicit return is
                 // accepted; silently falling through is never a value arm.
-                if (!Eat("return") && !Eat("^"))
+                if (!EatReturnMarker())
                     throw new CompilerError("E_RETURN", "match block arm must explicitly return");
-                result = ParseExpr(0, depth + 1);
+                if (StartsBareSequence())
+                {
+                    _position++;
+                    result = ParseSequenceItems(depth + 1, bareReturn: true);
+                }
+                else result = ParseExpr(0, depth + 1);
                 Require(";");
                 Require("}");
                 Eat(",");
@@ -1481,8 +1509,11 @@ internal static class Program
             if (ActorStateAdmission.Inspect(source) is not null)
                 throw new CompilerError("E_UNSUPPORTED_ACTOR_STATE",
                     "attached actor state parsed, but guarded CIL lowering and actor lifecycle are unavailable");
-            var fns = new Parser(source).Parse();
+            var parser = new Parser(source);
+            var fns = parser.Parse();
             new CIL(fns, allowStdio: args.Length == 3).Emit(args[1], source);
+            foreach (int offset in parser.RedundantReturnOffsets)
+                Console.Error.WriteLine($"W_REDUNDANT_RETURN: redundant caret after return at source offset {offset}");
             Console.WriteLine($"ATTO_DIRECT_CIL_PASS functions={fns.Count}");
             return 0;
         }

@@ -1,1 +1,1 @@
-pub fnc main(): int { return seq(1,); }
+pub fnc main(): int { return seq! (1,); }

@@ -26,10 +26,26 @@ run_expected() {
   }
   echo "SEQ_EXECUTED $label exit=$rc"
 }
-for name in seq-nested seq-call-args seq-singleton seq-pipeline-tail seq-pipeline-result seq-bare-return seq-bare-call-argument; do
-  compile "fixtures/cil/$name.atto"
+# New spelling/return marker cases use the same real managed + native guest path.
+printf 'fnc seq(int a,int b): int { return a-b; } pub fnc main(): int { return seq(50,8); }\n' >"$work/ordinary-call.atto"
+printf 'fnc seq(int a,int b): int { return a-b; } pub fnc main(): int { return seq (50,8); }\n' >"$work/spaced-call.atto"
+printf 'fnc seq(): int { return 42; } pub fnc main(): int { return seq(); }\n' >"$work/zero-call.atto"
+printf 'fnc seq(int a,int b): int { return a-b; } pub fnc main(): int { ^ seq! (50,42); }\n' >"$work/bang-not-call.atto"
+printf 'pub fnc main(): int { ^ seq! 1,42; }\n' >"$work/bare-bang-caret.atto"
+printf 'pub fnc main(): int { return ^ seq! (1,42); }\n' >"$work/warned-sequence.atto"
+printf 'pub fnc main(): int { return ^ 42; }\n' >"$work/warned-scalar.atto"
+printf 'pub fnc main(): int { ^ (> 1,42); }\n' >"$work/caret-short.atto"
+for name in seq-nested seq-call-args seq-singleton seq-pipeline-tail seq-pipeline-result seq-bare-return seq-bare-call-argument ordinary-call spaced-call zero-call bang-not-call bare-bang-caret warned-sequence warned-scalar caret-short; do
+  src="fixtures/cil/$name.atto"
+  if test -f "$work/$name.atto"; then src="$work/$name.atto"; fi
+  compile "$src" 2>"$work/compile-warning"
+  if [[ "$name" == warned-* ]]; then
+    test "$(grep -c 'W_REDUNDANT_RETURN:' "$work/compile-warning")" -eq 1
+  else
+    test ! -s "$work/compile-warning"
+  fi
   replay="$work/$name.dll"
-  dotnet run --no-build -c Release --project "$compiler" -- "fixtures/cil/$name.atto" "$replay"
+  dotnet run --no-build -c Release --project "$compiler" -- "$src" "$replay"
   cmp "$guest" "$replay"
   dotnet build "$host" -c Release -t:Rebuild
   run_expected 42 "$name-CoreCLR" dotnet run --no-build -c Release --project "$host"
@@ -54,10 +70,18 @@ for entry in seq-empty:E_SEQ_EMPTY seq-leading:E_SEQ_COMMA seq-trailing:E_SEQ_CO
 done
 reject fixtures/cil/seq-prefix-divzero.atto E_I64_DIVISION_BY_ZERO
 reject fixtures/cil/negative/seq-bare-prefix-divzero.atto E_I64_DIVISION_BY_ZERO
-printf 'pub fnc main(): int { return seq(1 > 0, 42); }\n' >"$work/seq-bool.atto"
+printf 'pub fnc main(): int { return seq! (1 > 0, 42); }\n' >"$work/seq-bool.atto"
 reject "$work/seq-bool.atto" E_TYPE
-printf 'pub fnc main(): int { return seq(missing, 42); }\n' >"$work/seq-missing.atto"
+printf 'pub fnc main(): int { return seq! (missing, 42); }\n' >"$work/seq-missing.atto"
 reject "$work/seq-missing.atto" E_SYMBOL
+printf 'pub fnc main(): int { ^ return 42; }\n' >"$work/reverse-return.atto"
+reject "$work/reverse-return.atto" E_RETURN_MARKER_ORDER
+printf 'pub fnc main(): int { return ^ ^ 42; }\n' >"$work/repeat-return.atto"
+reject "$work/repeat-return.atto" E_RETURN_MARKER_ORDER
+printf 'pub fnc main(): int { return ^ (1,42); }\n' >"$work/warned-tuple.atto"
+reject "$work/warned-tuple.atto" E_PARSE
+printf 'pub fnc main(): int { return seq(1,42); }\n' >"$work/unknown-seq.atto"
+reject "$work/unknown-seq.atto" E_SYMBOL
 compile fixtures/cil/seq-prefix-overflow.atto
 dotnet build "$host" -c Release -t:Rebuild
 set +e
@@ -66,4 +90,4 @@ rc=$?
 set -e
 test "$rc" -ne 0 && test "$rc" -ne 42 && test ! -s "$work/stdout" && grep -Fq OverflowException "$work/stderr"
 echo 'SEQ_PREFIX_OVERFLOW_CORECLR_PASS'
-echo 'ATTO_DIRECT_CIL_SEQ_INTEGRATED_PASS positive_sources=7 native_executions=7 managed_executions=7 negative_sources=14 prefix_overflow_coreclr=1'
+echo 'ATTO_DIRECT_CIL_SEQ_INTEGRATED_PASS positive_sources=15 native_executions=15 managed_executions=15 negative_sources=18 prefix_overflow_coreclr=1'

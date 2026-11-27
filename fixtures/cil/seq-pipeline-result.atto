@@ -1,2 +1,2 @@
 fnc add_forty(int value): int { return value + 40; }
-pub fnc main(): int { return seq(1, 2) |> add_forty; }
+pub fnc main(): int { return seq! (1, 2) |> add_forty; }
