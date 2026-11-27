@@ -38,6 +38,44 @@ negative() {
 }
 positive record_custom
 positive record_multilevel
+# Verify metadata directly, without executing or reflecting over guest methods.
+mkdir -p "$work/metadata"
+cat >"$work/metadata/Metadata.csproj" <<'EOF'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
+</Project>
+EOF
+cat >"$work/metadata/Program.cs" <<'EOF'
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
+using var stream = File.OpenRead(args[0]);
+using var pe = new PEReader(stream);
+var md = pe.GetMetadataReader();
+int privateMethods = 0, publicMain = 0;
+foreach (var handle in md.MethodDefinitions)
+{
+    var method = md.GetMethodDefinition(handle);
+    var name = md.GetString(method.Name);
+    var access = method.Attributes & MethodAttributes.MemberAccessMask;
+    if (name.StartsWith("_atto_rec_v1_method_", StringComparison.Ordinal))
+    {
+        if (access != MethodAttributes.Private) throw new Exception("generated Record method is not private");
+        privateMethods++;
+    }
+    if (name == "main" && access == MethodAttributes.Public) publicMain++;
+}
+if (privateMethods != 2 || publicMain != 1) throw new Exception("unexpected method metadata");
+Console.WriteLine("RECORD_CIL_METADATA_PASS private_helpers=2 public_main=1");
+EOF
+dotnet run --project "$work/metadata/Metadata.csproj" -c Release -- "$(realpath "$guest")"
+if [[ "${ATTO_RECORD_NATIVEAOT:-0}" == 1 ]]; then
+  dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true --self-contained true -o "$work/native"
+  native_status=0
+  "$work/native/Atto.Cil.Guest.Host" || native_status=$?
+  test "$native_status" = 42
+  echo 'RECORD_NATIVEAOT_PASS record_multilevel exit=42'
+fi
 negative record_field_shadow E_RECORD_SUBTYPE_FIELD
 negative record_missing_field E_RECORD_SUBTYPE_SHAPE
 # Exact string-typed case is still lexically unsupported: NOT semantic parity.
