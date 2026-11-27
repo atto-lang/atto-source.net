@@ -138,6 +138,24 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // These are admission gates, not guest parity. The compiler must
+        // reject until registration, unwind and lifetime lowering are real.
+        foreach (string registration in new[] {
+            "defer 5 |> make_cleanup;",
+            "defer await 42;",
+            "recover 42 |> make_recovery;"
+        })
+            RejectFeature("pub fnc main():int{" + registration + "return 42;}",
+                "E_LEXICAL_CLEANUP_UNSUPPORTED");
+        // The non-module lexer intentionally rejects single-pipe closures
+        // earlier than Statement. Preserve that independent security boundary.
+        foreach (string registration in new[] {
+            "defer 5 |> (|int x| -> || -> { });",
+            "defer (5, 7) |> (|int x, int y| -> || -> { });",
+            "recover 42 |> (|int x| -> |err, ctx| -> { return x; });"
+        })
+            RejectFeature("pub fnc main():int{" + registration + "return 42;}",
+                "Lexical captures require checked closure lowering");
         NegatedDoIfSyntax();
         Require(OresStructuredParser.Parse(
             "pub fnc main():int{val bool f=false;guard !(f), !(!true){return 0;}return 42;}").Body.Count == 3,

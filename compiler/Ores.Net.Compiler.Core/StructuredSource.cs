@@ -2687,6 +2687,11 @@ public static partial class OresStructuredParser
             }
             if ((localReturn is not null || guardFailureDepth != 0) && Current.Text is ("defer" or "using"))
                 throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: resource cleanup requires a verified unwind continuation");
+            // The scalar/tagged CFG has no cleanup registration or recovery
+            // continuation ABI. Never treat a pipeline as a delayed call or
+            // accept a factory whose callback would be discarded.
+            if (Current.Text is ("defer" or "recover"))
+                throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: defer/recover requires checked registration, capture lifetime and unwind lowering");
             if (Take("try"))
             {
                 if (localReturn is not null)
