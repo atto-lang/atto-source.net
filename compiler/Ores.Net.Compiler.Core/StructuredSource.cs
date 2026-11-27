@@ -51,7 +51,7 @@ public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64,
     EqualBool, NotEqualBool, LogicalAnd, LogicalOr, LogicalXor,
     // atto-spec bitwise-and-stream-operators-v1: <<<, >>> and infix ashr.
     ShiftLeft, ShiftRightLogical, ShiftRightArithmetic,
-    Divide, EqualGuestError, NotEqualGuestError, EqualGuestText, NotEqualGuestText, Remainder, Modulo, BitXor }
+    Divide, EqualGuestError, NotEqualGuestError, EqualGuestText, NotEqualGuestText, Remainder, Modulo, BitXor, BitAnd }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
@@ -1258,7 +1258,7 @@ public static partial class OresStructuredParser
             // fail-closed macro and ownership admission gates.
             else if (ch is '!' or '¬') index++;
             else if (ch is '⧖' or '∂') index++;
-            else if (booleanPackBracket || "()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
+            else if (booleanPackBracket || "()+-*/{}:;=<>.,?~&".IndexOf(ch) >= 0 ||
                 (ch == '|' && (precededByString || ownedUnwind)) ||
                 (allowStaticTupleProjection && sawTupleDeclaration && ch is ('[' or ']')) ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
@@ -3378,6 +3378,7 @@ public static partial class OresStructuredParser
                         StructuredOperator.Remainder => Ores.Net.Runtime.StrictSigned64Arithmetic.Rem(left, right),
                         StructuredOperator.Modulo => Ores.Net.Runtime.StrictSigned64Arithmetic.Mod(left, right),
                         StructuredOperator.BitXor => left ^ right,
+                        StructuredOperator.BitAnd => left & right,
                         StructuredOperator.ShiftLeft => left << ConstantShiftDistance(right),
                         StructuredOperator.ShiftRightLogical => (long)((ulong)left >> ConstantShiftDistance(right)),
                         StructuredOperator.ShiftRightArithmetic => left >> ConstantShiftDistance(right),
@@ -3728,15 +3729,31 @@ public static partial class OresStructuredParser
         private StructuredExpr IntegerXor(int depth)
         {
             Budget(depth);
-            var left = Equal(depth + 1);
+            var left = IntegerAnd(depth);
             while (Current.Text == "^^")
             {
                 int at = Current.Offset;
                 index++;
-                var right = Equal(depth + 1);
+                var right = IntegerAnd(depth);
                 Require(left, IrValueType.I64, "Integer XOR requires int operands");
                 Require(right, IrValueType.I64, "Integer XOR requires int operands");
                 left = CheckedBinary(at, StructuredOperator.BitXor, left, right, IrValueType.I64);
+            }
+            return left;
+        }
+        // Integer & binds below equality and above integer ^^; && remains lazy Boolean conjunction.
+        private StructuredExpr IntegerAnd(int depth)
+        {
+            Budget(depth);
+            var left = Equal(depth + 1);
+            while (Current.Text == "&")
+            {
+                int at = Current.Offset;
+                index++;
+                var right = Equal(depth + 1);
+                Require(left, IrValueType.I64, "Integer AND requires int operands");
+                Require(right, IrValueType.I64, "Integer AND requires int operands");
+                left = CheckedBinary(at, StructuredOperator.BitAnd, left, right, IrValueType.I64);
             }
             return left;
         }

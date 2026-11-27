@@ -546,6 +546,7 @@ public static partial class OresStructuredCfgLowering
                         StructuredOperator.EqualGuestText => CfgOpcode.GuestTextEqual,
                         StructuredOperator.NotEqualGuestText => CfgOpcode.GuestTextNotEqual,
                         StructuredOperator.BitXor => CfgOpcode.BitXorI64,
+                        StructuredOperator.BitAnd => CfgOpcode.BitAndI64,
                         StructuredOperator.ShiftLeft => CfgOpcode.ShiftLeftI64,
                         StructuredOperator.ShiftRightLogical => CfgOpcode.ShiftRightLogicalI64,
                         StructuredOperator.ShiftRightArithmetic => CfgOpcode.ShiftRightArithmeticI64,

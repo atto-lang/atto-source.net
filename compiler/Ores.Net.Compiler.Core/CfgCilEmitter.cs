@@ -334,6 +334,7 @@ internal static class CfgCilEmitter
                         case CfgOpcode.CheckedMultiply:
                         case CfgOpcode.CheckedDivide:
                         case CfgOpcode.BitXorI64:
+                        case CfgOpcode.BitAndI64:
                         case CfgOpcode.EqualI64:
                         case CfgOpcode.NotEqualI64:
                         case CfgOpcode.LessThanI64:
@@ -360,6 +361,7 @@ internal static class CfgCilEmitter
                                 CfgOpcode.EqualBool => ILOpCode.Ceq,
                                 CfgOpcode.NotEqualBool => ILOpCode.Ceq,
                                 CfgOpcode.XorBool or CfgOpcode.BitXorI64 => ILOpCode.Xor,
+                                CfgOpcode.BitAndI64 => ILOpCode.And,
                                 _ => throw new FormatException("Unverified CFG opcode")
                             });
                             if (op.Opcode is CfgOpcode.NotEqualI64 or CfgOpcode.NotEqualBool or
