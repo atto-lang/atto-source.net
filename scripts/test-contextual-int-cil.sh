@@ -20,7 +20,8 @@ program 'int factor' 'factor * value' 'return Scale::(6).apply(7);' >"$work/dire
 program 'int factor' 'factor * value' 'const x = Scale::(2); const y = Scale::(3); return x.apply(4) + y.apply(4);' >"$work/reuse.atto"
 program 'int factor, int offset' 'factor * value + offset' 'const x = Scale::(2, 3); const y = Scale::(4, 5); return x.apply(7) + y.apply(7);' >"$work/multi.atto"
 program 'int factor' 'factor * value' 'const x = Scale::(6); const y = x; return y.apply(7);' >"$work/alias.atto"
-for spec in direct:42 reuse:20 multi:50 alias:42; do
+program 'int factor, int offset' 'factor * value + offset' 'const x = Scale::(offset=7,factor=5); return x.apply(7);' >"$work/named.atto"
+for spec in direct:42 reuse:20 multi:50 alias:42 named:42; do
   name="${spec%:*}"; expected="${spec#*:}"
   rm -f "$guest"
   compile "$work/$name.atto" "$guest"
@@ -28,7 +29,7 @@ for spec in direct:42 reuse:20 multi:50 alias:42; do
   dotnet build "$host" -c Release -t:Rebuild
   expect_exit "$expected" dotnet run --no-build -c Release --project "$host"
   echo "PASS CONTEXT_CORECLR $name exit=$expected"
-  if [[ "$name" == multi || "$name" == alias ]]; then
+  if [[ "$name" == multi || "$name" == alias || "$name" == named ]]; then
     dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true --self-contained true -o "$work/native-$name"
     expect_exit "$expected" "$work/native-$name/Atto.Cil.Guest.Host"
     echo "PASS CONTEXT_NATIVEAOT $name exit=$expected"
@@ -42,4 +43,14 @@ for body in 'return Scale::(true).apply(7);' 'return Scale::(2,3).apply(7);' 're
   grep -Eq 'E_(CONTEXT_PROFILE|LEX):' "$work/stderr"
   test ! -e "$work/rejected.dll"
   echo "PASS CONTEXT_REJECT $body"
+done
+
+for body in 'const x = Scale::(offset=7,offset=5); return x.apply(7);' 'const x = Scale::(unknown=7,factor=5); return x.apply(7);' 'const x = Scale::(offset=7,5); return x.apply(7);' 'const x = Scale::(offset=7); return x.apply(7);'; do
+  program 'int factor, int offset' 'factor * value + offset' "$body" >"$work/negative.atto"
+  rm -f "$work/rejected.dll"
+  status=0; compile "$work/negative.atto" "$work/rejected.dll" >"$work/stdout" 2>"$work/stderr" || status=$?
+  test "$status" = 2
+  grep -Fq 'E_CONTEXT_PROFILE:' "$work/stderr"
+  test ! -e "$work/rejected.dll"
+  echo "PASS CONTEXT_NAMED_REJECT $body"
 done
