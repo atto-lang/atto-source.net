@@ -22,11 +22,16 @@ public sealed class ActorNativeScalarState
     {
         if (defaults.Length is < 1 or > 16 || defaults.Length != kinds.Length)
             throw new ArgumentException("Scalar actor state requires 1..16 exact typed defaults");
-        for (int i = 0; i < defaults.Length; i++)
-            if ((kinds[i] != 1 && kinds[i] != 2) || (kinds[i] == 2 && defaults[i] is not (0 or 1)))
-                throw new ArgumentException("Invalid scalar actor state kind/default");
+        // ReadOnlySpan restricts this callee, not the owner of the backing
+        // memory. Validate the exact private snapshots that will be used for
+        // lazy arena initialization, rather than a mutable source followed
+        // by a second, potentially different copy.
         _defaults = defaults.ToArray();
         _kinds = kinds.ToArray();
+        for (int i = 0; i < _defaults.Length; i++)
+            if ((_kinds[i] != 1 && _kinds[i] != 2) ||
+                (_kinds[i] == 2 && _defaults[i] is not (0 or 1)))
+                throw new ArgumentException("Invalid scalar actor state kind/default");
     }
 
     /// <summary>
