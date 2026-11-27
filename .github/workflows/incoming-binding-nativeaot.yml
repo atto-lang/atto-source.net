@@ -1,0 +1,71 @@
+name: Incoming scalar binding real CFG CIL NativeAOT
+on:
+  pull_request:
+    paths:
+      - 'compiler/Ores.Net.Compiler.Core/**'
+      - 'tests/fixtures/incoming-binding-v1/**'
+      - '.github/workflows/incoming-binding-nativeaot.yml'
+  push:
+    branches:
+      - 'draft/fixed-parameter-ssa-rebind-20261126'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  scalar-nativeaot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git write-tree)" = "$(git rev-parse HEAD^{tree})"
+          git rev-parse HEAD HEAD^{tree}
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install native toolchain
+        run: sudo apt-get update -qq && sudo apt-get install -y clang zlib1g-dev
+      - name: Compile structured compiler and execute CFG regressions
+        run: |
+          dotnet run -c Release --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj
+          dotnet build -c Release compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj
+      - name: Compile source to CIL and run full NativeAOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler=compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj
+          host=verification/IfnotNativeAot/Host/Host.csproj
+          guest="$PWD/verification/IfnotNativeAot/generated/OresGenerated.dll"
+          mkdir -p "$(dirname "$guest")"
+          for name in typed local-rebind formal-rebind guard-fallback; do
+            source="tests/fixtures/incoming-binding-v1/$name.atto"
+            test "$(git hash-object "$source")" = "$(git rev-parse "HEAD:$source")"
+            rm -f "$guest"
+            dotnet run --no-build -c Release --project "$compiler" -- compile-structured "$source" --out "$guest"
+            test -s "$guest"
+            dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true -o "$RUNNER_TEMP/binding-$name"
+            status=0
+            timeout 10s "$RUNNER_TEMP/binding-$name/Host" || status=$?
+            test "$status" -eq 42
+            echo "NATIVE_AOT_PASS $name exit=$status"
+          done
+          for item in fixed-reject:E_IMMUTABLE_REBIND type-reject:MATCH_ALIAS_TYPE duplicate-reject:MATCH_ALIAS_MODIFIER mut-reject:MATCH_ALIAS_MUT_UNSUPPORTED; do
+            name="${item%%:*}"
+            diagnostic="${item#*:}"
+            source="tests/fixtures/incoming-binding-v1/$name.atto"
+            test "$(git hash-object "$source")" = "$(git rev-parse "HEAD:$source")"
+            rm -f "$guest"
+            status=0
+            dotnet run --no-build -c Release --project "$compiler" -- compile-structured "$source" --out "$guest" >"$RUNNER_TEMP/binding-negative.log" 2>&1 || status=$?
+            test "$status" -eq 1
+            grep -F "$diagnostic" "$RUNNER_TEMP/binding-negative.log"
+            test ! -e "$guest"
+          done
