@@ -14,8 +14,13 @@ if (args.Length == 1 && args[0] == "--grouped-spawn-admission")
     })
     {
         string source = "fnc main():int{return " + expression + ";}";
-        string diagnostic = "E_SPAWN_OPTIONS_UNSUPPORTED";
-        string offset = $"offset {source.IndexOf("spawn", StringComparison.Ordinal)}";
+        // Grouped options currently encounter the existing lexical with guard
+        // before expression parsing. Preserve that guard and its exact location.
+        bool grouped = expression.Contains("with {", StringComparison.Ordinal);
+        string diagnostic = grouped ? "WITH_BACKEND_UNSUPPORTED" : "E_SPAWN_OPTIONS_UNSUPPORTED";
+        int at = grouped ? source.IndexOf('{', source.IndexOf("with {", StringComparison.Ordinal))
+            : source.IndexOf("spawn", StringComparison.Ordinal);
+        string offset = $"offset {at}";
         foreach (Action parse in new Action[] {
             () => OresParser.Parse(source), () => OresStructuredParser.Parse(source)
         })
