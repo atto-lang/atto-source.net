@@ -287,7 +287,7 @@ internal static class StructuredCfgLoweringTests
             "let int x=40; set x++; set ++x; return x;",
             "let int x=44; set x--; set --x; return x;",
             "let int x=20; set x+=2; set x-=1; set x*=2; return x;",
-            "let int x=40; set! (x=x+2); return x;",
+            "let int x=40; set x=x+2; return x;",
             "let int x=0; while x<42 { set x++; } return x;"})
             Check("fnc main():int{"+body+"}",42,"explicit update "+body);
         foreach (var body in new[]{
@@ -299,7 +299,10 @@ internal static class StructuredCfgLoweringTests
             Reject("fnc main():int{"+body+"}","explicit update "+body);
         CheckOverflow("fnc main():int{let int x=9223372036854775807;set x++;return x;}",
             "explicit counter overflow");
-        Console.WriteLine("EXPLICIT_SCALAR_UPDATE_CFG_CIL_PASS positives=5 negatives=5 overflow=1");
+        // Preserve macro admission until a context-specific bang grammar is proven.
+        RejectWithDiagnostic("fnc main():int{let int x=40;set! (x=x+2);return x;}",
+            "NET_STRUCTURED_MACRO_EXPANDER_REQUIRED","explicit bang pending contextual admission");
+        Console.WriteLine("EXPLICIT_SCALAR_UPDATE_CFG_CIL_PASS positives=5 negatives=6 overflow=1");
 
         Check("fnc main():int{return match 42 over on _ as int z -> z end;}", 42, "typed scalar alias");
         Check("fnc main():int{return match 42 over on 41 as z when z==42 -> 0, on _ as const z -> z end;}", 42, "guard fallback scalar alias");
