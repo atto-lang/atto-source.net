@@ -95,11 +95,87 @@ public static partial class OresStructuredParser
 
         private StructuredExpr TrapOperand(int at, int depth)
         {
+            // Closed lexical slice: explicit ordinary throw becomes an
+            // Err edge in the same caller CFG. Do not outline or copy state.
+            if (trapOperandDepth == 0 && inlineTaskDepth == 0 &&
+                directInlineWritebackOffset == at && AtSyncTask())
+            {
+                index += 2;
+                trapOperandDepth++;
+                try
+                {
+                    var task = ReadInlineTask(depth + 1, imperative: false, writeBack: true);
+                    if (task.Type != IrValueType.I64)
+                        throw Error("E_TRAP_INLINE_TASK_UNSUPPORTED: lexical trap slice requires int");
+                    var body = TrapInlineStatements(task.Body);
+                    return new StructuredSyncTaskValue(at,
+                        task with { Body = body, Type = IrValueType.ResultI64 });
+                }
+                finally { trapOperandDepth--; }
+            }
             trapOperandDepth++;
             StructuredExpr operand;
             try { operand = Unary(depth + 1); }
             finally { trapOperandDepth--; }
             return TypedNode(new StructuredTrap(at, operand, GuestResultTypes.Wrap(operand.Type)), operand);
+        }
+
+        // Admit only source operations proven not to raise an ordinary
+        // error, except the explicit throw that is converted to Err.
+        // This closed whitelist excludes checked arithmetic, calls,
+        // unwrap, suspension, loops, nested tasks and cleanup until their
+        // exceptional edges carry the current lexical environment.
+        private static bool TrapInlinePure(StructuredExpr value) => value switch
+        {
+            StructuredInt or StructuredBool => true,
+            StructuredRead read => read.Type is IrValueType.I64 or IrValueType.Bool,
+            StructuredBinary binary when binary.Operator is
+                (StructuredOperator.EqualI64 or StructuredOperator.NotEqualI64 or
+                 StructuredOperator.LessThanI64 or StructuredOperator.GreaterThanI64 or
+                 StructuredOperator.LessThanOrEqualI64 or StructuredOperator.GreaterThanOrEqualI64 or
+                 StructuredOperator.EqualBool or StructuredOperator.NotEqualBool or
+                 StructuredOperator.LogicalAnd or StructuredOperator.LogicalOr or
+                 StructuredOperator.LogicalXor) =>
+                    TrapInlinePure(binary.Left) && TrapInlinePure(binary.Right),
+            _ => false
+        };
+
+        private IReadOnlyList<StructuredStmt> TrapInlineStatements(IReadOnlyList<StructuredStmt> statements)
+        {
+            var body = new List<StructuredStmt>(statements.Count);
+            foreach (var stmt in statements)
+            {
+                switch (stmt)
+                {
+                    case StructuredLet declaration when TrapInlinePure(declaration.Initializer):
+                    case StructuredSet assignment when TrapInlinePure(assignment.Value):
+                        body.Add(stmt);
+                        break;
+                    case StructuredIf conditional when TrapInlinePure(conditional.Condition):
+                        body.Add(conditional with {
+                            Then = TrapInlineStatements(conditional.Then),
+                            Else = conditional.Else is null ? null : TrapInlineStatements(conditional.Else)
+                        });
+                        break;
+                    case StructuredLocalExit { Value: { } value } returned when
+                        value.Type == IrValueType.I64 && TrapInlinePure(value):
+                        body.Add(new StructuredLocalExit(returned.Offset,
+                            new StructuredResult(returned.Offset, value, true, IrValueType.ResultI64)));
+                        break;
+                    case StructuredSignal { Effect: CfgGuestEffect.Throw, Error: StructuredGuestError } signal:
+                        body.Add(new StructuredLocalExit(signal.Offset,
+                            new StructuredResult(signal.Offset, signal.Error, false, IrValueType.ResultI64)));
+                        break;
+                    // Terminal effects remain terminal and never become Err.
+                    case StructuredSignal { Effect: CfgGuestEffect.Panic or CfgGuestEffect.Raise,
+                        Error: StructuredGuestError }:
+                        body.Add(stmt);
+                        break;
+                    default:
+                        throw Error("E_TRAP_INLINE_TASK_UNSUPPORTED: operation requires verified lexical error or cleanup edges");
+                }
+            }
+            return body.AsReadOnly();
         }
 
         private StructuredExpr NewResult(int at, bool success, int depth)

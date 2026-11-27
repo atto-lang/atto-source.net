@@ -50,7 +50,9 @@ public static partial class OresParser
         if (worker is "self" or "stdio" or "await" or "handle_state")
             throw new FormatException("E_COUNTER_MAIN: reserved worker name");
         r.Expect("="); r.Expect("spawn"); r.Expect(actor.ActorName);
-        r.Expect("("); r.Expect(")"); r.Expect(";");
+        r.Expect("("); r.Expect(")");
+        r.RejectUnloweredSpawnOptions();
+        r.Expect(";");
         r.Expect("await"); r.Expect(worker); r.Expect(".");
         r.Expect("get_ready"); r.Expect("("); r.Expect(")"); r.Expect(";");
 
@@ -187,6 +189,13 @@ public static partial class OresParser
         }
 
         private MainToken At => _tokens[_index];
+        // The six-file scalar counter profile has no typed startup/resource ABI.
+        // Do not reinterpret an option-bearing spawn as the ordinary zero-arg form.
+        internal void RejectUnloweredSpawnOptions()
+        {
+            if (At.Text == "with")
+                throw new FormatException("E_SPAWN_OPTIONS_UNSUPPORTED: grouped actor spawn requires typed initialization, resource admission and runtime lowering");
+        }
         internal void Expect(string word)
         {
             if (At.Text != word)
