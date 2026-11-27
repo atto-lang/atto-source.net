@@ -14,7 +14,9 @@ for file in "$corpus"/pass/*.atto; do
   name="$(basename "$file" .atto)"
   blob="$(git hash-object "$file")"
   case "$name" in
-    direct|immutable-alias|legacy-body|reordered-names) expected=42;;
+    direct|immutable-alias|legacy-body|reordered-names|direct-terminal) expected=42;;
+    sibling-before|sibling-after) expected=43;;
+    two-permutations) expected=31;;
     independent-bindings) expected=20;;
     multi-independent) expected=50;;
     snapshot-reuse) expected=41;;
@@ -33,7 +35,7 @@ for file in "$corpus"/pass/*.atto; do
   status=0; dotnet run --no-build -c Release --project "$host" || status=$?
   test "$status" = "$expected"
   echo "SHARED_EXECUTED_CORECLR $name $blob $status"
-  if [[ "$name" == immutable-alias || "$name" == multi-independent || "$name" == reordered-names || "$name" == canonical-set-snapshot ]]; then
+  if [[ "$name" == immutable-alias || "$name" == multi-independent || "$name" == reordered-names || "$name" == canonical-set-snapshot || "$name" == direct-terminal || "$name" == sibling-before || "$name" == sibling-after || "$name" == two-permutations ]]; then
     dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true --self-contained true -o "$work/native-$name"
     status=0; "$work/native-$name/Atto.Cil.Guest.Host" || status=$?
     test "$status" = "$expected"
@@ -54,4 +56,4 @@ done
 echo "SHARED_SUMMARY executed=$execute rejectedUnclassified=$reject outside=$outside"
 test "$((execute+outside))" = "${ATTO_CONTEXT_EXPECT_POSITIVE:-7}"
 test "$reject" = "${ATTO_CONTEXT_EXPECT_NEGATIVE:-13}"
-if [[ "${ATTO_CONTEXT_EXPECT_POSITIVE:-7}" == 2 ]]; then test "$outside" = 0; fi
+if [[ "${ATTO_CONTEXT_EXPECT_POSITIVE:-7}" != 7 ]]; then test "$outside" = 0; fi
