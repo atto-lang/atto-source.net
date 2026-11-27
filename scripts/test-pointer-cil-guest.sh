@@ -73,7 +73,7 @@ for fixture in fixtures/cil/negative/pointer-*.atto; do
   }
   pointer_reject_count=$((pointer_reject_count + 1))
 done
-test "$pointer_reject_count" -eq 27
+test "$pointer_reject_count" -eq 30
 echo "ATTO_POINTER_LOCAL_CIL_NEGATIVE_PASS rejected=$pointer_reject_count"
 
 # Additional fail-closed lexical and authority cases; comments are not tokens.

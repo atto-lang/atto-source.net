@@ -60,6 +60,7 @@ internal sealed class Parser
 {
     private readonly List<string> _tokens = [];
     private readonly List<int> _offsets = [];
+    private readonly string _source;
     private int _position;
     private string Peek => _tokens[_position];
     private bool Eat(string s) { if (Peek != s) return false; _position++; return true; }
@@ -87,6 +88,7 @@ internal sealed class Parser
     internal IReadOnlyList<string> CountedTokens => _tokens;
     internal Parser(string source, bool countedReady = false)
     {
+        _source = source;
         if (Encoding.UTF8.GetByteCount(source) > 65536)
             throw new CompilerError("E_LIMIT", "64 KiB source limit");
         foreach (char c in source)
@@ -600,6 +602,9 @@ internal sealed class Parser
             int offset = _offsets[_position];
             Need(op);
             if (Peek != "!" || _offsets[_position] != offset + op.Length) throw Invalid();
+            int afterBang = _offsets[_position] + 1;
+            if (afterBang >= _source.Length || _source[afterBang] is not (' ' or '\t' or '\r' or '\n'))
+                throw Invalid();
             Need("!");
         }
         long Number()
