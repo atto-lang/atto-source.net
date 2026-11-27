@@ -3,6 +3,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
+backend="${1:-coreclr}"
+case "$backend" in coreclr|nativeaot) ;; *) exit 2 ;; esac
 compiler=compiler/Ores.Net.Compiler
 host=host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj
 dotnet build "$compiler" -c Release
@@ -14,9 +16,16 @@ run_guest() {
   printf '%s\n' "$source" > "$out/main.atto"
   oresnet check "$out/main.atto"
   oresnet compile "$out/main.atto" --out "$out/OresGenerated.dll"
-  dotnet build "$host" -c Release --no-incremental -o "$out/app" -p:PublishAot=false -p:SelfContained=false -p:PublishTrimmed=false "-p:GeneratedAssembly=$out/OresGenerated.dll"
   local status=0
-  dotnet "$out/app/oreslang-app.dll" >"$out/stdout" 2>"$out/stderr" || status=$?
+  if [[ "$backend" == nativeaot ]]; then
+    dotnet publish "$host" -c Release -r linux-x64 --self-contained true -p:PublishAot=true -o "$out/app" "-p:GeneratedAssembly=$out/OresGenerated.dll"
+    test -x "$out/app/oreslang-app"
+    readelf -h "$out/app/oreslang-app" | grep -q ELF64
+    env -i PATH=/usr/bin:/bin "$out/app/oreslang-app" >"$out/stdout" 2>"$out/stderr" || status=$?
+  else
+    dotnet build "$host" -c Release --no-incremental -o "$out/app" -p:PublishAot=false -p:SelfContained=false -p:PublishTrimmed=false "-p:GeneratedAssembly=$out/OresGenerated.dll"
+    dotnet "$out/app/oreslang-app.dll" >"$out/stdout" 2>"$out/stderr" || status=$?
+  fi
   test "$status" = "$want_status"
   if [[ "$status" == 0 ]]; then
     test "$(cat "$out/stdout")" = "$want"
@@ -25,7 +34,7 @@ run_guest() {
     test ! -s "$out/stdout"
     grep -F "$want" "$out/stderr"
   fi
-  echo "PASS lexical trap guest $name"
+  echo "PASS $backend lexical trap guest $name"
 }
 reject() {
   local name="$1" source="$2" diagnostic="$3"
@@ -53,3 +62,12 @@ reject effectful-condition 'pub fnc main():int{let int n=0;val Result<int,Error>
 reject nested 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{return sync task<int>{return 42;};};return 0;}' E_TRAP_INLINE_TASK_UNSUPPORTED
 reject cleanup 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer stdio.stdout.write("D");return 42;};return 0;}' E_LEXICAL_CLEANUP_UNSUPPORTED
 reject helper 'fnc f():int{return 42;}pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{return f();};return 0;}' E_TRAP_INLINE_TASK_UNSUPPORTED
+
+run_guest defer-lifo 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{defer n=42;defer n=7;return n;};guard r.is_ok(),n eq 42,r.unwrap() eq 0 {return 1;}return n;}' 0 42
+run_guest defer-unwrap 'pub fnc main():int{let int n=0;val Option<int> missing=None;val Result<int,Error> r=trap! sync task<int>{n=2;defer n=42;val int v=missing.unwrap();n=100;return v;};guard r.is_err(){return 1;}return n;}' 0 42
+run_guest defer-explicit-throw 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{defer n=42;if true {throw! new Error("bad");}return 0;};guard r.is_err(){return 1;}return n;}' 0 42
+run_guest defer-registration-order 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{defer n=42;if true {throw! new Error("bad");}defer n=7;return 0;};guard r.is_err(){return 1;}return n;}' 0 42
+run_guest defer-read-at-exit 'pub fnc main():int{let int n=0;let int v=0;val Result<int,Error> r=trap! sync task<int>{defer n=v;v=42;return 0;};return n;}' 0 42
+reject deferred-checked 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{defer n=n+1;return 42;};return n;}' E_LEXICAL_CLEANUP_UNSUPPORTED
+reject deferred-branch 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{if true {defer n=42;}return 42;};return n;}' E_LEXICAL_CLEANUP_UNSUPPORTED
+reject deferred-panic 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{defer n=42;if true {panic! new Error("bad");}return 42;};return n;}' E_LEXICAL_CLEANUP_UNSUPPORTED

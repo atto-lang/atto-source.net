@@ -2395,6 +2395,19 @@ public static partial class OresStructuredParser
                 Expect(";");
                 return (new StructuredSignal(at, value, effect), true);
             }
+            if (Current.Text == "defer" && lexicalDeferScope == scopes.Count &&
+                inlineTaskDepth == 1 && trapOperandDepth == 1 && guardFailureDepth == 0)
+            {
+                index++;
+                // The first cleanup slice accepts only direct scalar assignments
+                // at task-root scope; no closure, call, nested registration or IO.
+                if (index + 1 >= tokens.Count || tokens[index + 1].Text != "=")
+                    throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: expected nonthrowing scalar assignment");
+                var (cleanup, terminal) = Statement(depth + 1);
+                if (terminal || cleanup is not StructuredSet set || !TrapInlinePure(set.Value))
+                    throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: expected nonthrowing scalar assignment");
+                return (new StructuredLexicalDefer(at, set), false);
+            }
             if ((localReturn is not null || guardFailureDepth != 0) && Current.Text is ("defer" or "using"))
                 throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: resource cleanup requires a verified unwind continuation");
             if (Take("try"))
