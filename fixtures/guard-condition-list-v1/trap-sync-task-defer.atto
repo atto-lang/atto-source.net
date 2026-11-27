@@ -4,7 +4,7 @@ pub fnc main(): int {
 
     val Result<int, Error> failure = trap! sync task<int> {
         count = count + 2;
-        defer stdio.stdout.write("D");
+        defer stdio.out.write("D");
 
         val int value = missing.unwrap();
 
