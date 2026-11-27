@@ -134,6 +134,26 @@ internal static class DeclaredActorCounterV2Tests
         Reject(units, r, "self.handle_state(critical-write ", "state_w(critical-write ", "duplicate mode");
         Reject(units, r, "val int snapshot", "val int state_ro", "alias shadowing");
 
+        // Rebind the actual external receiver to the loan binder while leaving
+        // the rest of the well-formed source unchanged. Both read and write
+        // callbacks must reject shadowing that would erase nominal authority.
+        var header = System.Text.RegularExpressions.Regex.Match(units[r],
+            @"external\s+mtd\s*\(\s*Counter\s+([A-Za-z_][A-Za-z_0-9]*)\s*\)");
+        Require(header.Success, "external receiver mutation control");
+        string originalReceiver = header.Groups[1].Value;
+        Require(originalReceiver != "s", "receiver shadow mutation must change source");
+        Reject(units, r, header.Value, "external mtd(Counter s)", "loan shadows explicit nominal receiver");
+        // Distinguish the reader and writer binders so either direction is tested.
+        var distinct = new Dictionary<string, string>(units, StringComparer.Ordinal);
+        distinct[r] = distinct[r].Replace("critical-read |s| -> s.total",
+            "critical-read |readerOnly| -> readerOnly.total", StringComparison.Ordinal);
+        Require(distinct[r] != units[r], "read binder mutation control");
+        Require(DeclaredActorCounterV2Emitter.EmitCSharp(OresParser.InspectExternalCounterV2(distinct)) == compiled,
+            "independent lexical read binder changed native output");
+        Reject(distinct, r, header.Value, "external mtd(Counter readerOnly)",
+            "read loan shadows explicit receiver");
+        Reject(units, r, header.Value, "external mtd(Counter _)", "discard receiver is not authority");
+
         var differentStop = new Dictionary<string, string>(units, StringComparer.Ordinal);
         differentStop[r] = differentStop[r].Replace("if mail.value == 4",
             "if mail.value == 9", StringComparison.Ordinal);

@@ -137,6 +137,10 @@ public static partial class OresParser
             writer is "self" or "mail" or "handle_state" ||
             reader is "self" or "mail" or "handle_state" ||
             writer == mail || reader == mail ||
+            writer == receiverName || reader == receiverName ||
+            new[] { ns, actorName, contractName, field, methodName, mail, writer, reader,
+                detached, methodReceiver, receiverName, contractArg, methodArg }.Contains("_") ||
+            IsStateIntrinsicName(contractName) || IsStateIntrinsicName(ns) ||
             detached is "self" or "mail" or "handle_state" or "receive" or "send" or "end" ||
             detached == mail || detached == writer || detached == reader ||
             detached == field || detached == actorName || detached == receiverName ||
