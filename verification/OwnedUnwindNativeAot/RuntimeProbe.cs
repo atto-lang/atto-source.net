@@ -25,7 +25,7 @@ internal static class RuntimeProbe
         Check(f[G.Arity==2?0:1].Resolve(0));Check(s.Pump());
         if(G.Arity==3){Check(result is null&&f[2].PendingWaiters==1);Check(f[2].Resolve(42));Check(s.Pump());}
         Check(result.HasValue&&result.Value.Kind==(G.Arity==2?1:2)&&result.Value.Value==42);
-        if(G.Arity==3)Check(ReferenceEquals(result.Value.Error,err));
+        if(G.Arity==3)Check(ReferenceEquals(result.GetValueOrDefault().Error,err));
         Check(fence.Executing==0&&fence.PendingTickets==0&&fence.Advance(1));
         var stopInputs=Inputs();var stopFence=new SelectContinuationFence(1,2);OwnedUnwindSession.Outcome? cancelled=null;
         var stopped=OwnedUnwindSession.Start(stopInputs,stopFence,7,1,o=>cancelled=o);
