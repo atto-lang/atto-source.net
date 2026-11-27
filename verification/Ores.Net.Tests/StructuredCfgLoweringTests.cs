@@ -316,7 +316,7 @@ internal static class StructuredCfgLoweringTests
             ("denote type Count = int; denote type Count = bool; fnc main():int{return 42;}", "E_DENOTE_NAME"),
             ("denote pub type Count = int; fnc main():int{return 42;}", "E_DENOTE_VISIBILITY_UNSUPPORTED"),
             ("denote type Count = int; fnc main():int{struct Count{int a;}return 42;}", "Duplicate local value type"),
-            ("denote type Count = int; fnc main():int{val Count? a=42;return a;}", "E_DENOTE_RHS_UNSUPPORTED")
+            ("denote type Count = int; fnc main():Count?{return 42;}", "E_DENOTE_RHS_UNSUPPORTED")
         }) RejectWithDiagnostic(source, diagnostic, "denotation rejection");
         NegatedDoIfAotControlFlow();
         Check("""
