@@ -27,13 +27,13 @@ mkdir "$work/Rejected"
 deny "$source" E_PERMISSION
 sed 's/stdio[.]out[.]write/process.stdout.write/g' "$source" > "$work/process-alias.atto"
 deny "$work/process-alias.atto" E_PERMISSION
-for source in "$source" "$work/process-alias.atto"; do
-for variant in 'stdio.out.write(42)' 'stdio.stderr.write("D")' 'stdio.out.write("D", "X")' 'stdio.out.write("\n")'; do
+for variant in 'stdio.out.write(42)' 'process.stdout.write(42)' 'stdio.stderr.write("D")' 'process.stderr.write("D")' 'stdio.out.write("D", "X")' 'process.stdout.write("D", "X")' 'stdio.out.write("\n")' 'process.stdout.write("\n")' 'stdio.stdout.write("D")'; do
   printf 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer %s;return 42;};return 42;}\n' "$variant" > "$work/reject.atto"
   echo "Rejecting $variant"
   # Each must be a semantic source failure; an infrastructure error is not proof.
   deny "$work/reject.atto" 'offset' --capability stdio.out.write
 done
+for source in "$source" "$work/process-alias.atto"; do
 echo "Compiling exact granted fixture"
 oresnet check "$source" --capability stdio.out.write
 oresnet compile "$source" --out "$work/OresGenerated.dll" --capability stdio.out.write
