@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 mode="${1:-coreclr}"
 case "$mode" in coreclr|nativeaot) ;; *) exit 2 ;; esac
 source=tests/fixtures/task-inline-cil/exact-guard-trap-sync-task-defer.atto
-test "$(git hash-object "$source")" = f8c78c4c36e62a840224af04aa59bd90de9dd65d
+test "$(git hash-object "$source")" = bcd5e2692aaaaf4c4c070a5746cd6c3ab9e5082a
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 compiler=compiler/Ores.Net.Compiler
@@ -25,15 +25,18 @@ deny() {
 }
 mkdir "$work/Rejected"
 deny "$source" E_PERMISSION
-for variant in 'stdio.stdout.write(42)' 'stdio.stderr.write("D")' 'stdio.stdout.write("D", "X")' 'stdio.stdout.write("\n")'; do
+sed 's/stdio[.]out[.]write/process.stdout.write/g' "$source" > "$work/process-alias.atto"
+deny "$work/process-alias.atto" E_PERMISSION
+for source in "$source" "$work/process-alias.atto"; do
+for variant in 'stdio.out.write(42)' 'stdio.stderr.write("D")' 'stdio.out.write("D", "X")' 'stdio.out.write("\n")'; do
   printf 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer %s;return 42;};return 42;}\n' "$variant" > "$work/reject.atto"
   echo "Rejecting $variant"
   # Each must be a semantic source failure; an infrastructure error is not proof.
-  deny "$work/reject.atto" 'offset' --capability stdio.stdout.write
+  deny "$work/reject.atto" 'offset' --capability stdio.out.write
 done
 echo "Compiling exact granted fixture"
-oresnet check "$source" --capability stdio.stdout.write
-oresnet compile "$source" --out "$work/OresGenerated.dll" --capability stdio.stdout.write
+oresnet check "$source" --capability stdio.out.write
+oresnet compile "$source" --out "$work/OresGenerated.dll" --capability stdio.out.write
 if [[ "$mode" == nativeaot ]]; then
   dotnet publish "$host" -c Release -r linux-x64 --self-contained true -p:PublishAot=true -o "$work/app" "-p:GeneratedAssembly=$work/OresGenerated.dll"
   readelf -h "$work/app/oreslang-app" | grep -q ELF64
@@ -51,4 +54,6 @@ grep -F 'deferred stdout denied or quota exceeded' "$work/stderr"
 printf 'D42\n' > "$work/expected"
 cmp "$work/expected" "$work/stdout"
 test ! -s "$work/stderr"
-echo "PASS EXACT_ORIGINAL_GUARD_TRAP_DEFER $mode stdout=D42 compiler_grant=yes runtime_grant=yes"
+echo "PASS CANONICAL_GUARD_TRAP_DEFER $mode source=$source stdout=D42 compiler_grant=yes runtime_grant=yes"
+rm -rf -- "$work/app" "$work/OresGenerated.dll"
+done
