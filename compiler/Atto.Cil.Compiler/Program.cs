@@ -222,6 +222,8 @@ internal sealed class Parser
                     if (outputStarted) throw new CompilerError("E_PARSE", "locals must precede output");
                     if (localCount++ >= 4) throw new CompilerError("E_LIMIT", "4 local bindings per function");
                     var localName = Name();
+                    // The direct CIL binding profile is exclusively i64.
+                    if (Eat(":")) Require("int");
                     Require("=");
                     var initializer = ParseExpr(0, 0);
                     Require(";");
@@ -687,11 +689,32 @@ internal sealed class Parser
         return new Sequence(items);
     }
 
+    private static bool ClosedLoopValue(Expression e, int depth = 0) =>
+        depth <= 32 && (e switch
+        {
+            Literal => true,
+            Binary b when b.Op is "+" or "-" or "*" or "/" =>
+                ClosedLoopValue(b.Left, depth + 1) && ClosedLoopValue(b.Right, depth + 1),
+            _ => false
+        });
+
     private Expression ParseExpr(int min, int depth, string pipeDirection = "")
     {
         if (depth > 32) throw new CompilerError("E_LIMIT", "expression nesting limit");
         Expression left;
-        if (Eat("seq")) { Require("("); left = ParseSequenceItems(depth); }
+        if (Peek == "loop" && _position + 1 < _tokens.Count && _tokens[_position + 1] == "{")
+        {
+            Require("loop"); Require("{"); Require("break");
+            if (Peek is ";" or "}") throw new CompilerError("E_BREAK_VALUE", "value loop requires an operand");
+            left = ParseExpr(0, depth + 1);
+            // Single-exit closed arithmetic only; the usual type checker
+            // and checked CIL emission remain authoritative.
+            if (!ClosedLoopValue(left))
+                throw new CompilerError("E_VALUE_LOOP_PROFILE", "value loop requires closed scalar arithmetic");
+            Require(";"); Require("}");
+            if (Peek == "(") throw new CompilerError("E_VALUE_LOOP_PROFILE", "computed value is not callable");
+        }
+        else if (Eat("seq")) { Require("("); left = ParseSequenceItems(depth); }
         else if (Eat("("))
         {
             if (Eat(">")) left = ParseSequenceItems(depth);
