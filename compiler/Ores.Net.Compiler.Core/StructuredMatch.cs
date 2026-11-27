@@ -152,6 +152,8 @@ public static partial class OresStructuredParser
         private sealed record CompilePattern(long[] Ints, bool[] Bools, IrValueType[] Types);
         private readonly Dictionary<string, (bool Array, CompilePattern Pattern)> patternConstants = new(StringComparer.Ordinal);
         private readonly HashSet<int> patternNameUses = new();
+        private readonly Dictionary<string, CompilePattern> patternTypeAliases = new(StringComparer.Ordinal);
+        private readonly HashSet<int> patternAliasUses = new();
         private readonly HashSet<int> verifiedPatternBrackets = new();
 
         private bool TakePatternBracket(string text)
@@ -255,20 +257,50 @@ public static partial class OresStructuredParser
                 var parts = new List<CompilePattern>();
                 do
                 {
-                    var type = Current.Text switch
-                    {
-                        "int" or "Int" => IrValueType.I64,
-                        "bool" or "boolean" => IrValueType.Bool,
-                        _ => throw Error("PATTERN_TYPE: unsupported or unresolved scalar type")
-                    };
-                    index++;
-                    parts.Add(new CompilePattern([], [], [type]));
+                    parts.Add(ReadPatternTypeAtom());
                     if (!list || TakePatternBracket("]")) break;
                     Expect(",");
                 } while (true);
                 return CombinePatterns(parts);
             }
             return ReadPatternRef(false);
+        }
+        private CompilePattern ReadPatternTypeAtom()
+        {
+            if (patternTypeAliases.TryGetValue(Current.Text, out var resolved))
+            {
+                patternAliasUses.Add(Current.Offset);
+                index++;
+                return resolved;
+            }
+            var type = Current.Text switch
+            {
+                "int" or "Int" => IrValueType.I64,
+                "bool" or "boolean" => IrValueType.Bool,
+                _ => throw Error("PATTERN_TYPE: unsupported, unknown or forward/cyclic scalar type")
+            };
+            index++;
+            return new CompilePattern([], [], [type]);
+        }
+        private void ReadPatternTypeAlias()
+        {
+            Expect("type");
+            int at = Current.Offset;
+            string name = Name();
+            if (name is "Pattern" or "Int" or "boolean" or "on" or "in" or "_" ||
+                patternConstants.ContainsKey(name) || patternTypeAliases.ContainsKey(name) ||
+                patternTypeAliases.Count >= 128)
+                throw Error("PATTERN_NAME: duplicate, reserved or over-budget type alias");
+            Expect("=");
+            var parts = new List<CompilePattern>();
+            do
+            {
+                if (parts.Count >= 64) throw Error("PATTERN_LIMIT: alias alternatives");
+                parts.Add(ReadPatternTypeAtom());
+            } while (Take("|"));
+            Expect(";");
+            patternTypeAliases.Add(name, CombinePatterns(parts));
+            patternAliasUses.Add(at);
         }
         private void ReadPatternConstant()
         {
@@ -278,7 +310,7 @@ public static partial class OresStructuredParser
             int at = Current.Offset;
             string name = Name();
             if (name is "Pattern" or "Int" or "boolean" or "on" or "in" or "_" ||
-                patternConstants.ContainsKey(name) || patternConstants.Count >= 128)
+                patternConstants.ContainsKey(name) || patternTypeAliases.ContainsKey(name) || patternConstants.Count >= 128)
                 throw Error("PATTERN_NAME: duplicate, reserved or over-budget declaration");
             Expect("=");
             var p = array ? ReadPatternArray(0) : ReadPatternDescriptor(0);

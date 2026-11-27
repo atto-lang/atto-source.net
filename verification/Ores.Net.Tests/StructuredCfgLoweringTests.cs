@@ -10,6 +10,9 @@ internal static class StructuredCfgLoweringTests
     {
         // Exercise production structured CFG + emitted CIL, not a host matcher.
         foreach (var (patternSource, label) in new[] {
+            ("type X = int | bool; const Pattern p = is X; fnc main():int{return match 7 over on p -> 42 end;}", "named union type"),
+            ("type X = int; type Y = X | bool; const Pattern[] z = [is Y]; fnc main():int{return match true over is in z -> 42 end;}", "chained alias"),
+            ("type X = int | bool; fnc main():int{return match 7 over is X -> 42 end;}", "direct alias test"),
             ("const Pattern p = on 5; fnc main():int{return match 5 over on p -> 42, on _ -> 0 end;}", "named pattern"),
             ("const Pattern[] z = [on 1,in [2,3],on true]; fnc main():int{return match 3 over in z -> 42, on _ -> 0 end;}", "mixed set int"),
             ("const Pattern[] z = [on 1,on true]; fnc main():int{return match true over in z -> 42, on _ -> 0 end;}", "mixed set bool"),
@@ -24,6 +27,10 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{return match true over is in [int,bool] -> 42 end;}", "static bool type-list coverage")
         }) Check(patternSource, 42, label);
         foreach (var invalid in new[] {
+            "type X = Y; type Y = X; fnc main():int{return 42;}",
+            "type X = int; type Y = X | Int; fnc main():int{return 42;}",
+            "type X = int; const Pattern X = on 5; fnc main():int{return 42;}",
+            "type X = int; fnc main():int{return X;}",
             "const Pattern p = on 5; fnc main():int{return p;}",
             "const Pattern p = on q; const Pattern q = on p; fnc main():int{return 42;}",
             "const Pattern[] z = [is int,on 1]; fnc main():int{return match 2 over is in z -> 42 end;}",
