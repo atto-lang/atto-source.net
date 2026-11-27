@@ -2539,7 +2539,7 @@ public static partial class OresStructuredParser
                     {
                         nameAt = Current.Offset;
                         name = Name();
-                        if (Take(":"))
+                        if (Take(":") || Take("as"))
                         {
                             type = Type();
                             annotated = true;
