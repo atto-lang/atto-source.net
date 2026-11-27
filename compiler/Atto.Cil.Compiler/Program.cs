@@ -18,6 +18,9 @@ internal sealed record Sequence(List<Expression> Items) : Expression;
 internal sealed record Arg(string Name) : Expression;
 internal sealed record Binary(string Op, Expression Left, Expression Right) : Expression;
 internal sealed record Call(string Name, List<Expression> Args) : Expression;
+internal sealed record RecurState(string Name, Expression Init);
+internal sealed record RecurExit(Expression Predicate, Expression Result);
+internal sealed record RecurLoop(List<RecurState> States, List<RecurExit> Exits, List<Expression> Updates) : Expression;
 // A bounded, integer-only return-position match. Binders are scoped to each arm.
 // The match subject is evaluated exactly once into a CIL local.
 internal sealed record ValueArm(long? Literal, string? Binding, Expression? Guard, Expression Result);
@@ -109,7 +112,7 @@ internal sealed class Parser
             else if (c is >= '0' and <= '9')
                 while (i < source.Length && source[i] is >= '0' and <= '9') i++;
             else if (c == '-' && i < source.Length && source[i] == '>') i++;
-            else if (c == '=' && i < source.Length && source[i] == '=') i++;
+            else if (c is '=' or '>' && i < source.Length && source[i] == '=') i++;
             else if (countedReady && i < source.Length && ((c == '&' && source[i] == '&') || (c == '|' && source[i] == '|') || (c is '<' or '>' or '!' && source[i] == '='))) i++;
             else if (countedReady && c is '[' or ']') { }
             else if (c == '|' && i < source.Length && source[i] == '>') i++;
@@ -698,11 +701,61 @@ internal sealed class Parser
             _ => false
         });
 
+    // First stateful value-loop slice: closed i64 state and checked scalar
+    // operands only. The type checker separately validates lexical scope,
+    // guard/result types, and replacement arity before CIL emission.
+    private Expression ParseRecurLoop(int depth)
+    {
+        Require("loop"); Require("(");
+        List<RecurState> states = [];
+        HashSet<string> names = new(StringComparer.Ordinal);
+        do
+        {
+            if (states.Count >= 8) throw new CompilerError("E_LIMIT", "8 recur state bindings");
+            Require("val");
+            var name = Name();
+            if (name is "loop" or "recur" or "break" or "if" or "else" or "fi" || !names.Add(name))
+                throw new CompilerError("E_RECUR_BINDING", "duplicate or reserved loop state");
+            if (Eat(":")) Require("int");
+            Require("=");
+            states.Add(new RecurState(name, ParseExpr(0, depth + 1)));
+        } while (Eat(","));
+        Require(")"); Require("{");
+        List<RecurExit> exits = [];
+        bool terminalElse = false;
+        while (Eat("if"))
+        {
+            if (exits.Count >= 32) throw new CompilerError("E_LIMIT", "32 recur exit guards");
+            var predicate = ParseExpr(0, depth + 1);
+            Require("{"); Require("break");
+            var result = ParseExpr(0, depth + 1);
+            Require(";"); Require("}");
+            exits.Add(new RecurExit(predicate, result));
+            if (Eat("else")) { Require("{"); terminalElse = true; break; }
+        }
+        if (exits.Count == 0) throw new CompilerError("E_RECUR_TAIL", "state loop requires valued exit");
+        Require("recur"); Require("(");
+        List<Expression> updates = [];
+        do
+        {
+            if (updates.Count >= 8) throw new CompilerError("E_RECUR_ARITY", "too many recur operands");
+            updates.Add(ParseExpr(0, depth + 1));
+        } while (Eat(","));
+        Require(")"); Require(";");
+        if (terminalElse) { Require("}"); Eat("fi"); }
+        Require("}");
+        if (updates.Count != states.Count) throw new CompilerError("E_RECUR_ARITY", "state replacement arity");
+        if (Peek == "(") throw new CompilerError("E_VALUE_LOOP_PROFILE", "computed value is not callable");
+        return new RecurLoop(states, exits, updates);
+    }
+
     private Expression ParseExpr(int min, int depth, string pipeDirection = "")
     {
         if (depth > 32) throw new CompilerError("E_LIMIT", "expression nesting limit");
         Expression left;
-        if (Peek == "loop" && _position + 1 < _tokens.Count && _tokens[_position + 1] == "{")
+        if (Peek == "loop" && _position + 1 < _tokens.Count && _tokens[_position + 1] == "(")
+            left = ParseRecurLoop(depth);
+        else if (Peek == "loop" && _position + 1 < _tokens.Count && _tokens[_position + 1] == "{")
         {
             Require("loop"); Require("{"); Require("break");
             if (Peek is ";" or "}") throw new CompilerError("E_BREAK_VALUE", "value loop requires an operand");
@@ -753,7 +806,7 @@ internal sealed class Parser
         while (true)
         {
             int precedence = Peek is "*" or "/" ? 20 : Peek is "+" or "-" ? 10
-                : Peek is ">" or "eq" or "==" ? 5 : Peek is "|>" or "<|" ? 1 : -1;
+                : Peek is ">" or ">=" or "eq" or "==" ? 5 : Peek is "|>" or "<|" ? 1 : -1;
             if (precedence < min) break;
             var op = Peek; _position++;
             if (op is "|>" or "<|")
@@ -981,7 +1034,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                         throw new CompilerError("E_TYPE",
                             "integer operator requires two signed int64 operands");
                     if (b.Op == "/") CheckIntegerDivision(b);
-                    return b.Op is ">" or "eq" or "==" ? CheckedType.Bool : CheckedType.Int;
+                    return b.Op is ">" or ">=" or "eq" or "==" ? CheckedType.Bool : CheckedType.Int;
                 }
                 case Call c:
                     if (!_symbols.TryGetValue(c.Name, out var target))
@@ -998,6 +1051,41 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                         if (WalkExpr(item, owner, bound, depth) != CheckedType.Int)
                             throw new CompilerError("E_TYPE", "sequence members must be int");
                     return CheckedType.Int;
+                case RecurLoop loop:
+                {
+                    if (loop.States.Count is < 1 or > 8 || loop.Exits.Count is < 1 or > 32 ||
+                        loop.Updates.Count != loop.States.Count)
+                        throw new CompilerError("E_RECUR_ARITY", "invalid bounded loop shape");
+                    var state = new HashSet<string>(StringComparer.Ordinal);
+                    CheckedType Closed(Expression operand)
+                    {
+                        bool Scoped(Expression x, int d) => d <= 32 && (x switch
+                        {
+                            Literal => true,
+                            Arg a => state.Contains(a.Name),
+                            Binary b when b.Op is "+" or "-" or "*" or "/" or ">" or ">=" or "eq" or "==" =>
+                                Scoped(b.Left, d + 1) && Scoped(b.Right, d + 1),
+                            _ => false
+                        });
+                        if (!Scoped(operand, 0))
+                            throw new CompilerError("E_VALUE_LOOP_PROFILE", "operand must be closed scalar state");
+                        return WalkExpr(operand, owner, state, depth + 1);
+                    }
+                    foreach (var binding in loop.States)
+                    {
+                        if (Closed(binding.Init) != CheckedType.Int)
+                            throw new CompilerError("E_TYPE", "state initializer must be int");
+                        if (!state.Add(binding.Name))
+                            throw new CompilerError("E_RECUR_BINDING", "duplicate state");
+                    }
+                    foreach (var exit in loop.Exits)
+                        if (Closed(exit.Predicate) != CheckedType.Bool || Closed(exit.Result) != CheckedType.Int)
+                            throw new CompilerError("E_TYPE", "recur exit requires bool guard and int value");
+                    foreach (var next in loop.Updates)
+                        if (Closed(next) != CheckedType.Int)
+                            throw new CompilerError("E_TYPE", "recur replacement must be int");
+                    return CheckedType.Int;
+                }
                 case ValueMatch m:
                     if (WalkExpr(m.Subject, owner, bound, depth + 1) != CheckedType.Int)
                         throw new CompilerError("E_TYPE", "match subject must be int");
@@ -1104,6 +1192,30 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
         var locals = new BlobEncoder(localSig).LocalVariableSignature(21);
         for (int i = 0; i < 21; i++) locals.AddVariable().Type().Int64();
         var localSigHandle = metadata.AddStandaloneSignature(metadata.GetOrAddBlob(localSig));
+        // Separate signature for methods containing a state loop. State and
+        // replacement scratch slots are disjoint from ordinary/match locals.
+        var loopSig = new BlobBuilder();
+        var loopLocals = new BlobEncoder(loopSig).LocalVariableSignature(37);
+        for (int i = 0; i < 37; i++) loopLocals.AddVariable().Type().Int64();
+        var loopSigHandle = metadata.AddStandaloneSignature(metadata.GetOrAddBlob(loopSig));
+        static bool ContainsLoop(Expression e) => e switch
+        {
+            RecurLoop => true,
+            Binary b => ContainsLoop(b.Left) || ContainsLoop(b.Right),
+            Call c => c.Args.Any(ContainsLoop),
+            Sequence seq => seq.Items.Any(ContainsLoop),
+            ValueMatch m => ContainsLoop(m.Subject) || m.Arms.Any(a =>
+                (a.Guard != null && ContainsLoop(a.Guard)) || ContainsLoop(a.Result)),
+            _ => false
+        };
+        static bool StatementLoop(Statement stmt) => stmt switch
+        {
+            LocalBinding l => ContainsLoop(l.Initializer),
+            PrintLine p => ContainsLoop(p.Value),
+            ReturnStmt r => ContainsLoop(r.Value),
+            MutablePointerCall m => m.Scalar != null && ContainsLoop(m.Scalar),
+            _ => false
+        };
 
         List<int> bodyOffsets = [];
         foreach (var f in _functions)
@@ -1146,7 +1258,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 }
             }
             bodyOffsets.Add(bodyStream.AddMethodBody(il, maxStack: 64,
-                localVariablesSignature: localSigHandle));
+                localVariablesSignature: f.Body.Any(StatementLoop) ? loopSigHandle : localSigHandle));
         }
         int nextParameter = 1;
         for (int i = 0; i < _functions.Count; i++)
@@ -1237,6 +1349,13 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 if (b.Op == "/") CheckIntegerDivision(b);
                 Generate(b.Left, f, il, bindings, matchDepth);
                 Generate(b.Right, f, il, bindings, matchDepth);
+                if (b.Op == ">=")
+                {
+                    il.OpCode(ILOpCode.Clt);
+                    il.LoadConstantI4(0);
+                    il.OpCode(ILOpCode.Ceq);
+                    return;
+                }
                 il.OpCode(b.Op switch
                 {
                     "+" => ILOpCode.Add_ovf,
@@ -1259,6 +1378,45 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                     if (i + 1 != seq.Items.Count) il.OpCode(ILOpCode.Pop);
                 }
                 return;
+            case RecurLoop loop:
+            {
+                const int stateBase = 21, scratchBase = 29;
+                // Closed operands exclude nested loops, external bindings and
+                // calls. Every slot is initialized before it is read.
+                var scope = new Dictionary<string, int>(StringComparer.Ordinal);
+                for (int i = 0; i < loop.States.Count; i++)
+                {
+                    var state = loop.States[i];
+                    Generate(state.Init, f, il, scope, matchDepth);
+                    il.StoreLocal(stateBase + i);
+                    scope.Add(state.Name, stateBase + i);
+                }
+                var header = il.DefineLabel();
+                var result = il.DefineLabel();
+                il.MarkLabel(header);
+                foreach (var exit in loop.Exits)
+                {
+                    var next = il.DefineLabel();
+                    Generate(exit.Predicate, f, il, scope, matchDepth);
+                    il.Branch(ILOpCode.Brfalse, next);
+                    Generate(exit.Result, f, il, scope, matchDepth);
+                    il.Branch(ILOpCode.Br, result);
+                    il.MarkLabel(next);
+                }
+                for (int i = 0; i < loop.Updates.Count; i++)
+                {
+                    Generate(loop.Updates[i], f, il, scope, matchDepth);
+                    il.StoreLocal(scratchBase + i);
+                }
+                for (int i = 0; i < loop.Updates.Count; i++)
+                {
+                    il.LoadLocal(scratchBase + i);
+                    il.StoreLocal(stateBase + i);
+                }
+                il.Branch(ILOpCode.Br, header);
+                il.MarkLabel(result);
+                return;
+            }
             case ValueMatch m:
                 if (matchDepth >= 16) throw new CompilerError("E_LIMIT", "match nesting limit");
                 Generate(m.Subject, f, il, bindings, matchDepth + 1);
