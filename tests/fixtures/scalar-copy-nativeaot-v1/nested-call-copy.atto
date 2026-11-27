@@ -1,0 +1,2 @@
+fnc add_one(int n): int { return n + 1; }
+pub fnc main(): int { val int n = copy!! (copy! add_one(41)); return n; }
