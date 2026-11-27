@@ -49,4 +49,4 @@ reject 'loop (val a=b,val b=42) {if b eq 42 {break a;} recur(a,b);}' E_VALUE_LOO
 reject 'loop (val i=0) {if i eq 1 {break i;} recur(i eq 0);}' E_TYPE
 reject 'loop (val i=0) {if i {break i;} recur(i+1);}' E_TYPE
 reject 'loop (val i=0) {if i eq 1 {break i;} recur(i+1); recur(i+1);}' E_PARSE
-reject 'loop (val i=0) {if i eq 1 {break i;} recur(loop {break 1;});}' E_VALUE_LOOP_PROFILE
+reject 'loop (val i=0) {if i eq 1 {break i;} recur(loop (val j=0) {if j eq 0 {break 1;} recur(j+1);});}' E_VALUE_LOOP_PROFILE

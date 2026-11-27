@@ -1056,26 +1056,26 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                     if (loop.States.Count is < 1 or > 8 || loop.Exits.Count is < 1 or > 32 ||
                         loop.Updates.Count != loop.States.Count)
                         throw new CompilerError("E_RECUR_ARITY", "invalid bounded loop shape");
-                    var state = new HashSet<string>(StringComparer.Ordinal);
+                    var loopState = new HashSet<string>(StringComparer.Ordinal);
                     CheckedType Closed(Expression operand)
                     {
                         bool Scoped(Expression x, int d) => d <= 32 && (x switch
                         {
                             Literal => true,
-                            Arg a => state.Contains(a.Name),
+                            Arg a => loopState.Contains(a.Name),
                             Binary b when b.Op is "+" or "-" or "*" or "/" or ">" or ">=" or "eq" or "==" =>
                                 Scoped(b.Left, d + 1) && Scoped(b.Right, d + 1),
                             _ => false
                         });
                         if (!Scoped(operand, 0))
                             throw new CompilerError("E_VALUE_LOOP_PROFILE", "operand must be closed scalar state");
-                        return WalkExpr(operand, owner, state, depth + 1);
+                        return WalkExpr(operand, owner, loopState, depth + 1);
                     }
                     foreach (var binding in loop.States)
                     {
                         if (Closed(binding.Init) != CheckedType.Int)
                             throw new CompilerError("E_TYPE", "state initializer must be int");
-                        if (!state.Add(binding.Name))
+                        if (!loopState.Add(binding.Name))
                             throw new CompilerError("E_RECUR_BINDING", "duplicate state");
                     }
                     foreach (var exit in loop.Exits)
