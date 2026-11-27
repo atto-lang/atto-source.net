@@ -68,7 +68,8 @@ public enum CfgOpcode
     CheckedRemainder,
     CheckedModulo,
     InlineCooperate,
-    BitXorI64
+    BitXorI64,
+    DeferredStdoutLiteral
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -406,7 +407,7 @@ public static class OresCfgVerifier
             {
                 var op = block.Instructions[opIndex];
                 if (op.TextOperand is not null && op.Opcode is not
-                    (CfgOpcode.GuestErrorLiteral or CfgOpcode.GuestTextLiteral or CfgOpcode.GuestErrorIsType or CfgOpcode.GuestErrorHasMessage))
+                    (CfgOpcode.GuestErrorLiteral or CfgOpcode.GuestTextLiteral or CfgOpcode.GuestErrorIsType or CfgOpcode.GuestErrorHasMessage or CfgOpcode.DeferredStdoutLiteral))
                     throw new FormatException("Unexpected text in CFG instruction");
                 switch (op.Opcode)
                 {
@@ -535,6 +536,13 @@ public static class OresCfgVerifier
                         Use(i, opIndex, op.Left.Value, operand.Type);
                         if (op.Opcode == CfgOpcode.ResultUnwrapOr)
                             Use(i, opIndex, op.Right!.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.DeferredStdoutLiteral:
+                        RequireType(op.Type, IrValueType.Bool);
+                        CheckGuestOp(op, left: false);
+                        if (op.TextOperand is null || op.TextOperand.Length > 256 ||
+                            op.TextOperand.Any(ch => ch < ' ' || ch > '~'))
+                            throw new FormatException("Invalid deferred stdout literal");
                         break;
                     case CfgOpcode.InlineCooperate:
                         RequireType(op.Type, IrValueType.Bool);

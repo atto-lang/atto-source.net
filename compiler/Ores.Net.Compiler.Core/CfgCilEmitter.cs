@@ -138,6 +138,7 @@ internal static class CfgCilEmitter
             var il = new InstructionEncoder(code, flow);
             var labels = new Dictionary<string, LabelHandle>(StringComparer.Ordinal);
             MemberReferenceHandle cooperate = default;
+            MemberReferenceHandle deferredStdout = default;
             foreach (var block in blocks)
                 labels.Add(block.Name, il.DefineLabel());
 
@@ -197,6 +198,22 @@ internal static class CfgCilEmitter
                             break;
                         case CfgOpcode.ConstantBool:
                             il.LoadConstantI4(op.BoolConstant!.Value ? 1 : 0);
+                            break;
+                        case CfgOpcode.DeferredStdoutLiteral:
+                            if (deferredStdout.IsNil)
+                            {
+                                var runtime = metadata.AddAssemblyReference(metadata.GetOrAddString("Ores.Net.Runtime"),
+                                    new Version(1, 0, 0, 0), default, default, default, default);
+                                var owner = metadata.AddTypeReference(runtime, metadata.GetOrAddString("Ores.Net.Runtime"),
+                                    metadata.GetOrAddString("GuestDeferredStdout"));
+                                var signature = new BlobBuilder();
+                                new BlobEncoder(signature).MethodSignature().Parameters(1,
+                                    result => result.Type().Boolean(), parameters => parameters.AddParameter().Type().String());
+                                deferredStdout = metadata.AddMemberReference(owner, metadata.GetOrAddString("WriteLiteral"),
+                                    metadata.GetOrAddBlob(signature));
+                            }
+                            il.LoadString(metadata.GetOrAddUserString(op.TextOperand!));
+                            il.Call(deferredStdout);
                             break;
                         case CfgOpcode.InlineCooperate:
                             if (cooperate.IsNil)

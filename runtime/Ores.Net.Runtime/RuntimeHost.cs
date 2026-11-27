@@ -5,13 +5,27 @@ namespace Ores.Net.Runtime;
 /// <summary>Statically calls generated CIL; this method is compiled into the Native AOT executable.</summary>
 public static class RuntimeHost
 {
-    public static async Task<int> ExecuteAsync(Func<long> entry)
+    public static Task<int> ExecuteAsync(Func<long> entry) => ExecuteAsync(entry, false);
+
+    public static async Task<int> ExecuteAsync(Func<long> entry, bool allowDeferredStdout)
     {
         ArgumentNullException.ThrowIfNull(entry);
         try
         {
-            await Console.Out.WriteLineAsync(entry().ToString(CultureInfo.InvariantCulture));
+            string output = "";
+            long result;
+            try { result = GuestDeferredStdout.Execute(entry, allowDeferredStdout, out output); }
+            finally
+            {
+                if (output.Length != 0) await Console.Out.WriteAsync(output);
+            }
+            await Console.Out.WriteLineAsync(result.ToString(CultureInfo.InvariantCulture));
             return 0;
+        }
+        catch (GuestDeferredStdoutException)
+        {
+            await Console.Error.WriteLineAsync("Oreslang deferred stdout denied or quota exceeded");
+            return 70;
         }
         catch (OverflowException)
         {
