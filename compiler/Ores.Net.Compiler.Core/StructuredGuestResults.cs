@@ -23,6 +23,8 @@ public sealed record StructuredErrorTest(int At, StructuredExpr Error, string Na
     : StructuredExpr(At, IrValueType.Bool);
 public sealed record StructuredSignal(int At, StructuredExpr Error, CfgGuestEffect Effect)
     : StructuredStmt(At);
+internal sealed record StructuredLexicalDefer(int At, IReadOnlyList<StructuredStmt> Body)
+    : StructuredStmt(At);
 
 internal static class GuestResultTypes
 {
@@ -61,6 +63,8 @@ public static partial class OresStructuredParser
         private IrValueType? expectedExpressionType;
         private int trapOperandDepth;
         private int guardFailureDepth;
+        private int? lexicalDeferScope;
+        private int lexicalDeferExpansion;
 
         private StructuredFunction WrapTrappedCallable(StructuredFunction declaration, int at)
         {
@@ -102,6 +106,9 @@ public static partial class OresStructuredParser
             {
                 index += 2;
                 trapOperandDepth++;
+                int? previousDeferScope = lexicalDeferScope;
+                lexicalDeferScope = scopes.Count + 1;
+                lexicalDeferExpansion = 0;
                 try
                 {
                     var task = ReadInlineTask(depth + 1, imperative: false, writeBack: true);
@@ -111,7 +118,7 @@ public static partial class OresStructuredParser
                     return new StructuredSyncTaskValue(at,
                         task with { Body = body, Type = IrValueType.ResultI64 });
                 }
-                finally { trapOperandDepth--; }
+                finally { lexicalDeferScope = previousDeferScope; trapOperandDepth--; }
             }
             trapOperandDepth++;
             StructuredExpr operand;
@@ -159,7 +166,8 @@ public static partial class OresStructuredParser
 
         private int lexicalTrapRhsId;
         private void TrapInlineCheckedAssignment(List<StructuredStmt> body,
-            StructuredExpr value, Func<StructuredExpr, StructuredStmt> install)
+            StructuredExpr value, Func<StructuredExpr, StructuredStmt> install,
+            IReadOnlyList<StructuredLexicalDefer> cleanup)
         {
             int at = value.Offset;
             // This prefix is reserved by the source reader. IDs are unique
@@ -170,54 +178,87 @@ public static partial class OresStructuredParser
                 new StructuredTrap(at, value, IrValueType.ResultI64), StructuredBindingKind.Val));
             body.Add(new StructuredIf(at,
                 new StructuredResultInspect(at, read, CfgOpcode.ResultIsErr, IrValueType.Bool),
-                new StructuredStmt[] { new StructuredLocalExit(at, read) }, null));
+                TrapInlineExit(read, cleanup), null));
             // Only the Ok edge reaches installation. The error edge exits
             // with the original typed Error payload, not a reconstructed one.
             body.Add(install(new StructuredResultInspect(at, read,
                 CfgOpcode.ResultUnwrap, IrValueType.I64)));
         }
 
-        private IReadOnlyList<StructuredStmt> TrapInlineStatements(IReadOnlyList<StructuredStmt> statements)
+        // Freeze the result (including the original Error) before cleanup.
+        // Each exit has exactly the registrations encountered on its path.
+        // Root-only registration avoids conditional lifetime ambiguity.
+        private IReadOnlyList<StructuredStmt> TrapInlineExit(StructuredExpr result,
+            IReadOnlyList<StructuredLexicalDefer> cleanup)
+        {
+            if (cleanup.Count == 0)
+                return new StructuredStmt[] { new StructuredLocalExit(result.Offset, result) };
+            int at = result.Offset;
+            string name = TrappedBodyPrefix + "exit_" + lexicalTrapRhsId++;
+            var body = new List<StructuredStmt> {
+                new StructuredLet(at, name, IrValueType.ResultI64, result, StructuredBindingKind.Val)
+            };
+            for (int i = cleanup.Count - 1; i >= 0; i--)
+            {
+                lexicalDeferExpansion += cleanup[i].Body.Count;
+                if (lexicalDeferExpansion > MaxStatements)
+                    throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: cleanup expansion budget");
+                body.AddRange(cleanup[i].Body);
+            }
+            body.Add(new StructuredLocalExit(at, new StructuredRead(at, name, IrValueType.ResultI64)));
+            return body.AsReadOnly();
+        }
+
+        private IReadOnlyList<StructuredStmt> TrapInlineStatements(IReadOnlyList<StructuredStmt> statements,
+            IReadOnlyList<StructuredLexicalDefer>? inherited = null)
         {
             var body = new List<StructuredStmt>(statements.Count);
+            var cleanup = new List<StructuredLexicalDefer>(inherited ?? Array.Empty<StructuredLexicalDefer>());
             foreach (var stmt in statements)
             {
                 switch (stmt)
                 {
+                    case StructuredLexicalDefer deferred:
+                        if (inherited is not null || cleanup.Count >= 16 ||
+                            deferred.Body.Count == 0 || deferred.Body.Count > 16 ||
+                            deferred.Body.Any(s => s is not StructuredSet set || !TrapInlinePure(set.Value)))
+                            throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: only root scalar assignment defers are verified");
+                        cleanup.Add(deferred);
+                        break;
                     case StructuredLet declaration when TrapInlinePure(declaration.Initializer):
                     case StructuredSet assignment when TrapInlinePure(assignment.Value):
                         body.Add(stmt);
                         break;
                     case StructuredLet declaration when TrapInlineCheckedI64(declaration.Initializer):
                         TrapInlineCheckedAssignment(body, declaration.Initializer,
-                            value => declaration with { Initializer = value });
+                            value => declaration with { Initializer = value }, cleanup);
                         break;
                     case StructuredSet assignment when TrapInlineCheckedI64(assignment.Value):
                         TrapInlineCheckedAssignment(body, assignment.Value,
-                            value => assignment with { Value = value });
+                            value => assignment with { Value = value }, cleanup);
                         break;
                     case StructuredIf conditional when TrapInlinePure(conditional.Condition):
                         body.Add(conditional with {
-                            Then = TrapInlineStatements(conditional.Then),
-                            Else = conditional.Else is null ? null : TrapInlineStatements(conditional.Else)
+                            Then = TrapInlineStatements(conditional.Then, cleanup),
+                            Else = conditional.Else is null ? null : TrapInlineStatements(conditional.Else, cleanup)
                         });
                         break;
                     case StructuredLocalExit { Value: { } value } returned when
                         value.Type == IrValueType.I64 && TrapInlinePure(value):
-                        body.Add(new StructuredLocalExit(returned.Offset,
-                            new StructuredResult(returned.Offset, value, true, IrValueType.ResultI64)));
+                        body.AddRange(TrapInlineExit(
+                            new StructuredResult(returned.Offset, value, true, IrValueType.ResultI64), cleanup));
                         break;
                     case StructuredLocalExit { Value: { } value } returned when TrapInlineCheckedI64(value):
-                        body.Add(new StructuredLocalExit(returned.Offset,
-                            new StructuredTrap(returned.Offset, value, IrValueType.ResultI64)));
+                        body.AddRange(TrapInlineExit(
+                            new StructuredTrap(returned.Offset, value, IrValueType.ResultI64), cleanup));
                         break;
                     case StructuredSignal { Effect: CfgGuestEffect.Throw, Error: StructuredGuestError } signal:
-                        body.Add(new StructuredLocalExit(signal.Offset,
-                            new StructuredResult(signal.Offset, signal.Error, false, IrValueType.ResultI64)));
+                        body.AddRange(TrapInlineExit(
+                            new StructuredResult(signal.Offset, signal.Error, false, IrValueType.ResultI64), cleanup));
                         break;
                     // Terminal effects remain terminal and never become Err.
                     case StructuredSignal { Effect: CfgGuestEffect.Panic or CfgGuestEffect.Raise,
-                        Error: StructuredGuestError }:
+                        Error: StructuredGuestError } when cleanup.Count == 0:
                         body.Add(stmt);
                         break;
                     default:

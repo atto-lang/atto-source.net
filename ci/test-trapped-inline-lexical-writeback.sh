@@ -53,3 +53,12 @@ reject effectful-condition 'pub fnc main():int{let int n=0;val Result<int,Error>
 reject nested 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{return sync task<int>{return 42;};};return 0;}' E_TRAP_INLINE_TASK_UNSUPPORTED
 reject cleanup 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer stdio.stdout.write("D");return 42;};return 0;}' E_LEXICAL_CLEANUP_UNSUPPORTED
 reject helper 'fnc f():int{return 42;}pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{return f();};return 0;}' E_TRAP_INLINE_TASK_UNSUPPORTED
+
+run_guest defer-error-lifo 'pub fnc main():int{let int n=0;val Option<int> missing=None;val Result<int,Error> r=trap! sync task<int>{n=2;defer {n=42;} defer {n=7;} val int x=missing.unwrap();return x;};guard r.is_err(){return 1;}return n;}' 0 42
+run_guest defer-normal-return-snapshot 'pub fnc main():int{let int n=2;val Result<int,Error> r=trap! sync task<int>{defer {n=40;} return n;};guard r.is_ok(),n eq 40 {return 1;}return r.unwrap()+n;}' 0 42
+run_guest defer-not-yet-registered 'pub fnc main():int{let int n=42;val Option<int> missing=None;val Result<int,Error> r=trap! sync task<int>{val int x=missing.unwrap();defer {n=1;}return x;};guard r.is_err(){return 1;}return n;}' 0 42
+run_guest defer-branch-throw 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{defer {n=42;}if true {throw! new Error("bad");}return 1;};guard r.is_err(){return 1;}return n;}' 0 42
+run_guest defer-exactly-once 'pub fnc main():int{let int n=1;let int previous=0;val Result<int,Error> r=trap! sync task<int>{defer {previous=n;n=42;}return 0;};guard previous eq 1,n eq 42 {return 1;}return n;}' 0 42
+reject defer-fallible 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{defer {n=n+1;}return 42;};return 0;}' E_LEXICAL_CLEANUP_UNSUPPORTED
+reject defer-branch-local 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{if true {defer {n=1;}}return 42;};return 0;}' E_LEXICAL_CLEANUP_UNSUPPORTED
+reject defer-terminal 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{defer {n=1;}if true {panic! new Error("bad");}return 42;};return 0;}' E_TRAP_INLINE_TASK_UNSUPPORTED
