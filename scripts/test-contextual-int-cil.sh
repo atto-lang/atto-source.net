@@ -23,7 +23,10 @@ program 'int factor' 'factor * value' 'const x = Scale::(6); const y = x; return
 program 'int factor, int offset' 'factor * value + offset' 'const x = Scale::(offset=7,factor=5); return x.apply(7);' >"$work/named.atto"
 program 'int factor, int offset' 'factor * value + offset' 'let n = 3; const x = Scale::(offset=n+1,factor=n); set n = 9; return x.apply(5) + Scale::(2,1).apply(7);' >"$work/set-snapshot.atto"
 program 'int factor, int offset' 'factor * value + offset' 'return Scale::(offset=7,factor=5).apply(7);' >"$work/direct-named.atto"
-for spec in direct:42 reuse:20 multi:50 alias:42 named:42 set-snapshot:34 direct-named:42; do
+program 'int factor, int offset' 'factor * value + offset' 'return 1 + Scale::(offset=7,factor=5).apply(7);' >"$work/named-before.atto"
+program 'int factor, int offset' 'factor * value + offset' 'return Scale::(offset=7,factor=5).apply(7) + 1;' >"$work/named-after.atto"
+program 'int factor, int offset' 'factor * value + offset' 'return Scale::(offset=7,factor=5).apply(7) - Scale::(factor=2,offset=1).apply(5);' >"$work/named-pair.atto"
+for spec in direct:42 reuse:20 multi:50 alias:42 named:42 set-snapshot:34 direct-named:42 named-before:43 named-after:43 named-pair:31; do
   name="${spec%:*}"; expected="${spec#*:}"
   rm -f "$guest"
   compile "$work/$name.atto" "$guest"
@@ -31,7 +34,7 @@ for spec in direct:42 reuse:20 multi:50 alias:42 named:42 set-snapshot:34 direct
   dotnet build "$host" -c Release -t:Rebuild
   expect_exit "$expected" dotnet run --no-build -c Release --project "$host"
   echo "PASS CONTEXT_CORECLR $name exit=$expected"
-  if [[ "$name" == multi || "$name" == alias || "$name" == named || "$name" == set-snapshot || "$name" == direct-named ]]; then
+  if [[ "$name" == multi || "$name" == alias || "$name" == named || "$name" == set-snapshot || "$name" == direct-named || "$name" == named-before || "$name" == named-after || "$name" == named-pair ]]; then
     dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true --self-contained true -o "$work/native-$name"
     expect_exit "$expected" "$work/native-$name/Atto.Cil.Guest.Host"
     echo "PASS CONTEXT_NATIVEAOT $name exit=$expected"
@@ -67,7 +70,7 @@ for body in 'set n = 9; return Scale::(2,1).apply(3);' 'const x = Scale::(2,1); 
   echo "PASS CONTEXT_SET_REJECT $body"
 done
 
-for body in 'return 1 + Scale::(offset=7,factor=5).apply(7);' 'return Scale::(offset=7,factor=5).apply(7) + 1;' 'return Scale::(offset=7,offset=5).apply(7);'; do
+for body in 'return Scale::(offset=7,5).apply(7);' 'return Scale::(offset=7,offset=5).apply(7);'; do
   program 'int factor, int offset' 'factor * value + offset' "$body" >"$work/negative.atto"
   rm -f "$work/rejected.dll"
   status=0; compile "$work/negative.atto" "$work/rejected.dll" >"$work/stdout" 2>"$work/stderr" || status=$?
