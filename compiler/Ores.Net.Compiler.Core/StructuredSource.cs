@@ -2348,11 +2348,100 @@ public static partial class OresStructuredParser
                 new StructuredInt(at, 0), StructuredBindingKind.Const), false);
         }
 
+        // Scalar capture only: no arbitrary RHS, reference payload, runtime
+        // aggregate allocation, mutable loan or recursive projection.
+        private (StructuredStmt Statement, bool Returns) ScalarDestructureCapture(int at)
+        {
+            Expect("const");
+            string open = Current.Text;
+            string kind = open == "(" ? "Tuple" : "Record";
+            string close = open == "(" ? ")" : "}";
+            Expect(open);
+            var names = new List<string>();
+            var unique = new HashSet<string>(StringComparer.Ordinal);
+            while (Current.Text != close)
+            {
+                if (names.Count >= 64) throw Error("E_DESTRUCTURE_LIMIT");
+                if (Current.Text is "let" or "val" or "mut" or "take" or "borrow" or "copy" or "share")
+                    throw Error("E_DESTRUCTURE_POLICY_UNSUPPORTED: scalar readonly const leaves only");
+                Take("const");
+                string name = NamedAggregateIdentifier();
+                if (name == "_" || !unique.Add(name))
+                    throw Error("E_DESTRUCTURE_DUPLICATE_OR_DISCARD");
+                names.Add(name);
+                if (!Take(",")) break;
+            }
+            Expect(close);
+            Expect("as");
+            string target = kind;
+            if (Current.Text is "Tuple" or "Record" or "Array")
+            {
+                target = Current.Text;
+                index++;
+            }
+            string capture = NamedAggregateIdentifier();
+            if (!unique.Add(capture)) throw Error("E_DESTRUCTURE_DUPLICATE: capture collides with leaf");
+            Expect("=");
+            string sourceName = NamedAggregateIdentifier();
+            Expect(";");
+            var source = FindAggregate(sourceName);
+            if (source is null || source.Wrapper != kind || scopes.Any(scope => scope.ContainsKey(sourceName)))
+                throw Error("E_DESTRUCTURE_KIND: expected initialized " + kind);
+            if (target != kind && !(kind == "Tuple" && target == "Record"))
+                throw Error("E_DESTRUCTURE_CONVERSION_UNSUPPORTED");
+            if ((kind == "Tuple" && names.Count != source.Values.Count) ||
+                (names.Count == 0 && source.Values.Count != 0))
+                throw Error("E_DESTRUCTURE_ARITY");
+            if (source.Values.Values.Any(v => v is not StructuredInt and not StructuredBool))
+                throw Error("E_DESTRUCTURE_SOURCE_UNSUPPORTED: constant scalar fields only");
+            foreach (var name in unique)
+                if (scopes.Any(scope => scope.ContainsKey(name)) ||
+                    aggregateScopes.Any(scope => scope.ContainsKey(name)) ||
+                    localTypeScopes.Any(scope => scope.Contains(name)) ||
+                    namedAggregateScopes.Any(scope => scope.ContainsKey(name)))
+                    throw Error("E_DESTRUCTURE_DUPLICATE: " + name);
+            var values = new Dictionary<string, StructuredExpr>(StringComparer.Ordinal);
+            var writes = new List<StructuredAggregateScalarWrite>();
+            var pending = new Dictionary<string, LocalBinding>(StringComparer.Ordinal);
+            for (int i = 0; i < names.Count; ++i)
+            {
+                string name = names[i];
+                string key = kind == "Tuple" ? i.ToString(CultureInfo.InvariantCulture) : name;
+                if (!source.Values.TryGetValue(key, out var value))
+                    throw Error("E_DESTRUCTURE_FIELD: missing field " + key);
+                values.Add(name, value);
+                pending.Add(name, new LocalBinding(value.Type, StructuredBindingKind.Const, ConstantValue(value)));
+                writes.Add(new StructuredAggregateScalarWrite(name, value.Type, value));
+            }
+            var shape = source.Shape;
+            IReadOnlyDictionary<string, StructuredExpr> captured = source.Values;
+            if (target != kind)
+            {
+                var plan = new ClosedAggregateSpreadPlan(ClosedAggregateKind.ReadonlyRecord);
+                foreach (var name in names)
+                    plan.AddNamed(name, values[name].Type == IrValueType.Bool ? "bool" : "int");
+                shape = plan.InferShape();
+                captured = new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredExpr>(values);
+            }
+            // Commit all bindings only after checking every path and policy.
+            foreach (var entry in pending) scopes[^1].Add(entry.Key, entry.Value);
+            aggregateScopes[^1].Add(capture, new StaticAggregate(shape, captured, target));
+            if (writes.Count == 0)
+                return (new StructuredLet(at, "$aggregate_" + aggregateSentinels++, IrValueType.I64,
+                    new StructuredInt(at, 0), StructuredBindingKind.Const), false);
+            return (new StructuredAggregateRuntimeLet(at, Array.AsReadOnly(writes.ToArray())), false);
+        }
+
         private (StructuredStmt Statement, bool Returns) Statement(int depth, bool outerElse = false, bool keywordArm = false)
         {
             Budget(depth);
             int at = Current.Offset;
             if (StartsLocalPair()) return LocalPair(depth, at);
+            if (Current.Text == "const" && index + 1 < tokens.Count &&
+                tokens[index + 1].Text is ("(" or "{"))
+                return ScalarDestructureCapture(at);
+            if (Current.Text == "const" && index + 1 < tokens.Count && tokens[index + 1].Text == "[")
+                throw Error("E_DESTRUCTURE_ARRAY_UNSUPPORTED: checked array capture layout required");
             if (StartsNamedAggregate()) return NamedAggregate(depth, at);
             if (Current.Text is "class" or "actor" ||
                 (Current.Text == "define" && index + 1 < tokens.Count &&
