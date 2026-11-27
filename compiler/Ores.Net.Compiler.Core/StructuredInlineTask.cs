@@ -53,6 +53,11 @@ public static partial class OresStructuredParser
         private int? StatementWritebackOffset()
         {
             if (IsDirectInlineStatementValue(index)) return Current.Offset;
+            // Only a complete statement RHS can carry lexical writeback
+            // through a trapped inline task, never an arbitrary operand.
+            if (Current.Text is ("trap" or "trap!") &&
+                IsDirectInlineStatementValue(index + 1))
+                return Current.Offset;
             int parens = 0, braces = 0, brackets = 0;
             for (int cursor = index; cursor + 2 < tokens.Count; cursor++)
             {
