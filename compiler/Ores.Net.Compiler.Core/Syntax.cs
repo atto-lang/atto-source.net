@@ -1047,6 +1047,14 @@ public static partial class OresParser
             return factor;
         }
 
+        private QuantityUnit ReadDeclaredDimension()
+        {
+            string name = ReadQuantityName();
+            if (!_dimensions.TryGetValue(name, out var vector))
+                throw new FormatException("E_UNIT_NAME: unknown or forward dimension");
+            return vector;
+        }
+
         private void ParseQuantityDeclarations()
         {
             while (Current.Text == "define" && tokens[_index + 1].Text is ("dimension" or "unit"))
@@ -1061,8 +1069,24 @@ public static partial class OresParser
                     throw new FormatException($"E_UNIT_DUPLICATE: quantity name '{name}' is already declared");
                 if (dimension)
                 {
+                    var vector = QuantityUnit.Base(name);
+                    if (Take("="))
+                    {
+                        if (StrictI64) throw new FormatException("E_VERIFY_UNSUPPORTED: compound dimension pilot is not strict-profile admitted");
+                        vector = ReadDeclaredDimension();
+                        int factors = 1;
+                        while (Current.Text is "*" or "/")
+                        {
+                            bool divide = Take("/");
+                            if (!divide) Expect("*");
+                            if (++factors > 128) throw new FormatException("E_UNIT_LIMIT: compound dimension factor budget exceeded");
+                            vector = vector.Combine(ReadDeclaredDimension(), divide);
+                        }
+                        if (vector.IsScalar || _dimensions.Values.Any(v => v.HasDimension(vector)))
+                            throw new FormatException("E_UNIT_DIMENSION: equal or empty vectors require explicit nominal kind admission");
+                    }
                     Expect(";");
-                    _dimensions.Add(name, QuantityUnit.Base(name));
+                    _dimensions.Add(name, vector);
                     continue;
                 }
 
