@@ -56,6 +56,67 @@ internal sealed record BorrowedLocalIntPlan(
     }
 }
 
+// Hidden identity cannot be represented by a source token. The same closed
+// expression validator runs at parse and CIL admission, before any emission.
+internal static class NamedStage
+{
+    internal const string Identity = "$closed_named_stage";
+    internal const int MaxEdges = 1024;
+    internal static Expression Close(Expression e, string parameter, string self,
+        ref int budget, int depth = 0, bool root = true)
+    {
+        if (++budget > 128 || depth > 16)
+            throw new CompilerError("E_NAMED_STAGE_BUDGET", "closed expression budget");
+        switch (e)
+        {
+            case Literal: return e;
+            case Arg a when a.Name == parameter: return e;
+            case Binary b when b.Op is "+" or "-" or "*":
+                return new Binary(b.Op, Close(b.Left, parameter, self, ref budget, depth+1, false),
+                    Close(b.Right, parameter, self, ref budget, depth+1, false));
+            case Call call when call.Name == self && call.Args.Count == 1:
+                return new Call(Identity, [Close(call.Args[0], parameter, self, ref budget, depth+1, false)]);
+            case ValueMatch m when root:
+            {
+                if (m.Arms.Count is < 1 or > 16)
+                    throw new CompilerError("E_NAMED_STAGE_MATCH", "match arm budget");
+                var subject = Close(m.Subject, parameter, self, ref budget, depth+1, false);
+                HashSet<long> keys = [];
+                List<ValueArm> arms = [];
+                for (int i=0; i<m.Arms.Count; i++)
+                {
+                    var arm=m.Arms[i];
+                    if (arm.Binding != null || arm.Guard != null ||
+                        (arm.Literal is long key ? !keys.Add(key) : i != m.Arms.Count-1))
+                        throw new CompilerError("E_NAMED_STAGE_MATCH", "invalid closed match arm");
+                    arms.Add(new ValueArm(arm.Literal,null,null,
+                        Close(arm.Result, parameter,self,ref budget,depth+1,false)));
+                }
+                if (arms[^1].Literal != null)
+                    throw new CompilerError("E_NAMED_STAGE_MATCH", "wildcard required");
+                return new ValueMatch(subject,arms);
+            }
+            default: throw new CompilerError("E_NAMED_STAGE_CLOSED_INT", "unsupported closed integer expression");
+        }
+    }
+    internal static bool Verify(List<Function> functions)
+    {
+        if (!functions.Any(f => f.Name == Identity)) return false;
+        if (functions.Count != 2 || functions[0].Name != "main" ||
+            functions[1].Name != Identity || functions.Any(f => f.MutableWrite != null ||
+                f.MutableScalar || f.ReturnType != CheckedType.Int || f.Body.Count != 1) ||
+            functions[0].Args.Count != 0 || functions[1].Args.Count != 1 ||
+            functions[1].Args[0].StartsWith('$') ||
+            functions[0].Body[0] is not ReturnStmt { Value: Call entry } ||
+            entry.Name != Identity || entry.Args.Count != 1 || entry.Args[0] is not Literal ||
+            functions[1].Body[0] is not ReturnStmt body)
+            throw new CompilerError("E_NAMED_STAGE_GRAPH", "invalid private recursive graph");
+        int budget=0;
+        _ = Close(body.Value,functions[1].Args[0],Identity,ref budget);
+        return true;
+    }
+}
+
 internal sealed class Parser
 {
     private readonly List<string> _tokens = [];
@@ -125,8 +186,45 @@ internal sealed class Parser
         _tokens.Add("<eof>");
         _offsets.Add(source.Length);
     }
+    private List<Function> ParseNamedStage()
+    {
+        Require("pub"); Require("fnc"); Require("main"); Require("("); Require(")");
+        if (!Eat(":")) Require("->");
+        Require("int"); Require("{");
+        if (!Eat("return")) Require("^");
+        Expression upstream=ParseExpr(2,0);
+        // Explicit literal upstream; normalize the existing negative literal AST.
+        if (upstream is Binary("-",Literal { Number:0 },Literal { Number:>=0 } magnitude))
+            upstream=new Literal(-magnitude.Number);
+        if (upstream is not Literal)
+            throw new CompilerError("E_NAMED_STAGE_UPSTREAM", "literal integer upstream required");
+        Require("|>"); Require("fnc");
+        string self=Name();
+        Require("(");Require("int");string param=Name();Require(")");
+        if (self==param || self is "main" or "_" or "match" or "on" or "over" or "end" or "when"
+            || param is "_" or "match" or "on" or "over" or "end" or "when")
+            throw new CompilerError("E_NAMED_STAGE_NAME", "invalid self or parameter identity");
+        if (!Eat(":")) Require("->");
+        Require("int");Require("{");
+        if (!Eat("return")) Require("^");
+        int start=_position;
+        Expression expression=ParseExpr(0,0);
+        if (_tokens.Skip(start).Take(_position-start).Any(t=>t is "|>" or "<|"))
+            throw new CompilerError("E_NAMED_STAGE_NESTED_PIPE", "nested pipeline unavailable");
+        int budget=0;
+        expression=NamedStage.Close(expression,param,self,ref budget);
+        Eat(";");Require("}");Eat(";");Require("}");
+        if (Peek!="<eof>")
+            throw new CompilerError("E_NAMED_STAGE_TRAILING", "standalone main required");
+        return [new Function("main",[],CheckedType.Int,[new ReturnStmt(new Call(NamedStage.Identity,[upstream]))]),
+            new Function(NamedStage.Identity,[param],CheckedType.Int,[new ReturnStmt(expression)])];
+    }
+
     internal List<Function> Parse()
     {
+        for (int i=0;i+1<_tokens.Count;i++)
+            if (_tokens[i]=="|>" && _tokens[i+1]=="fnc")
+                return ParseNamedStage();
         // A lexed Pointer token is admitted only by the closed local read-lease profile.
         if (_tokens.Contains("Pointer", StringComparer.Ordinal))
         {
@@ -877,6 +975,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             _functions[index].Args.Count != 0 ||
             _functions[index].ReturnType != CheckedType.Int)
             throw new CompilerError("E_ENTRY", "requires main(): int with no args");
+        bool namedStage=NamedStage.Verify(_functions);
         int[] state = new int[_functions.Count];
         for (int i = 0; i < state.Length; i++) WalkFunction(i);
 
@@ -991,7 +1090,8 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                     foreach (var arg in c.Args)
                         if (WalkExpr(arg, owner, bound, depth) != CheckedType.Int)
                             throw new CompilerError("E_TYPE", "function expects int arguments");
-                    WalkFunction(target);
+                    if (!(namedStage && owner.Name == NamedStage.Identity && c.Name == NamedStage.Identity))
+                        WalkFunction(target);
                     return _functions[target].ReturnType;
                 case Sequence seq:
                     foreach (var item in seq.Items)
@@ -1073,6 +1173,17 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             default, default);
         var objectRef = metadata.AddTypeReference(runtimeRef,
             metadata.GetOrAddString("System"), metadata.GetOrAddString("Object"));
+        MemberReferenceHandle stackErrorCtor = default;
+        if (_functions.Any(f => f.Name == NamedStage.Identity))
+        {
+            var stackError = metadata.AddTypeReference(runtimeRef,
+                metadata.GetOrAddString("System"), metadata.GetOrAddString("InvalidOperationException"));
+            var sig = new BlobBuilder();
+            new BlobEncoder(sig).MethodSignature(isInstanceMethod:true).Parameters(1,
+                r=>r.Void(), p=>p.AddParameter().Type().String());
+            stackErrorCtor=metadata.AddMemberReference(stackError,
+                metadata.GetOrAddString(".ctor"),metadata.GetOrAddBlob(sig));
+        }
 
         // Only a trusted host-approved CLI profile may bind guest stdout to
         // process-global System.Console. This grant is not a TenantVM
@@ -1111,6 +1222,16 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             var code = new BlobBuilder();
             var il = new InstructionEncoder(code, new ControlFlowBuilder());
             var bindings = new Dictionary<string, int>(StringComparer.Ordinal);
+            if (f.Name == NamedStage.Identity)
+            {
+                var admitted = il.DefineLabel();
+                il.LoadArgument(1);il.LoadConstantI8(NamedStage.MaxEdges);
+                il.Branch(ILOpCode.Ble,admitted);
+                il.LoadString(metadata.GetOrAddUserString("E_STACK"));
+                il.OpCode(ILOpCode.Newobj);il.Token(stackErrorCtor);
+                il.OpCode(ILOpCode.Throw);
+                il.MarkLabel(admitted);
+            }
             if (f.MutableWrite is long write)
             {
                 il.LoadArgument(0);
@@ -1154,10 +1275,13 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             var f = _functions[i];
             var signature = new BlobBuilder();
             new BlobEncoder(signature).MethodSignature().Parameters(
-                f.Args.Count,
+                f.Args.Count + (f.Name == NamedStage.Identity ? 1 : 0),
                 r => { if (f.MutableWrite != null) r.Void(); else r.Type().Int64(); },
-                p => { foreach (var arg in f.Args) p.AddParameter().Type(isByRef: f.MutableWrite != null && arg == "$exclusive_slot").Int64(); });
-            metadata.AddMethodDefinition((f.MutableWrite != null ? MethodAttributes.Private : MethodAttributes.Public) |
+                p => {
+                    foreach (var arg in f.Args) p.AddParameter().Type(isByRef: f.MutableWrite != null && arg == "$exclusive_slot").Int64();
+                    if (f.Name == NamedStage.Identity) p.AddParameter().Type().Int64();
+                });
+            metadata.AddMethodDefinition((f.MutableWrite != null || f.Name == NamedStage.Identity ? MethodAttributes.Private : MethodAttributes.Public) |
                 MethodAttributes.Static | MethodAttributes.HideBySig,
                 MethodImplAttributes.IL, metadata.GetOrAddString(f.Name),
                 metadata.GetOrAddBlob(signature), bodyOffsets[i],
@@ -1165,6 +1289,11 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             for (int j = 0; j < f.Args.Count; j++)
             {
                 metadata.AddParameter(ParameterAttributes.None, metadata.GetOrAddString(f.Args[j]), j + 1);
+                nextParameter++;
+            }
+            if (f.Name == NamedStage.Identity)
+            {
+                metadata.AddParameter(ParameterAttributes.None,metadata.GetOrAddString("$depth"),f.Args.Count+1);
                 nextParameter++;
             }
         }
@@ -1250,6 +1379,14 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 return;
             case Call c:
                 foreach (var arg in c.Args) Generate(arg, f, il, bindings, matchDepth);
+                if (c.Name == NamedStage.Identity)
+                {
+                    if (f.Name == NamedStage.Identity)
+                    {
+                        il.LoadArgument(1);il.LoadConstantI8(1);il.OpCode(ILOpCode.Add_ovf);
+                    }
+                    else il.LoadConstantI8(0);
+                }
                 il.Call(MetadataTokens.MethodDefinitionHandle(_symbols[c.Name] + 1));
                 return;
             case Sequence seq:
