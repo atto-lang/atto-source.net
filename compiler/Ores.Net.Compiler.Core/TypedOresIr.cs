@@ -19,7 +19,8 @@ public enum IrValueType
     ResultOptionI64,
     GuestText,
     ResultI64Text,
-    ResultI64TextOrError
+    ResultI64TextOrError,
+    U64
 }
 
 public enum IrOpcode
@@ -38,7 +39,12 @@ public enum IrOpcode
     // Ores.Net.Runtime.StrictSigned64Arithmetic (appended; ordinals above stay stable).
     StrictRem,
     StrictMod,
-    StrictPow
+    StrictPow,
+    ConstantU64,
+    CheckedAddU64,
+    CheckedSubtractU64,
+    CheckedMultiplyU64,
+    CheckedDivideU64
 }
 
 /// <summary>
@@ -51,7 +57,10 @@ public sealed record IrInstruction(
     IrValueType Type,
     int? Left = null,
     int? Right = null,
-    long? Constant = null);
+    long? Constant = null)
+{
+    public ulong? UnsignedConstant { get; init; }
+}
 
 /// <summary>Untrusted compiler IR. Never lower an IrFunction without verification.</summary>
 public sealed record IrFunction(
@@ -113,7 +122,7 @@ public static class OresIrVerifier
                 throw new FormatException("Null IR instruction");
             if (instruction.ResultId != i)
                 throw new FormatException("IR must use unique contiguous SSA result IDs");
-            if (instruction.Type != IrValueType.I64)
+            if (instruction.Type != IrValueType.I64 || instruction.UnsignedConstant.HasValue)
                 throw new FormatException("Unsupported IR value type");
 
             if (instruction.Opcode == IrOpcode.ConstantI64)
@@ -173,6 +182,44 @@ public static class OresIrVerifier
             verified[function.ReturnId].Type != function.ResultType)
             throw new FormatException("IR return references missing or incorrect type");
 
+        return new VerifiedIrFunction(function.Name, function.ResultType,
+            Array.AsReadOnly(verified), function.ReturnId);
+    }
+
+    // Explicit opt-in until source lowering and NativeAOT ABI are integrated.
+    // Existing Verify() remains signed-only; mixed signedness is never inferred.
+    public static VerifiedIrFunction VerifyUnsigned(IrFunction function)
+    {
+        ArgumentNullException.ThrowIfNull(function);
+        if (string.IsNullOrWhiteSpace(function.Name) || function.Name.Length > 128 ||
+            !IsIdentifier(function.Name) || function.ResultType != IrValueType.U64)
+            throw new FormatException("Unsigned IR requires a valid u64 function");
+        var source = function.Instructions ?? throw new FormatException("Missing unsigned IR instructions");
+        if (source.Count == 0 || source.Count > MaxInstructions)
+            throw new FormatException("IR instruction budget exceeded");
+        var verified = new IrInstruction[source.Count];
+        for (int i = 0; i < verified.Length; i++)
+        {
+            var op = source[i] ?? throw new FormatException("Null unsigned IR instruction");
+            if (op.ResultId != i || op.Type != IrValueType.U64 || op.Constant.HasValue)
+                throw new FormatException("Unsigned IR requires contiguous typed u64 SSA");
+            if (op.Opcode == IrOpcode.ConstantU64)
+            {
+                if (!op.UnsignedConstant.HasValue || op.Left.HasValue || op.Right.HasValue)
+                    throw new FormatException("Malformed u64 constant");
+            }
+            else
+            {
+                if (op.Opcode is not (IrOpcode.CheckedAddU64 or IrOpcode.CheckedSubtractU64 or
+                    IrOpcode.CheckedMultiplyU64 or IrOpcode.CheckedDivideU64) ||
+                    op.UnsignedConstant.HasValue || !op.Left.HasValue || !op.Right.HasValue ||
+                    op.Left.Value < 0 || op.Left.Value >= i || op.Right.Value < 0 || op.Right.Value >= i)
+                    throw new FormatException("Malformed or unsupported checked u64 operation");
+            }
+            verified[i] = op;
+        }
+        if (function.ReturnId < 0 || function.ReturnId >= verified.Length)
+            throw new FormatException("Unsigned IR return references missing SSA value");
         return new VerifiedIrFunction(function.Name, function.ResultType,
             Array.AsReadOnly(verified), function.ReturnId);
     }

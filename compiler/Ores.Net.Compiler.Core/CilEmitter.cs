@@ -39,6 +39,10 @@ public static class CilEmitter
     public static void EmitLibrary(VerifiedIrFunction program, string outputFile)
         => EmitVerifiedLibrary(program, outputFile, "Run");
 
+    // Explicit unsigned ABI; never publish a u64 program through the signed Run entry.
+    public static void EmitUnsignedLibrary(VerifiedIrFunction program, string outputFile)
+        => EmitVerifiedLibrary(program, outputFile, "RunU64", unsignedResult: true);
+
     // Distinct static ABI for the closed, experimental Task<int> root profile.
     // The matching native host supplies the statically linked Task/Future entry
     // shim; the compiled producer is ordinary verified i64 CIL, not interpreted.
@@ -49,9 +53,11 @@ public static class CilEmitter
     }
 
     private static void EmitVerifiedLibrary(VerifiedIrFunction program, string outputFile,
-        string entryName)
+        string entryName, bool unsignedResult = false)
     {
         ArgumentNullException.ThrowIfNull(program);
+        if (program.ResultType != (unsignedResult ? IrValueType.U64 : IrValueType.I64))
+            throw new FormatException("Verified scalar ABI signedness mismatch");
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
         const int maxLocalSlots = 16_384;
         if (program.Instructions.Count > maxLocalSlots)
@@ -63,7 +69,10 @@ public static class CilEmitter
             var localsBlob = new BlobBuilder();
             var locals = new BlobEncoder(localsBlob).LocalVariableSignature(count);
             for (int i = 0; i < count; i++)
-                locals.AddVariable().Type().Int64();
+            {
+                if (unsignedResult) locals.AddVariable().Type().UInt64();
+                else locals.AddVariable().Type().Int64();
+            }
             var localSignature = metadata.AddStandaloneSignature(
                 metadata.GetOrAddBlob(localsBlob));
 
@@ -77,7 +86,8 @@ public static class CilEmitter
         }, entryName, hostCallIdentity: string.Join(";", program.Instructions
             .Where(op => op.Opcode is IrOpcode.DotnetMathAbsI64 or IrOpcode.DotnetMathMaxI64 or
                 IrOpcode.StrictRem or IrOpcode.StrictMod or IrOpcode.StrictPow)
-            .Select(op => op.Opcode.ToString()).Distinct().Order(StringComparer.Ordinal)));
+            .Select(op => op.Opcode.ToString()).Distinct().Order(StringComparer.Ordinal)),
+            unsignedResult: unsignedResult);
     }
 
     // Experimental CFG entry point. Only a verified function is accepted;
@@ -176,6 +186,27 @@ public static class CilEmitter
                 case IrOpcode.ConstantI64:
                     il.LoadConstantI8(operation.Constant!.Value);
                     break;
+                case IrOpcode.ConstantU64:
+                    // ldc.i8 carries an exact 64-bit bit pattern; the local and return
+                    // signatures, verifier and operation determine unsigned semantics.
+                    il.LoadConstantI8(unchecked((long)operation.UnsignedConstant!.Value));
+                    break;
+                case IrOpcode.CheckedAddU64:
+                case IrOpcode.CheckedSubtractU64:
+                case IrOpcode.CheckedMultiplyU64:
+                case IrOpcode.CheckedDivideU64:
+                    il.LoadLocal(operation.Left!.Value);
+                    il.LoadLocal(operation.Right!.Value);
+                    il.OpCode(operation.Opcode switch
+                    {
+                        IrOpcode.CheckedAddU64 => ILOpCode.Add_ovf_un,
+                        IrOpcode.CheckedSubtractU64 => ILOpCode.Sub_ovf_un,
+                        IrOpcode.CheckedMultiplyU64 => ILOpCode.Mul_ovf_un,
+                        IrOpcode.CheckedDivideU64 => ILOpCode.Div_un,
+                        _ => throw new FormatException("Unsupported unsigned IR opcode")
+                    });
+                    maxStack = 2;
+                    break;
                 case IrOpcode.SignedRemainderLiteral:
                     throw new FormatException("Removed Oreslang operator '%' cannot reach CIL emission");
                 case IrOpcode.DotnetMathAbsI64:
@@ -234,7 +265,7 @@ public static class CilEmitter
         Func<MetadataBuilder, MethodBodyStreamEncoder,
             (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody,
         string entryName = "Run",
-        string hostCallIdentity = "")
+        string hostCallIdentity = "", bool unsignedResult = false)
     {
         var ilStream = new BlobBuilder();
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
@@ -262,6 +293,8 @@ public static class CilEmitter
         // Preserve established scalar IDs, but domain-separate the Task ABI:
         // identical producer IL with a different entry symbol is not the same
         // module and must not reuse a scalar module identity in build caches.
+        if (unsignedResult)
+            contentHash.AppendData(System.Text.Encoding.UTF8.GetBytes("atto-u64-abi-v1"));
         if (entryName != "Run")
             contentHash.AppendData(System.Text.Encoding.UTF8.GetBytes("ores-task-abi-v1\0" + entryName));
         // MemberRef tokens are not sufficient to distinguish similarly shaped
@@ -294,7 +327,11 @@ public static class CilEmitter
         var signature = new BlobBuilder();
         new BlobEncoder(signature).MethodSignature().Parameters(
             0,
-            returnType => returnType.Type().Int64(),
+            returnType =>
+            {
+                if (unsignedResult) returnType.Type().UInt64();
+                else returnType.Type().Int64();
+            },
             parameters => { });
 
         // Method and type tables are ordered deliberately: <Module> owns zero

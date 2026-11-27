@@ -40,6 +40,14 @@ if (args.Length == 1 && args[0] == "--static-select-admission")
     return;
 }
 
+if (args.Length == 1 && args[0] == "--unsigned-ir")
+{
+    UnsignedIrCilTests.Run();
+    Console.WriteLine("UNSIGNED_IR_CIL_METADATA_PASS (not native guest execution)");
+    return;
+}
+
+UnsignedIrCilTests.Run();
 DisjointFieldPlaceAdmissionTests.Run(); // reject-only; never guest parity
 ReadonlyShapeProjectionV1Tests.Run();
 NativeSourceIdentityV1SelfTest.Run();
