@@ -32,7 +32,7 @@ internal sealed record ReturnStmt(Expression Value) : Statement;
 // Signed i64 guest results; bool is internal to guards.
 internal enum CheckedType { Int, Bool, Void }
 internal sealed record Function(string Name, List<string> Args,
-    CheckedType ReturnType, List<Statement> Body, long? MutableWrite = null, bool MutableScalar = false);
+    CheckedType ReturnType, List<Statement> Body, long? MutableWrite = null, bool MutableScalar = false, PointPlacement? Placement = null);
 
 // Typed, local-only read lease. Source pointer authority is verified and
 // erased before ordinary CIL lowering; it is never represented as a raw
@@ -53,6 +53,48 @@ internal sealed record BorrowedLocalIntPlan(
         // observable pointer identity, this is a legal stack-promotion
         // to ordinary i64 CIL, not a guest pointer allocation.
         return new Function("main", [], CheckedType.Int, [new ReturnStmt(new Literal(Initial))]);
+    }
+}
+
+
+internal enum PointOp { Construct, Bind, CopyField, Detach, Destroy, Free }
+internal sealed record PointStep(PointOp Op, long X = 0, long Y = 0, int Field = 0);
+internal sealed record PointPlacement(List<PointStep> Steps, List<int> Result)
+{
+    internal static CompilerError Invalid() => new("E_POINTER_PLACEMENT", "invalid closed typed Point placement profile");
+    internal void Verify()
+    {
+        if (Steps.Count is < 1 or > 32 || Result.Count is < 1 or > 2) throw Invalid();
+        int state = 0, generation = 0;
+        int? bound = null;
+        long[] fields = [0, 0];
+        List<long> copies = [];
+        foreach (var s in Steps)
+        {
+            if (s.Op != PointOp.Construct && (s.X != 0 || s.Y != 0) ||
+                s.Op != PointOp.CopyField && s.Field != 0) throw Invalid();
+            switch (s.Op)
+            {
+                case PointOp.Construct when state == 0 && bound == null && s.X >= 0 && s.Y >= 0:
+                    fields = [s.X,s.Y]; generation++; state = 1; break;
+                case PointOp.Bind when state == 1 && bound == null: bound = generation; break;
+                case PointOp.CopyField when state == 1 && bound == generation && s.Field is 0 or 1:
+                    copies.Add(fields[s.Field]); break;
+                case PointOp.Detach when state == 1 && bound == generation: bound = null; break;
+                case PointOp.Destroy when state == 1 && bound == null: state = 0; break;
+                case PointOp.Free when state == 0 && bound == null: state = 2; break;
+                default: throw Invalid();
+            }
+        }
+        if (state != 2 || bound != null) throw Invalid();
+        long answer = 0;
+        try {
+            foreach (int i in Result)
+            {
+                if (i < 0 || i >= copies.Count) throw Invalid();
+                answer = checked(answer + copies[i]);
+            }
+        } catch (OverflowException) { throw Invalid(); }
     }
 }
 
@@ -127,6 +169,8 @@ internal sealed class Parser
     }
     internal List<Function> Parse()
     {
+        if (_tokens.Contains("Storage", StringComparer.Ordinal) && _tokens.Contains("RawPointer", StringComparer.Ordinal))
+            return ParsePointPlacement();
         if (_tokens.Contains("RawPointer", StringComparer.Ordinal))
             return ParseReusableSlot();
         // A lexed Pointer token is admitted only by the closed local read-lease profile.
@@ -576,6 +620,75 @@ internal sealed class Parser
     }
 
 
+
+    private List<Function> ParsePointPlacement()
+    {
+        void Need(string s) { if (!Eat(s)) throw PointPlacement.Invalid(); }
+        void Op(string s)
+        {
+            int offset = _offsets[_position];
+            Need(s);
+            if (Peek != "!" || _offsets[_position] != offset + s.Length) throw PointPlacement.Invalid();
+            int bang = _offsets[_position];
+            Need("!");
+            if (_position >= _offsets.Count || _offsets[_position] <= bang + 1)
+                throw PointPlacement.Invalid();
+        }
+        string Id()
+        {
+            string n;
+            try { n=PointerName(); } catch (CompilerError) { throw PointPlacement.Invalid(); }
+            if (n.Length>64 || n[0] is < 'a' or > 'z' ||
+                n is "s" or "p" or "x" or "y" or "new" or "at" or "to" or "empty" or "alloc" or "destroy" or "free"
+                or "struct" or "class" or "constructor" or "self" or "with" or "mut" or "null" or "if" or "else" or "end"
+                or "for" or "while" or "defer" or "recover" or "freeze" or "weak" or "move" or "export" or "from")
+                throw PointPlacement.Invalid();
+            return n;
+        }
+        long Number()
+        {
+            if (!long.TryParse(Peek, NumberStyles.None, CultureInfo.InvariantCulture, out long n)) throw PointPlacement.Invalid();
+            _position++; return n;
+        }
+        foreach (var s in new[]{"define","struct","Point","{","int","x",";","int","y",";","}","with","{","constructor","(","int","x",",","int","y",")","{","self",".","x","=","x",";","self",".","y","=","y",";","}","}","pub","fnc","main","(",")",":","int","{","let","Storage","<","Point",">","s","="}) Need(s);
+        Op("alloc"); Need("Point"); Need(";");
+        foreach (var s in new[]{"let","mut","RawPointer","<","Point",">","p","=","RawPointer",".","empty","<","Point",">","(",")",";"}) Need(s);
+        List<PointStep> steps = [];
+        Dictionary<string,int> copies = new(StringComparer.Ordinal);
+        while (Peek != "return")
+        {
+            if (steps.Count >= 32) throw PointPlacement.Invalid();
+            PointStep step;
+            if (Eat("new"))
+            {
+                Need("Point"); Need("("); long x=Number(); Need(","); long y=Number(); Need(")"); Need("at"); Need("s");
+                step=new(PointOp.Construct,x,y);
+            }
+            else if (Peek=="ref") { Op("ref"); Need("p"); Need("to"); Need("s"); step=new(PointOp.Bind); }
+            else if (Eat("val"))
+            {
+                var n=Id(); if (!copies.TryAdd(n,copies.Count)) throw PointPlacement.Invalid();
+                Need("="); Need("("); Op("deref"); Need("p"); Need(")"); Need(".");
+                int field=0; if (!Eat("x")) { Need("y"); field=1; }
+                step=new(PointOp.CopyField,Field:field);
+            }
+            else if (Peek=="unref") { Op("unref"); Need("p"); step=new(PointOp.Detach); }
+            else if (Peek=="destroy") { Op("destroy"); Need("s"); step=new(PointOp.Destroy); }
+            else if (Peek=="free") { Op("free"); Need("s"); step=new(PointOp.Free); }
+            else throw PointPlacement.Invalid();
+            Need(";"); steps.Add(step);
+        }
+        Need("return");
+        List<int> result=[];
+        do {
+            if (result.Count>=2 || !copies.TryGetValue(Id(),out var i)) throw PointPlacement.Invalid();
+            result.Add(i);
+        } while (Eat("+"));
+        Need(";"); Need("}"); if (Peek!="<eof>") throw PointPlacement.Invalid();
+        var plan=new PointPlacement(steps,result); plan.Verify();
+        return [new Function("main",[],CheckedType.Int,[],Placement:plan)];
+    }
+
     private List<Function> ParseReusableSlot()
     {
         static CompilerError Invalid() => new("E_POINTER_SLOT_PROFILE", "invalid reusable local scalar slot");
@@ -976,6 +1089,13 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             if (state[id] == 1) throw new CompilerError("E_CYCLE", _functions[id].Name);
             state[id] = 1;
             var function = _functions[id];
+            if (function.Placement is PointPlacement placement)
+            {
+                if (_functions.Count != 1 || function.Name!="main" || function.Args.Count!=0 ||
+                    function.Body.Count!=0 || function.ReturnType!=CheckedType.Int || function.MutableWrite!=null || function.MutableScalar)
+                    throw PointPlacement.Invalid();
+                placement.Verify(); state[id]=2; return;
+            }
             if (function.MutableWrite != null)
             {
                 if (function.ReturnType != CheckedType.Void ||
@@ -1195,12 +1315,59 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
         for (int i = 0; i < 21; i++) locals.AddVariable().Type().Int64();
         var localSigHandle = metadata.AddStandaloneSignature(metadata.GetOrAddBlob(localSig));
 
+        bool hasPlacement=_functions.Any(f=>f.Placement!=null);
+        TypeReferenceHandle valueTypeRef=default;
+        FieldDefinitionHandle pointX=default, pointY=default;
+        StandaloneSignatureHandle placementLocalSig=default;
+        var pointType=MetadataTokens.TypeDefinitionHandle(3);
+        if (hasPlacement)
+        {
+            valueTypeRef=metadata.AddTypeReference(runtimeRef,metadata.GetOrAddString("System"),metadata.GetOrAddString("ValueType"));
+            var fieldSig=new BlobBuilder();
+            new BlobEncoder(fieldSig).FieldSignature().Int64();
+            var fieldBlob=metadata.GetOrAddBlob(fieldSig);
+            pointX=metadata.AddFieldDefinition(FieldAttributes.Public,metadata.GetOrAddString("x"),fieldBlob);
+            pointY=metadata.AddFieldDefinition(FieldAttributes.Public,metadata.GetOrAddString("y"),fieldBlob);
+            var sig=new BlobBuilder();
+            var vars=new BlobEncoder(sig).LocalVariableSignature(33);
+            vars.AddVariable().Type().Type(pointType,isValueType:true);
+            for(int i=0;i<32;i++) vars.AddVariable().Type().Int64();
+            placementLocalSig=metadata.AddStandaloneSignature(metadata.GetOrAddBlob(sig));
+        }
         List<int> bodyOffsets = [];
         foreach (var f in _functions)
         {
             var code = new BlobBuilder();
             var il = new InstructionEncoder(code, new ControlFlowBuilder());
             var bindings = new Dictionary<string, int>(StringComparer.Ordinal);
+            if (f.Placement is PointPlacement placement)
+            {
+                placement.Verify();
+                int next=1;
+                foreach (var step in placement.Steps)
+                {
+                    switch(step.Op)
+                    {
+                        case PointOp.Construct:
+                            il.LoadLocalAddress(0); il.LoadConstantI8(step.X); il.OpCode(ILOpCode.Stfld); il.Token(pointX);
+                            il.LoadLocalAddress(0); il.LoadConstantI8(step.Y); il.OpCode(ILOpCode.Stfld); il.Token(pointY);
+                            break;
+                        case PointOp.CopyField:
+                            il.LoadLocalAddress(0); il.OpCode(ILOpCode.Ldfld); il.Token(step.Field==0?pointX:pointY);
+                            il.StoreLocal(next++); break;
+                        case PointOp.Destroy:
+                        case PointOp.Free:
+                            il.LoadLocalAddress(0); il.OpCode(ILOpCode.Initobj); il.Token(pointType); break;
+                        case PointOp.Bind:
+                        case PointOp.Detach: break;
+                    }
+                }
+                il.LoadLocal(1+placement.Result[0]);
+                if(placement.Result.Count==2) { il.LoadLocal(1+placement.Result[1]); il.OpCode(ILOpCode.Add_ovf); }
+                il.OpCode(ILOpCode.Ret);
+                bodyOffsets.Add(bodyStream.AddMethodBody(il,maxStack:64,localVariablesSignature:placementLocalSig));
+                continue;
+            }
             if (f.MutableWrite is long write)
             {
                 il.LoadArgument(0);
@@ -1265,6 +1432,10 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             metadata.GetOrAddString("AttoGenerated"), metadata.GetOrAddString("Functions"),
             objectRef, MetadataTokens.FieldDefinitionHandle(1), MetadataTokens.MethodDefinitionHandle(1));
 
+        if(hasPlacement)
+            metadata.AddTypeDefinition(TypeAttributes.NotPublic | TypeAttributes.Sealed | TypeAttributes.SequentialLayout | TypeAttributes.BeforeFieldInit,
+                metadata.GetOrAddString("AttoGenerated"),metadata.GetOrAddString("Point"),
+                valueTypeRef,pointX,MetadataTokens.MethodDefinitionHandle(_functions.Count+1));
         var builder = new ManagedPEBuilder(
             new PEHeaderBuilder(imageCharacteristics: Characteristics.ExecutableImage | Characteristics.Dll),
             new MetadataRootBuilder(metadata), ilStream, flags: CorFlags.ILOnly,
