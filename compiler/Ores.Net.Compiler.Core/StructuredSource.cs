@@ -2507,10 +2507,13 @@ public static partial class OresStructuredParser
                         "val" => StructuredBindingKind.Val,
                         _ => StructuredBindingKind.Const
                     };
+                // Local const mut and val share one fixed-binding representation.
                 if (!typeFirstImmutable && kind == StructuredBindingKind.Const &&
                     index + 1 < tokens.Count && tokens[index + 1].Text == "mut")
-                    throw new FormatException(
-                        $"E_CONST_MUT_UNSUPPORTED: mutable constant instances require owned object lowering at offset {at}");
+                {
+                    kind = StructuredBindingKind.Val;
+                    index++; // ordinary explicit-qualifier branch consumes mut
+                }
 
                 bool annotated;
                 IrValueType type = IrValueType.I64;
