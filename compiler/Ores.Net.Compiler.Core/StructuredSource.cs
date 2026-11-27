@@ -2389,11 +2389,12 @@ public static partial class OresStructuredParser
                 index++;
                 // Narrow standalone-root stdout profile: literal text only,
                 // with explicit compile and host grants. No synchronous host IO.
-                if (Current.Text == "stdio")
+                if (Current.Text is "stdio" or "process")
                 {
                     if (!allowStdout)
                         throw Error("E_PERMISSION: deferred stdout requires explicit --allow-stdio");
-                    Expect("stdio"); Expect("."); Expect("stdout"); Expect("."); Expect("write"); Expect("(");
+                    bool processStdout = Current.Text == "process";
+                    Expect(processStdout ? "process" : "stdio"); Expect("."); Expect(processStdout ? "stdout" : "out"); Expect("."); Expect("write"); Expect("(");
                     string text = ErrorMessage();
                     if (text.Length > 1024)
                         throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: stdout literal budget exceeded");
