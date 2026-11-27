@@ -1362,11 +1362,18 @@ pub async routine main(): void {
             "undefined read points to identifier", "missing");
         ExpectAt("fnc main():int{missing=2;return 1;}",
             "undefined assignment points to identifier", "missing");
-        ExpectAt("fnc main():int{let int x=1;let int x=2;return x;}",
-            "duplicate declaration points to second identifier", "x=2");
+        ExpectAt("fnc main():int{const int x=1;const int x=2;return x;}",
+            "duplicate fixed declaration points to second identifier", "x=2");
+        var shadowed = OresStructuredParser.Parse(
+            "fnc main():int{let int x=1;let int x=x+1;return x;}");
+        Require(shadowed.Body[0] is StructuredLet first &&
+            shadowed.Body[1] is StructuredLet second &&
+            first.Name != second.Name &&
+            shadowed.Body[2] is StructuredReturn { Value: StructuredRead read } &&
+            read.Name == second.Name,
+            "root let shadowing has a distinct compiler-owned storage identity");
 
-        // The AST stores names, not unique binding IDs; enforce the
-        // no-shadowing contract until SSA lowering has explicit symbol IDs.
+        // Nested shadowing remains outside this bounded root scalar profile.
         ExpectAt("fnc main():int{let int x=1;if true {let int x=2;}return x;}",
             "nested shadowing", "x=2");
         ExpectAt("fnc main():int{let bool ok=true;while ok {let int ok=1;}return 0;}",
@@ -1417,8 +1424,11 @@ pub async routine main(): void {
         Reject("fnc main():int{let int x=x; return x;}", "self-reference");
         Reject("fnc main():int{return missing;}", "undefined read");
         Reject("fnc main():int{missing=2;return 1;}", "undefined assignment");
-        Reject("fnc main():int{let int x=1;let int x=2;return x;}",
-            "same-scope duplicate binding");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{let int x=1;let int x=2;return x;}").Body.Count == 3,
+            "same-scope scalar let shadowing");
+        Reject("fnc main():int{let int x=1;const int x=2;return x;}",
+            "same-scope mixed binding collision remains gated");
         Reject("fnc main():int{let int x=true;return 0;}",
             "type mismatch on declaration");
         Reject("fnc main():int{let bool ok=false;ok=3;return 0;}",
