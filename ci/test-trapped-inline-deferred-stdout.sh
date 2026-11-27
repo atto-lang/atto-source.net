@@ -7,7 +7,7 @@ host=host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 fixture=fixtures/guard-condition-list-v1/trap-sync-task-defer.atto
-test "$(git hash-object "$fixture")" = f8c78c4c36e62a840224af04aa59bd90de9dd65d
+test "$(git hash-object "$fixture")" = bcd5e2692aaaaf4c4c070a5746cd6c3ab9e5082a
 dotnet build "$compiler" -c Release
 oresnet() { dotnet run --project "$compiler" -c Release --no-build -- "$@"; }
 deny() {
@@ -56,13 +56,16 @@ run() {
   echo "PASS exact stdout $profile $name"
 }
 deny no-compile-grant "$fixture" E_PERMISSION
-run original "$fixture" D42
-printf '%s\n' 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer stdio.stdout.write("A");defer stdio.stdout.write("B");return 42;};return r.unwrap();}' >"$work/lifo.atto"
+run canonical-stdio "$fixture" D42
+sed 's/stdio\.out\.write/process.stdout.write/g' "$fixture" > "$work/process-alias.atto"
+deny no-process-compile-grant "$work/process-alias.atto" E_PERMISSION
+run canonical-process "$work/process-alias.atto" D42
+printf '%s\n' 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer stdio.out.write("A");defer stdio.out.write("B");return 42;};return r.unwrap();}' >"$work/lifo.atto"
 run lifo "$work/lifo.atto" BA42
-printf '%s\n' 'pub fnc main():int{val Option<int> missing=None;val Result<int,Error> r=trap! sync task<int>{val int x=missing.unwrap();defer stdio.stdout.write("D");return x;};guard r.is_err(){return 1;}return 42;}' >"$work/before.atto"
+printf '%s\n' 'pub fnc main():int{val Option<int> missing=None;val Result<int,Error> r=trap! sync task<int>{val int x=missing.unwrap();defer stdio.out.write("D");return x;};guard r.is_err(){return 1;}return 42;}' >"$work/before.atto"
 # Host grant is dynamically needed only if registration was reached and executed.
 run before-registration "$work/before.atto" 42
-printf '%s\n' 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer stdio.stdout.read("D");return 42;};return r.unwrap();}' >"$work/member.atto"
+printf '%s\n' 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer stdio.out.read("D");return 42;};return r.unwrap();}' >"$work/member.atto"
 deny wrong-member "$work/member.atto" "Expected 'write'" --allow-stdio
-printf '%s\n' 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer stdio.stdout.write(42);return 42;};return r.unwrap();}' >"$work/type.atto"
+printf '%s\n' 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer stdio.out.write(42);return 42;};return r.unwrap();}' >"$work/type.atto"
 deny nonliteral "$work/type.atto" "ordinary literal message" --allow-stdio
