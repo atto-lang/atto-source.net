@@ -39,8 +39,7 @@ public sealed unsafe class ControlPlaneArena32 : IDisposable
     private readonly uint _issuer;
     private byte* _records;
     private Slot* _slots;
-    private int _nextSlot;
-    private uint _freeHead;
+    private uint _freeHead, _freeTail;
     private bool _closed;
 
     public ControlPlaneArena32(int capacity)
@@ -59,7 +58,13 @@ public sealed unsafe class ControlPlaneArena32 : IDisposable
             if (_slots == null) throw new OutOfMemoryException("control metadata");
             new Span<byte>(_records, checked(capacity * RecordBytes)).Clear();
             new Span<byte>((byte*)_slots, _metadataBytes).Clear();
-            for (int i = 0; i < capacity; i++) _slots[i].Generation = 1;
+            for (int i = 0; i < capacity; i++)
+            {
+                _slots[i].Generation = 1;
+                _slots[i].FreeNext = i + 1 < capacity ? (uint)i + 2 : 0;
+            }
+            _freeHead = 1;
+            _freeTail = (uint)capacity;
         }
         catch
         {
@@ -116,17 +121,10 @@ public sealed unsafe class ControlPlaneArena32 : IDisposable
         {
             handle = 0;
             if (_closed) return false;
-            int slot;
-            if (_freeHead != 0)
-            {
-                slot = (int)_freeHead - 1;
-                _freeHead = _slots[slot].FreeNext;
-            }
-            else
-            {
-                if (_nextSlot >= _capacity) return false;
-                slot = _nextSlot++;
-            }
+            if (_freeHead == 0) return false;
+            int slot = (int)_freeHead - 1;
+            _freeHead = _slots[slot].FreeNext;
+            if (_freeHead == 0) _freeTail = 0;
             if (_slots[slot].Live != 0 || _slots[slot].Generation == 0)
                 throw new InvalidOperationException("corrupt or retired control slot");
             _slots[slot].Live = 1;
@@ -149,8 +147,10 @@ public sealed unsafe class ControlPlaneArena32 : IDisposable
             else
             {
                 _slots[slot].Generation++;
-                _slots[slot].FreeNext = _freeHead;
-                _freeHead = (uint)slot + 1;
+                _slots[slot].FreeNext = 0;
+                if (_freeTail == 0) _freeHead = (uint)slot + 1;
+                else _slots[(int)_freeTail - 1].FreeNext = (uint)slot + 1;
+                _freeTail = (uint)slot + 1;
             }
         }
     }
