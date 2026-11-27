@@ -21,7 +21,7 @@ public sealed record StructuredPropagate(int At, StructuredExpr Operand, IrValue
     : StructuredExpr(At, PayloadType);
 public sealed record StructuredErrorTest(int At, StructuredExpr Error, string Name, bool IsType)
     : StructuredExpr(At, IrValueType.Bool);
-internal sealed record StructuredLexicalDefer(int At, StructuredSet Cleanup) : StructuredStmt(At);
+internal sealed record StructuredLexicalDefer(int At, IReadOnlyList<StructuredSet> Cleanup) : StructuredStmt(At);
 public sealed record StructuredSignal(int At, StructuredExpr Error, CfgGuestEffect Effect)
     : StructuredStmt(At);
 
@@ -63,6 +63,7 @@ public static partial class OresStructuredParser
         private int trapOperandDepth;
         private int guardFailureDepth;
         private int? lexicalDeferScope;
+        private int lexicalDeferExpansion;
 
         private StructuredFunction WrapTrappedCallable(StructuredFunction declaration, int at)
         {
@@ -106,6 +107,7 @@ public static partial class OresStructuredParser
                 trapOperandDepth++;
                 int? previousDeferScope = lexicalDeferScope;
                 lexicalDeferScope = scopes.Count + 1;
+                lexicalDeferExpansion = 0;
                 try
                 {
                     var task = ReadInlineTask(depth + 1, imperative: false, writeBack: true);
@@ -164,7 +166,7 @@ public static partial class OresStructuredParser
         private int lexicalTrapRhsId;
         private void TrapInlineCheckedAssignment(List<StructuredStmt> body,
             StructuredExpr value, Func<StructuredExpr, StructuredStmt> install,
-            IReadOnlyList<StructuredSet> cleanup)
+            IReadOnlyList<StructuredLexicalDefer> cleanup)
         {
             int at = value.Offset;
             // This prefix is reserved by the source reader. IDs are unique
@@ -183,7 +185,7 @@ public static partial class OresStructuredParser
         }
 
         private IReadOnlyList<StructuredStmt> ExitWithCleanup(StructuredExpr result,
-            IReadOnlyList<StructuredSet> cleanup)
+            IReadOnlyList<StructuredLexicalDefer> cleanup)
         {
             if (cleanup.Count == 0) return new StructuredStmt[] { new StructuredLocalExit(result.Offset, result) };
             int at = result.Offset;
@@ -193,24 +195,34 @@ public static partial class OresStructuredParser
             var exit = new List<StructuredStmt> {
                 new StructuredLet(at, name, IrValueType.ResultI64, result, StructuredBindingKind.Val)
             };
-            for (int i = cleanup.Count - 1; i >= 0; i--) exit.Add(cleanup[i]);
+            // Reverse registration order, but preserve statement order inside
+            // each defer block. Bound the total cloned cleanup statements.
+            for (int i = cleanup.Count - 1; i >= 0; i--)
+            {
+                lexicalDeferExpansion += cleanup[i].Cleanup.Count;
+                if (lexicalDeferExpansion > MaxStatements)
+                    throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: cleanup expansion budget");
+                exit.AddRange(cleanup[i].Cleanup);
+            }
             exit.Add(new StructuredLocalExit(at, new StructuredRead(at, name, IrValueType.ResultI64)));
             return exit.AsReadOnly();
         }
 
         private IReadOnlyList<StructuredStmt> TrapInlineStatements(IReadOnlyList<StructuredStmt> statements,
-            IReadOnlyList<StructuredSet>? inherited = null)
+            IReadOnlyList<StructuredLexicalDefer>? inherited = null)
         {
-            var cleanup = new List<StructuredSet>(inherited ?? Array.Empty<StructuredSet>());
+            var cleanup = new List<StructuredLexicalDefer>(inherited ?? Array.Empty<StructuredLexicalDefer>());
             var body = new List<StructuredStmt>(statements.Count);
             foreach (var stmt in statements)
             {
                 switch (stmt)
                 {
                     case StructuredLexicalDefer deferred:
-                        if (inherited is not null || cleanup.Count >= 8)
-                            throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: only eight root registrations are admitted");
-                        cleanup.Add(deferred.Cleanup);
+                        if (inherited is not null || cleanup.Count >= 8 ||
+                            deferred.Cleanup.Count == 0 || deferred.Cleanup.Count > 16 ||
+                            deferred.Cleanup.Any(set => !TrapInlinePure(set.Value)))
+                            throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: only eight root scalar registrations with at most sixteen assignments each are admitted");
+                        cleanup.Add(deferred);
                         break;
                     case StructuredLet declaration when TrapInlinePure(declaration.Initializer):
                     case StructuredSet assignment when TrapInlinePure(assignment.Value):
