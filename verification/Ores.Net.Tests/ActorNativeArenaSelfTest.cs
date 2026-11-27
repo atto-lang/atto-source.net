@@ -68,6 +68,7 @@ internal static class ActorNativeArenaSelfTest
         Require(!staleScope.CleanupOk && arena.LiveAllocations == 0,
             "stale tracked owner is reported without suppressing later cleanup");
 
+        ReservedTenantPeakCapacity();
         AggregateLazyGrowthBudgetRefundsAfterNativeFree();
         GrowthChargesFullPeakBackingAndRollsBackOnQuotaDenial();
         SiblingGrowthDenialPreservesLiveActorAndProcessBudgets();
@@ -80,6 +81,34 @@ internal static class ActorNativeArenaSelfTest
         SteadyStateManagedAllocationBudget();
         PersistentRootManagedAllocationBudget();
         Console.WriteLine("PASS .NET unmanaged actor arena, primitive handles, stack cleanup scopes");
+    }
+
+    private static void ReservedTenantPeakCapacity()
+    {
+        var tenant = new ActorArenaBudget(12288);
+        long before = ActorArenaBudget.Process.ReservedBytes;
+        using var reservation = tenant.ReserveCapacity(12288);
+        Require(tenant.ReservedBytes == 12288 && reservation.Budget.ReservedBytes == 0,
+            "whole relocation peak promised before native backing");
+        RejectInvalid(() => tenant.ReserveCapacity(1), "no overbooking tenant promises");
+        RejectInvalid(() => reservation.Budget.ReserveCapacity(1), "no nested quota authority");
+        using var arena = new ActorNativeArena(8192, 8, reservation.Budget);
+        ulong root = arena.Allocate(16);
+        Require(root != 0 && arena.WriteInt64(root, 0, 42), "initial native backing");
+        RejectInvalid(reservation.Dispose, "refund blocked with live backing");
+        ulong next = arena.Allocate(4096);
+        Require(next != 0 && arena.ReadInt64(root) == 42, "relocation preserves live bytes");
+        Require(tenant.ReservedBytes == 12288 && reservation.Budget.ReservedBytes == 8192
+            && ActorArenaBudget.Process.ReservedBytes == before + 8192,
+            "tenant promise charged once; process counts real backing");
+        arena.Dispose();
+        reservation.Dispose();
+        reservation.Dispose();
+        Require(tenant.ReservedBytes == 0 && ActorArenaBudget.Process.ReservedBytes == before,
+            "physical backing refund and promise release exactly once");
+        using var stale = new ActorNativeArena(128, 2, reservation.Budget);
+        RejectInvalid(() => stale.Allocate(8), "retired child budget denies new backing");
+        Console.WriteLine("NET_RESERVED_TENANT_PEAK_HOST_PASS guest=0");
     }
 
     private static void AggregateLazyGrowthBudgetRefundsAfterNativeFree()
