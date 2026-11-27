@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><PublishAot>true</PublishAot><SelfContained>true</SelfContained>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="OresGenerated"><HintPath>$(UnsignedGuestAssembly)</HintPath><Private>true</Private></Reference>
+  </ItemGroup>
+</Project>
