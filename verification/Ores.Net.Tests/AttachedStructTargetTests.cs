@@ -25,6 +25,8 @@ internal static class AttachedStructTargetTests
             grouped.Replace("int • sum()", "sum():int"),
             grouped.Replace("int <- product()", "int • product()"),
             grouped.Replace("is_origin() : bool", "bool <- is_origin()"),
+            grouped.Replace("type Point = struct", "define struct Point").Replace("is_origin() : bool", "is_origin() -> bool"),
+            chained.Replace("type Point = struct", "define struct Point").Replace("is_origin() : bool", "is_origin() -> bool"),
             grouped.Replace("mtd int • sum()", "mut mtd shift(int n):void { self.x = n; } mtd int • sum()"),
             grouped.Replace("constructor(int x, int y)", "constructor(bool flag) { self.x = 1; self.y = 0; } constructor(int x, int y)"),
             grouped.Replace("with {", "with /* nested /* trivia */ comment */ {")
@@ -32,13 +34,14 @@ internal static class AttachedStructTargetTests
             Reject(source, "NET_STRUCT_WITH_NATIVEAOT_UNSUPPORTED");
         Reject(grouped.Replace("is_origin() : bool", "bool * is_origin()"), "NET_STRUCT_WITH_SYNTAX");
         Reject(grouped.Replace("int <- product()", "int <- sum()"), "NET_STRUCT_WITH_DUPLICATE");
+        Reject(grouped.Replace("type Point = struct", "define struct Point").Replace("int <- product()", "sum() -> int"), "NET_STRUCT_WITH_DUPLICATE");
         Reject(grouped.Replace("int y;", "int x;"), "NET_STRUCT_WITH_DUPLICATE");
         Reject(grouped.Replace("constructor(int x, int y)", "constructor(int a, int b) {} constructor(int x, int y)"), "NET_STRUCT_WITH_DUPLICATE");
         Reject(grouped.Replace("constructor(int x, int y)", "mut constructor(int x, int y)"), "NET_STRUCT_WITH_SYNTAX");
         Reject(grouped.Replace("constructor(int x, int y)", "print(1); constructor(int x, int y)"), "NET_STRUCT_WITH_SYNTAX");
         Reject("fnc main():int { const a=1; const b=a with {x:2}; return 0; }", "WITH_BACKEND_UNSUPPORTED");
         _ = OresStructuredParser.Parse("/* type Point = struct { int x; } with {} */ fnc main():int{return 42;}");
-        Console.WriteLine("NET_ATTACHED_STRUCT_HEADER_ADMISSION_PASS: 8 target forms; 7 rejection cases; scalar regression");
+        Console.WriteLine("NET_ATTACHED_STRUCT_HEADER_ADMISSION_PASS: 10 target forms; 8 rejection cases; scalar regression");
     }
     private static void Reject(string source, string diagnostic)
     {

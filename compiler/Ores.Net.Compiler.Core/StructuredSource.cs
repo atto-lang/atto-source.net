@@ -332,6 +332,10 @@ public static partial class OresStructuredParser
                 tokens[^3].Text == "type" && IsSimpleNominalWord(tokens[^2].Text) &&
                 tokens[^1].Text == "=")
                 RejectAttachedStructTarget(source, token.Offset, tokens[^2].Text);
+            if (braceDepth == 0 && token.Text == "{" && tokens.Count >= 3 &&
+                tokens[^3].Text == "define" && tokens[^2].Text == "struct" &&
+                IsSimpleNominalWord(tokens[^1].Text))
+                RejectAttachedStructTarget(source, token.Offset, tokens[^1].Text, startAtBrace: true);
             // Comments and trivia are already stripped by this Lexer. Deny
             // namespace member access until ETS/pg isolation, ownership,
             // generational table handles and mailbox ingress exist in Native AOT.

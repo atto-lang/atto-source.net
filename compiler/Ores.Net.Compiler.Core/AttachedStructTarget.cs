@@ -4,7 +4,7 @@ namespace Ores.Net.Compiler;
 // CFG/CIL pipeline and never treats attached behavior as a structural row.
 public static partial class OresStructuredParser
 {
-    private static void RejectAttachedStructTarget(string source, int start, string owner)
+    private static void RejectAttachedStructTarget(string source, int start, string owner, bool startAtBrace = false)
     {
         var lexer = new Lexer(source[start..], attachedStructTarget: true);
         int count = 0;
@@ -56,7 +56,7 @@ public static partial class OresStructuredParser
         List<Token> fieldTokens = new();
         try
         {
-            Advance();
+            if (!startAtBrace) Advance();
             if (current.Text != "{") return;
             Advance();
             int depth = 1;
@@ -134,7 +134,9 @@ public static partial class OresStructuredParser
                 {
                     name = first;
                     parameters = Formals();
-                    Expect(":");
+                    if (current.Text is not (":" or "->"))
+                        throw Error("NET_STRUCT_WITH_SYNTAX", "expected return type separator");
+                    Advance();
                     _ = Scalar(true);
                 }
                 signature = "mtd:" + name + ":" + parameters;
