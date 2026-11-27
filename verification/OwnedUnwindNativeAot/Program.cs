@@ -56,4 +56,5 @@ long before=GC.GetAllocatedBytesForCurrentThread();
 for(int i=0;i<10000;i++)Scenario();
 long allocated=GC.GetAllocatedBytesForCurrentThread()-before;
 Check(allocated==0);
+RuntimeProbe.Run();
 Console.WriteLine($"PASS_NET_NATIVEAOT_OWNED_UNWIND arity={G.Arity} frame=208 iterations=10000 allocated={allocated}");
