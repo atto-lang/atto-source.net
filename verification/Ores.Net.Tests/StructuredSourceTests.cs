@@ -302,10 +302,18 @@ pub async routine main(): void {
             ("define class Foo as x(mut self Foo)(int n):int {} x(int n):int {} end", "x/1"),
             ("define class Foo as x(self Foo, int n):int {} x(mut self Foo)(int n):int {} end", "x/1"),
             // Legacy class fnc is an instance declaration, unlike static fnc.
+            ("define class Foo as mtd():void {} mtd mtd():void {} end", "mtd/0"),
+            ("define class Foo as mtd mtd():void {} mtd():void {} end", "mtd/0"),
+            ("define class Foo as fnc mtd():void {} mtd():void {} end", "mtd/0"),
+            ("define class Foo as method():void {} mtd method():void {} end", "method/0"),
+            ("define actor Foo as mtd():void {} fnc mtd():void {} end", "mtd/0"),
+            ("define actor Foo as mtd x(int n):int {} fnc x(self,int n):int {} end", "x/1"),
+            ("define class Foo as mtd mtd(int n):int {} mtd(self,int n):int {} end", "mtd/1"),
+            ("define class Foo as mtd method():void {} method():void {} end", "method/0"),
             ("define class Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
             ("define class Foo as x(mut self)():void {} fnc x():void {} end", "x/0"),
-            ("define class Foo as fnc x(int n):int {} method x(mut self, int n):int {} end", "x/1"),
-            ("define class Foo as method x(mut self, int n):int {} fnc x(int n):int {} end", "x/1"),
+            ("define class Foo as fnc x(int n):int {} mtd x(mut self, int n):int {} end", "x/1"),
+            ("define class Foo as mtd x(mut self, int n):int {} fnc x(int n):int {} end", "x/1"),
             ("define pub class Foo as pub fnc x():void {} x(mut self)():void {} end", "x/0"),
             ("pub define class Foo as x(int n):int {} pub fnc x(mut self, int n):int {} end", "x/1"),
             ("define actor Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
@@ -316,6 +324,14 @@ pub async routine main(): void {
             ("define actor Foo as x(mut self, int n):void {} x(int n):void {} end", "x/1")
         })
             RejectFeature(source, "Duplicate nominal method slot 'Foo::Instance::" + slot + "'");
+
+        foreach (var obsolete in new[] {
+            "define class Foo as method x():void {} end",
+            "define actor Foo as method x():void {} end",
+            "define class Foo as pub method method():void {} end",
+            "define class Foo as method x(mut self, int n):int {} fnc x(int n):int {} end"
+        })
+            RejectFeature(obsolete, "Obsolete method introducer; use mtd");
 
         // Static callables have their own owner/name/value-arity identity:
         // static-static duplicates reject, but static-instance pairs coexist.
@@ -331,6 +347,10 @@ pub async routine main(): void {
         // comments are not lexical declarations, and constructor body calls
         // must not create phantom method slots.
         foreach (var validButNotExecutable in new[] {
+            "define class Foo as mtd():void {} method():void {} end",
+            "define class Foo as mtd():void {} mtd x():void {} end",
+            "define class Foo as static fnc mtd():void {} mtd():void {} end",
+            "define class Foo as mtd():void {} mtd mtd(int n):int {} end",
             "define class Foo as x(int n):int {} y(mut self, int n):int {} end",
             "define class Foo as x()->void {} y(mut self)()->void {} end",
             "define class Foo as x():void {} /* x(mut self)():void {} */ y():void {} end",
