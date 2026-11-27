@@ -51,7 +51,7 @@ run_guest zero-division 'pub fnc main():int{let int n=0;let int zero=0;val Resul
 run_guest failed-return 'pub fnc main():int{let int n=0;val Option<int> missing=None;val Result<int,Error> r=trap! sync task<int>{n=42;return missing.unwrap();};guard r.is_err(){return 1;}return n;}' 0 42
 reject effectful-condition 'pub fnc main():int{let int n=0;val Result<int,Error> r=trap! sync task<int>{if n+2 eq 2 {return 42;}return 0;};return 0;}' E_TRAP_INLINE_TASK_UNSUPPORTED
 reject nested 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{return sync task<int>{return 42;};};return 0;}' E_TRAP_INLINE_TASK_UNSUPPORTED
-reject cleanup 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer stdio.stdout.write("D");return 42;};return 0;}' E_LEXICAL_CLEANUP_UNSUPPORTED
+reject cleanup 'pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{defer stdio.stdout.write("D");return 42;};return 0;}' E_PERMISSION
 reject helper 'fnc f():int{return 42;}pub fnc main():int{val Result<int,Error> r=trap! sync task<int>{return f();};return 0;}' E_TRAP_INLINE_TASK_UNSUPPORTED
 
 run_guest defer-error-lifo 'pub fnc main():int{let int n=0;val Option<int> missing=None;val Result<int,Error> r=trap! sync task<int>{n=2;defer {n=42;} defer {n=7;} val int x=missing.unwrap();return x;};guard r.is_err(){return 1;}return n;}' 0 42
