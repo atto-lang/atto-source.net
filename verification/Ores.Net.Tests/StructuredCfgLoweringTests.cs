@@ -655,6 +655,32 @@ internal static class StructuredCfgLoweringTests
             "val int x=1;val r=record{foo:x};const v={...r};return 0;"
         }) Reject("fnc main():int{" + body + "}", "mixed Record safety: " + body);
         Console.WriteLine("MIXED_RECORD_CORECLR_PASS positives=12 negatives=14");
+        foreach (string body in new[] {
+            "const r={foo:=40\nbar:=2};return r.foo+r.bar;",
+            "const r={foo:=40\nbar=2};return r.foo+r.bar;",
+            "const r={foo:=40\r\nbar:2};return r.foo+r.bar;",
+            "const r={foo:=40 // comment\nbar:=2};return r.foo+r.bar;",
+            "const r={foo:40};const v=r with {bar:2};return v.foo+v.bar;",
+            "const r={foo:true};const v=r with {foo:=42};return v.foo;",
+            "const r={foo:40};const v=r with {foo:42};return v.foo+r.foo-40;",
+            "const r={foo:40};const v=r with {bar:=1\nbaz:=1};return v.foo+v.bar+v.baz;"
+        }) Check("fnc main():int{" + body + "}",42,"Record with/newline: " + body, executeClr: true);
+        foreach (string body in new[] {
+            "const r={foo:=1 bar:=2};return 0;",
+            "const r={foo:=1 /* comment\n */ bar:=2};return 0;",
+            "const r={foo:1\nbar:=2};return 0;",
+            "const r={foo=1\nbar:=2};return 0;",
+            "const r=(foo:=1\nbar=2);return 0;",
+            "const r={foo:=1\nfoo:2};return 0;",
+            "const r={foo:1};const v=r with {foo:2,foo:=3};return 0;",
+            "const v=missing with {foo:1};return 0;",
+            "const int r=1;const v=r with {foo:1};return 0;",
+            "const Tuple r=(1,2);const v=r with {foo:1};return 0;",
+            "const struct r={foo:1};const v=r with {foo:2};return 0;",
+            "val int x=1;val r=record{foo:x};const v=r with {foo:2};return 0;",
+            "const r={foo:1};return r with {foo:2};"
+        }) Reject("fnc main():int{" + body + "}", "Record with/newline boundary: " + body);
+        Console.WriteLine("RECORD_WITH_NEWLINE_CORECLR_PASS positives=8 negatives=13");
         // Runtime-valued immutable rows snapshot scalars into private verified
         // SSA places: later mutation of the original local cannot change them.
         Check("fnc main():int{let int source=20;val row=infer struct{x:source,y:28};source=99;return row.x+row.y;}",
