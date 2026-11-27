@@ -11,6 +11,12 @@ var expression = args[0] switch
     "sub-underflow" => "0-1",
     "mul-overflow" => "9223372036854775808*2*0",
     "divide-zero" => "18446744073709551615/0",
+    "high-divisor" => "18446744073709551615/9223372036854775808",
+    "precedence" => "1+8/3*2",
+    "left-assoc" => "20/3/2",
+    "parentheses" => "20/(3/2)",
+    "overflow-first" => "(18446744073709551615+1)+(1/0)",
+    "zero-first" => "(1/0)+(18446744073709551615+1)",
     _ => throw new ArgumentException("unknown case")
 };
 var checkedIr = OresParser.LowerUnsigned("pub fnc main():u64{return " + expression + ";}");
