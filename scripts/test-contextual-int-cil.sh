@@ -37,7 +37,7 @@ for spec in direct:42 reuse:20 multi:50 alias:42 named:42 set-snapshot:34 direct
     echo "PASS CONTEXT_NATIVEAOT $name exit=$expected"
   fi
 done
-for body in 'return Scale::(true).apply(7);' 'return Scale::(2,3).apply(7);' 'return Scale::(2).apply();' 'return Scale::(2).other(7);' 'const x = Scale::(2); return x;' 'const x = Scale::(2); const x = Scale::(3); return x.apply(7);' 'return Scale::(factor=2).apply(7);' 'return Scale::(2).apply(7]);' 'return _atto_ctx_v1_member(2,7);'; do
+for body in 'return Scale::(true).apply(7);' 'return Scale::(2,3).apply(7);' 'return Scale::(2).apply();' 'return Scale::(2).other(7);' 'const x = Scale::(2); return x;' 'const x = Scale::(2); const x = Scale::(3); return x.apply(7);' 'return Scale::(unknown=2).apply(7);' 'return Scale::(2).apply(7]);' 'return _atto_ctx_v1_member(2,7);'; do
   program 'int factor' 'factor * value' "$body" >"$work/negative.atto"
   rm -f "$work/rejected.dll"
   status=0; compile "$work/negative.atto" "$work/rejected.dll" >"$work/stdout" 2>"$work/stderr" || status=$?
