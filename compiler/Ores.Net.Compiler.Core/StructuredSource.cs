@@ -164,8 +164,23 @@ public static partial class OresStructuredParser
             else if (t == "{")
             {
                 if (depth > 0) { depth--; continue; }
-                return j >= 2 && tokens[j - 1].Text is "struct" or "record" &&
-                       tokens[j - 2].Text is "infer" or "=";
+                if (j >= 2 && tokens[j - 1].Text is ("struct" or "record") &&
+                    tokens[j - 2].Text is ("infer" or "=")) return true;
+                // Only the exact local const Record initializer prefix may
+                // admit a spread through this lexical preflight. The Reader
+                // still checks the operand, shape, collisions and constness.
+                int eq = j - 1;
+                if (eq >= 0 && tokens[eq].Text == "infer") eq--;
+                if (eq < 2 || tokens[eq].Text != "=") return false;
+                int kind = eq - 2;
+                if (tokens[kind].Text == "const") return true;
+                if (tokens[kind].Text == "Record")
+                    return kind >= 1 && tokens[kind - 1].Text == "const";
+                if (tokens[kind].Text != ">") return false;
+                int open = kind - 2;
+                if (open >= 0 && tokens[open].Text == "infer") open--;
+                return open >= 2 && tokens[open].Text == "<" &&
+                    tokens[open - 1].Text == "Record" && tokens[open - 2].Text == "const";
             }
         }
         return false;
@@ -1181,7 +1196,7 @@ public static partial class OresStructuredParser
                      source[index + 1] == '=') index += 2;
             else if (index + 1 < source.Length &&
                 (((ch == '<' || ch == '>') && source[index + 1] == '=') ||
-                 source.Substring(index, 2) is "->" or "::" or "&&" or "||"))
+                 source.Substring(index, 2) is "->" or "::" or ":=" or "&&" or "||"))
                 index += 2;
             // Functional value application is a checked expression operator,
             // never an actor graph or a general closure capability.
@@ -1975,10 +1990,18 @@ public static partial class OresStructuredParser
         {
             if (Current.Text != "const" || index + 3 >= tokens.Count) return false;
             string kind = tokens[index + 1].Text;
-            if (kind is not ("Record" or "Tuple" or "struct")) return false;
+            if (kind is not ("Record" or "Tuple" or "struct"))
+            {
+                if (tokens[index + 2].Text != "=") return false;
+                if (tokens[index + 3].Text == "{") return true;
+                // Do not reinterpret an ordinary grouped scalar expression.
+                return tokens[index + 3].Text == "(" && index + 5 < tokens.Count &&
+                    tokens[index + 5].Text is (":" or "=" or ":=");
+            }
             if (tokens[index + 2].Text == "<") return true;
             return index + 4 < tokens.Count && tokens[index + 3].Text == "=" &&
-                tokens[index + 4].Text == (kind == "struct" ? "{" : "(");
+                (kind == "Record" ? tokens[index + 4].Text is ("{" or "(")
+                    : tokens[index + 4].Text == (kind == "struct" ? "{" : "("));
         }
 
         // Aggregate names are erased by static scalar lowering. Do not let
@@ -2011,8 +2034,9 @@ public static partial class OresStructuredParser
         private (StructuredStmt Statement, bool Returns) NamedAggregate(int depth, int at)
         {
             Expect("const");
-            string wrapper = Current.Text;
-            index++;
+            bool explicitWrapper = Current.Text is "Record" or "Tuple" or "struct";
+            string wrapper = explicitWrapper ? Current.Text : "Record";
+            if (explicitWrapper) index++;
             string? alias = null;
             bool introduce = false;
             NamedAggregateType? expected = null;
@@ -2029,9 +2053,7 @@ public static partial class OresStructuredParser
                 if (introduce && (expected is not null ||
                     localTypeScopes.Any(scope => scope.Contains(alias))))
                     throw Error("E_DUPLICATE_TYPE: inferred aggregate alias already declared");
-                if (!introduce && expected is null)
-                    throw Error("E_UNKNOWN_TYPE: missing inferred aggregate alias");
-                if (!introduce && expected!.Wrapper != wrapper)
+                if (!introduce && expected is not null && expected.Wrapper != wrapper)
                     throw Error("E_AGGREGATE_KIND: incompatible named aggregate");
             }
             string rowName = NamedAggregateIdentifier();
@@ -2039,19 +2061,70 @@ public static partial class OresStructuredParser
                 aggregateScopes.Any(scope => scope.ContainsKey(rowName)))
                 throw Error("Duplicate aggregate binding");
             Expect("=");
-            string close = wrapper == "struct" ? "}" : ")";
-            Expect(wrapper == "struct" ? "{" : "(");
+            if (Take("infer"))
+            {
+                if (wrapper != "Record" || alias is null || introduce)
+                    throw Error("E_TYPE_INFER_AMBIGUOUS: infer requires Record<T>");
+                if (expected is null)
+                {
+                    if (scopes.Any(scope => scope.ContainsKey(alias)) ||
+                        aggregateScopes.Any(scope => scope.ContainsKey(alias)) ||
+                        localTypeScopes.Any(scope => scope.Contains(alias)) || alias == rowName)
+                        throw Error("E_DUPLICATE_TYPE: inferred aggregate alias collides");
+                    introduce = true;
+                }
+            }
+            if (alias is not null && !introduce && expected is null)
+                throw Error("E_UNKNOWN_TYPE: missing inferred aggregate alias");
+            if (introduce && (alias == rowName || scopes.Any(scope => scope.ContainsKey(alias!)) ||
+                aggregateScopes.Any(scope => scope.ContainsKey(alias!))))
+                throw Error("E_DUPLICATE_TYPE: inferred aggregate alias collides");
+            string open = wrapper == "struct" || (wrapper == "Record" && Current.Text == "{") ? "{" : "(";
+            string close = open == "{" ? "}" : ")";
+            Expect(open);
             var plan = new ClosedAggregateSpreadPlan(wrapper == "struct"
                 ? ClosedAggregateKind.ExactStruct : ClosedAggregateKind.ReadonlyRecord);
             var values = new Dictionary<string, StructuredExpr>(StringComparer.Ordinal);
+            var explicitFields = new HashSet<string>(StringComparer.Ordinal);
+            var overlap = new HashSet<string>(StringComparer.Ordinal);
+            bool ordinaryField = false;
+            int entries = 0;
             do
             {
-                if (values.Count >= 64) throw Error("AGGREGATE_FIELD_BUDGET");
+                if (++entries > 64) throw Error("AGGREGATE_FIELD_BUDGET");
+                if (wrapper == "Record" && open == "{" && Take("."))
+                {
+                    Expect("."); Expect(".");
+                    var origin = FindAggregate(NamedAggregateIdentifier());
+                    if (origin is null || origin.Shape.Kind != ClosedAggregateKind.ReadonlyRecord ||
+                        origin.Wrapper == "Tuple" || origin.Values.Values.Any(v => v is not StructuredInt and not StructuredBool))
+                        throw Error("E_RECORD_SPREAD: requires an earlier constant Record");
+                    foreach (var entry in origin.Values)
+                    {
+                        if (explicitFields.Contains(entry.Key))
+                            throw Error("E_RECORD_SPREAD: spread overrides explicit field");
+                        if (values.ContainsKey(entry.Key)) overlap.Add(entry.Key);
+                        values[entry.Key] = entry.Value;
+                    }
+                    plan.AddCheckedSpread(origin.Shape);
+                    if (values.Count > 64) throw Error("AGGREGATE_FIELD_BUDGET");
+                    if (!Take(",") || Current.Text == close) break;
+                    continue;
+                }
                 int offset = Current.Offset;
                 string field = wrapper == "Tuple"
                     ? values.Count.ToString(CultureInfo.InvariantCulture) : NamedAggregateIdentifier();
-                if (wrapper != "Tuple") Expect(wrapper == "struct" ? ":" : "=");
-                if (values.ContainsKey(field)) throw Error("E_DUPLICATE_FIELD: duplicate aggregate field");
+                if (wrapper == "Record")
+                {
+                    if (!Take(":="))
+                    {
+                        if (!Take(":")) Expect("=");
+                        ordinaryField = true;
+                    }
+                }
+                else if (wrapper == "struct") Expect(":");
+                if (!explicitFields.Add(field)) throw Error("E_DUPLICATE_FIELD: duplicate aggregate field");
+                overlap.Remove(field);
                 var expr = Expr(depth + 1);
                 if (expr.Type is not (IrValueType.Bool or IrValueType.I64))
                     throw Error("E_TYPE_INFER_AMBIGUOUS: only bool/int constant fields admitted");
@@ -2060,11 +2133,16 @@ public static partial class OresStructuredParser
                 catch (OverflowException) { throw Error("Aggregate const field overflow"); }
                 catch (DivideByZeroException) { throw Error("Aggregate const field division by zero"); }
                 plan.AddNamed(field, expr.Type == IrValueType.Bool ? "bool" : "int");
-                values.Add(field, expr.Type == IrValueType.Bool
-                    ? new StructuredBool(offset, value != 0) : new StructuredInt(offset, value));
-            } while (Take(","));
+                values[field] = expr.Type == IrValueType.Bool
+                    ? new StructuredBool(offset, value != 0) : new StructuredInt(offset, value);
+                if (values.Count > 64) throw Error("AGGREGATE_FIELD_BUDGET");
+                if (!Take(",") || Current.Text == close) break;
+            } while (true);
             Expect(close);
             Expect(";");
+            if (wrapper == "Record" && open == "(" && !ordinaryField)
+                throw Error("E_LITERAL_KIND: Pair-only parentheses are not Record");
+            if (overlap.Count > 0) throw Error("E_RECORD_SPREAD: unresolved overlapping spreads");
             var shape = plan.InferShape();
             if (!introduce && expected is not null &&
                 !shape.Fields.SequenceEqual(expected.Shape.Fields))
