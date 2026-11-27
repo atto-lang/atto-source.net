@@ -1,0 +1,5 @@
+// expect-error: E_POINTER_SLOT_PROFILE
+pub fnc main(): int {
+    let mut RawPointer<int> const = RawPointer.empty<int>();
+    return 42;
+}

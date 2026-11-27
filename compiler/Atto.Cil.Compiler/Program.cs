@@ -63,6 +63,7 @@ internal sealed class Parser
 {
     private readonly List<string> _tokens = [];
     private readonly List<int> _offsets = [];
+    private readonly string _source;
     private int _position;
     internal List<int> RedundantReturnOffsets { get; } = [];
     private string Peek => _tokens[_position];
@@ -91,6 +92,7 @@ internal sealed class Parser
     internal IReadOnlyList<string> CountedTokens => _tokens;
     internal Parser(string source, bool countedReady = false)
     {
+        _source = source;
         if (Encoding.UTF8.GetByteCount(source) > 65536)
             throw new CompilerError("E_LIMIT", "64 KiB source limit");
         foreach (char c in source)
@@ -137,6 +139,9 @@ internal sealed class Parser
     }
     internal List<Function> Parse()
     {
+        // Authenticate the unmodified lexical stream before other lowering can alter token offsets.
+        if (_tokens.Contains("RawPointer", StringComparer.Ordinal))
+            return ParseReusableSlot();
         var records = NominalRecordSource.Lower(_tokens);
         if (records is not null) { _tokens.Clear(); _tokens.AddRange(records); }
         var contextual = ContextualIntSource.Lower(_tokens);
@@ -591,6 +596,120 @@ internal sealed class Parser
         {
             throw new CompilerError("E_POINTER_OVERFLOW", "checked signed i64 arithmetic overflow");
         }
+    }
+
+    private List<Function> ParseReusableSlot()
+    {
+        static CompilerError Invalid() => new("E_POINTER_SLOT_PROFILE", "invalid reusable local scalar slot");
+        string Id()
+        {
+            string n;
+            try { n = PointerName(); }
+            catch (CompilerError) { throw Invalid(); }
+            if (n is "mut" or "null" or "to" or "empty" or "if" or "else" or "end" or
+                "while" or "for" or "class" or "struct" or "new" or "defer" or "recover" or
+                "freeze" or "weak" or "move" or "const" or "set" or "do" or "fi" or
+                "match" or "on" or "default" or "with" or "using" or "constructor" or "destructor")
+                throw Invalid();
+            return n;
+        }
+        void Need(string token)
+        {
+            if (!Eat(token)) throw Invalid();
+        }
+        void Op(string op)
+        {
+            if (Peek != op) throw Invalid();
+            int offset = _offsets[_position];
+            Need(op);
+            if (Peek != "!" || _offsets[_position] != offset + op.Length) throw Invalid();
+            int afterBang = _offsets[_position] + 1;
+            if (afterBang >= _source.Length || _source[afterBang] is not (' ' or '\t' or '\r' or '\n'))
+                throw Invalid();
+            Need("!");
+        }
+        long Number()
+        {
+            if (!long.TryParse(Peek, NumberStyles.None, CultureInfo.InvariantCulture, out long n))
+                throw Invalid();
+            _position++;
+            return n;
+        }
+        foreach (var t in new[] { "pub", "fnc", "main", "(", ")", ":", "int", "{", "let" })
+            Need(t);
+        var owners = new Dictionary<string, long>(StringComparer.Ordinal);
+        var values = new Dictionary<string, long>(StringComparer.Ordinal);
+        while (!Eat("mut"))
+        {
+            if (owners.Count >= 16) throw Invalid();
+            string owner = Id();
+            Need(":"); Need("int"); Need("=");
+            long value = Number();
+            Need(";");
+            if (!owners.TryAdd(owner, value) || !values.TryAdd(owner, value)) throw Invalid();
+            Need("let");
+        }
+        Need("RawPointer"); Need("<"); Need("int"); Need(">");
+        string slot = Id();
+        if (values.ContainsKey(slot)) throw Invalid();
+        foreach (var t in new[] { "=", "RawPointer", ".", "empty", "<", "int", ">", "(", ")", ";" })
+            Need(t);
+        string? bound = null;
+        int operations = 0;
+        while (Peek != "return")
+        {
+            if (++operations > 32) throw Invalid();
+            if (Peek == "ref")
+            {
+                Op("ref"); Need(slot); Need("to");
+                string owner = Id();
+                if (bound is not null || !owners.ContainsKey(owner)) throw Invalid();
+                bound = owner;
+            }
+            else if (Eat("val"))
+            {
+                string copy = Id();
+                Need("="); Op("deref"); Need(slot);
+                if (bound is null || copy == slot || !values.TryAdd(copy, owners[bound]))
+                    throw Invalid();
+            }
+            else if (Peek == "unref")
+            {
+                Op("unref"); Need(slot);
+                if (bound is null) throw Invalid();
+                bound = null;
+            }
+            else throw Invalid();
+            Need(";");
+        }
+        if (bound is not null) throw Invalid();
+        Need("return");
+        long Term()
+        {
+            if (Peek.Length > 0 && char.IsAsciiDigit(Peek[0])) return Number();
+            if (!values.TryGetValue(Id(), out long v)) throw Invalid();
+            return v;
+        }
+        long answer = Term();
+        int terms = 1;
+        try
+        {
+            while (Peek is "+" or "-")
+            {
+                if (++terms > 32) throw Invalid();
+                bool add = Eat("+");
+                if (!add) Need("-");
+                long rhs = Term();
+                answer = add ? checked(answer + rhs) : checked(answer - rhs);
+            }
+        }
+        catch (OverflowException) { throw Invalid(); }
+        Need(";"); Need("}");
+        if (Peek != "<eof>") throw Invalid();
+        // All referents are immutable literal i64 places, all copied values
+        // and transitions were authenticated. No source address survives;
+        // normal direct CIL emission can promote this closed scalar result.
+        return [new Function("main", [], CheckedType.Int, [new ReturnStmt(new Literal(answer))])];
     }
 
     private List<Function> ParseBorrowedLocalPointer()
