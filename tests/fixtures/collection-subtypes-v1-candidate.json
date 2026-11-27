@@ -1,0 +1,134 @@
+{
+  "profile": "collection-subtypes-v1-candidate",
+  "authority": "https://github.com/atto-lang/atto-spec/pull/313",
+  "evidence": "TARGET_NOT_EXECUTED",
+  "note": "Whole candidate guest programs. Exact declaration and constructor grammar awaits spec reconciliation. Expected negative reasons are semantic, not arbitrary syntax failures. Do not count compiler unsupported or parser failure as semantic rejection. No source rewrites; compare full guest int 42, not host oracle. No compiler result claimed.",
+  "cases": [
+    {
+      "id": "map_custom_inherited",
+      "scenario": "M01",
+      "source": "define class Scores extends Map<String, int> as\n    pub bonus(): int { return 40 + self.size(); }\nend\npub fnc main(): int {\n    const Scores s = {\"alice\": 95, \"bob\": 80};\n    return s.bonus();\n}\n",
+      "expected": {
+        "kind": "guest_int",
+        "value": 42
+      }
+    },
+    {
+      "id": "map_multilevel",
+      "scenario": "M02",
+      "source": "define class StringMap<V> extends Map<String, V> as\n    pub count(): int { return self.size(); }\nend\ndefine class Scores extends StringMap<int> as\n    pub bonus(): int { return self.count() + 40; }\nend\npub fnc main(): int {\n    const Scores s = {\"alice\": 95, \"bob\": 80};\n    return s.bonus();\n}\n",
+      "expected": {
+        "kind": "guest_int",
+        "value": 42
+      }
+    },
+    {
+      "id": "record_custom",
+      "scenario": "R01",
+      "source": "define record Person extends Record as\n    int age;\n    pub years(): int { return self.age; }\nend\npub fnc main(): int {\n    const Person p = (age = 42);\n    return p.years();\n}\n",
+      "expected": {
+        "kind": "guest_int",
+        "value": 42
+      }
+    },
+    {
+      "id": "record_multilevel",
+      "scenario": "R02",
+      "source": "define record Person extends Record as\n    int age;\n    pub years(): int { return self.age; }\nend\ndefine record Employee extends Person as\n    int salary;\n    pub annual_salary(): int { return self.salary * 12; }\nend\npub fnc main(): int {\n    const Employee e = (age = 18, salary = 2);\n    return e.years() + e.annual_salary();\n}\n",
+      "expected": {
+        "kind": "guest_int",
+        "value": 42
+      }
+    },
+    {
+      "id": "base_map_no_custom_method",
+      "scenario": "M03",
+      "source": "define class Scores extends Map<String, int> as\n    pub bonus(): int { return 40 + self.size(); }\nend\npub fnc main(): int {\n    const Map<String, int> s = {\"alice\": 42};\n    return s.bonus();\n}\n",
+      "expected": {
+        "kind": "semantic_reject",
+        "reason": "member absent on static base receiver"
+      }
+    },
+    {
+      "id": "implicit_base_to_subtype",
+      "scenario": "M04",
+      "source": "define class Scores extends Map<String, int> as\n    pub bonus(): int { return 40 + self.size(); }\nend\npub fnc main(): int {\n    const Map<String, int> s = {\"alice\": 42};\n    const Scores t = s;\n    return t.bonus();\n}\n",
+      "expected": {
+        "kind": "semantic_reject",
+        "reason": "implicit base-to-nominal conversion"
+      }
+    },
+    {
+      "id": "implicit_sibling_to_subtype",
+      "scenario": "M04",
+      "source": "define class Scores extends Map<String, int> as\n    pub bonus(): int { return 40 + self.size(); }\nend\ndefine class OtherScores extends Map<String, int> as\n    pub bonus(): int { return 0; }\nend\npub fnc main(): int {\n    const OtherScores s = {\"alice\": 42};\n    const Scores t = s;\n    return t.bonus();\n}\n",
+      "expected": {
+        "kind": "semantic_reject",
+        "reason": "distinct sibling nominal identity"
+      }
+    },
+    {
+      "id": "map_storage",
+      "scenario": "M06",
+      "source": "define class Scores extends Map<String, int> as\n    int extra: 42;\nend\npub fnc main(): int {\n    return 42;\n}\n",
+      "expected": {
+        "kind": "semantic_reject",
+        "reason": "additional instance storage on behavior-only map"
+      }
+    },
+    {
+      "id": "map_builtin_slot",
+      "scenario": "M06",
+      "source": "define class Scores extends Map<String, int> as\n    pub size(): int { return 42; }\nend\npub fnc main(): int {\n    return 42;\n}\n",
+      "expected": {
+        "kind": "semantic_reject",
+        "reason": "reserved built-in member override"
+      }
+    },
+    {
+      "id": "record_field_shadow",
+      "scenario": "R03",
+      "source": "define record Person extends Record as\n    int age;\n    pub years(): int { return self.age; }\nend\ndefine record Employee extends Person as\n    int age;\nend\npub fnc main(): int {\n    return 42;\n}\n",
+      "expected": {
+        "kind": "semantic_reject",
+        "reason": "inherited field collision"
+      }
+    },
+    {
+      "id": "record_wrong_field_type",
+      "scenario": "R03",
+      "source": "define record Person extends Record as\n    int age;\n    pub years(): int { return self.age; }\nend\npub fnc main(): int {\n    const Person p = (age = \"42\");\n    return p.years();\n}\n",
+      "expected": {
+        "kind": "semantic_reject",
+        "reason": "wrong contextual record field type"
+      }
+    },
+    {
+      "id": "record_missing_field",
+      "scenario": "R03",
+      "source": "define record Person extends Record as\n    int age;\n    pub years(): int { return self.age; }\nend\ndefine record Employee extends Person as\n    int salary;\n    pub annual_salary(): int { return self.salary * 12; }\nend\npub fnc main(): int {\n    const Employee e = (age = 42);\n    return e.years();\n}\n",
+      "expected": {
+        "kind": "semantic_reject",
+        "reason": "missing inherited or declared field"
+      }
+    },
+    {
+      "id": "generic_arity",
+      "scenario": "T01",
+      "source": "define class Scores extends Map<String> as\nend\npub fnc main(): int {\n    return 42;\n}\n",
+      "expected": {
+        "kind": "semantic_reject",
+        "reason": "wrong generic base arity"
+      }
+    },
+    {
+      "id": "inheritance_cycle",
+      "scenario": "T01",
+      "source": "define class A extends B as\nend\ndefine class B extends A as\nend\npub fnc main(): int {\n    return 42;\n}\n",
+      "expected": {
+        "kind": "semantic_reject",
+        "reason": "inheritance cycle"
+      }
+    }
+  ]
+}
