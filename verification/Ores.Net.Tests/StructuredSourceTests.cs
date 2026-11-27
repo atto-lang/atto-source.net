@@ -138,6 +138,21 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // Name-first 'as' is a declaration annotation, not an initializer cast.
+        foreach (string qualifier in new[] { "const", "val", "let" })
+        {
+            var prefix = OresStructuredParser.Parse("fnc main():int{" + qualifier + " int x=42;return x;}");
+            var nameAs = OresStructuredParser.Parse("fnc main():int{" + qualifier + " x as int=42;return x;}");
+            Require(prefix.Body[0] is StructuredLet a && nameAs.Body[0] is StructuredLet b &&
+                a.Kind == b.Kind && a.Name == b.Name && a.ValueType == b.ValueType &&
+                a.Initializer is StructuredInt { Value: 42 } && b.Initializer is StructuredInt { Value: 42 },
+                "name-first as annotation matches typed prefix for " + qualifier);
+        }
+        Reject("fnc main():int{const x as int=true;return x;}", "wrong local annotation type");
+        Reject("fnc main():int{val x as =42;return x;}", "missing annotation type");
+        Reject("fnc main():int{let x as int;return x;}", "missing local initializer");
+        Reject("fnc main():int{const x as int:int=42;return x;}", "duplicate local annotation");
+
         NegatedDoIfSyntax();
         Require(OresStructuredParser.Parse(
             "pub fnc main():int{val bool f=false;guard !(f), !(!true){return 0;}return 42;}").Body.Count == 3,
