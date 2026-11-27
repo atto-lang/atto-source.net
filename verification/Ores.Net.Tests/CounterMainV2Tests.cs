@@ -11,7 +11,7 @@ internal static class CounterMainV2Tests
     }
 
     private static void Reject(IReadOnlyDictionary<string, string> units,
-        string find, string replacement, string label)
+        string find, string replacement, string label, string? diagnostic = null)
     {
         const string main = "src/counter/main.atto";
         var modified = new Dictionary<string, string>(units, StringComparer.Ordinal);
@@ -19,7 +19,11 @@ internal static class CounterMainV2Tests
             throw new Exception("Invalid negative fixture: " + label);
         modified[main] = modified[main].Replace(find, replacement, StringComparison.Ordinal);
         try { _ = OresParser.InspectCounterMainV2(modified); }
-        catch (FormatException) { return; }
+        catch (FormatException e)
+        {
+            if (diagnostic is not null) Require(e.Message.Contains(diagnostic, StringComparison.Ordinal), label);
+            return;
+        }
         throw new Exception("Counter main source accepted unsupported variant: " + label);
     }
 
@@ -123,6 +127,21 @@ internal static class CounterMainV2Tests
         Reject(units, "stdio.stdout.write(\"|\");",
             "stdio.stdout.write(\",\");", "wrong stdout separator");
         Reject(units, "spawn Counter()", "spawn OtherActor()", "wrong nominal actor");
+        foreach (string suffix in new[] {
+            "with {}",
+            "with { schedule { max_parallelism = 2; affinity = sticky; } }",
+            "with { resources { heap_size = 67108864; stack_size = 65536; mailbox_capacity = 1024; } }",
+            "with { init { seed = 42; } }",
+            "/* nested /* comment */ ok */ with { init {} }",
+            "with schedule(max_parallelism=2)",
+            "with { unknown {} }"
+        })
+            Reject(units, "spawn Counter()", "spawn Counter() " + suffix,
+                "unlowered spawn options", "E_SPAWN_OPTIONS_UNSUPPORTED");
+        // The narrower tokenizer also rejects non-admitted expressions/strings.
+        Reject(units, "spawn Counter()",
+            "spawn Counter() with { resources { heap_size = 64 * 1024 * 1024; } init { name = \"worker-1\"; } }",
+            "unlowered general expression/string in grouped spawn");
         Reject(units, "await worker.outputs.next()", "await worker.other.next()", "wrong output capability");
         Reject(units, "return;", "return; worker.send(9);", "unverified trailing statements");
         Reject(units, "worker.send(2);", "worker.send(2); await worker.get_done();",
