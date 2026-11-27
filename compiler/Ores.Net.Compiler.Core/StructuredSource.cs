@@ -249,6 +249,9 @@ public static partial class OresStructuredParser
             // Import discovery and structured parser must share the same raw-source rule.
             if (source[i] == (char)0x001b || source[i] == (char)0x007f)
                 throw new FormatException($"Source contains terminal control at offset {i}");
+            if (source[i] is '\u061c' or '\u200e' or '\u200f' or
+                >= '\u202a' and <= '\u202e' or >= '\u2066' and <= '\u2069')
+                throw new FormatException($"Source contains bidirectional Unicode control at offset {i}");
             if (char.IsHighSurrogate(source[i]))
             {
                 if (++i >= source.Length || !char.IsLowSurrogate(source[i]))
@@ -1024,9 +1027,7 @@ public static partial class OresStructuredParser
             if (ch == '@')
             {
                 int nameEnd = index + 1;
-                while (nameEnd < source.Length &&
-                       (Alpha(source[nameEnd]) || Digit(source[nameEnd]) ||
-                        source[nameEnd] == '_')) nameEnd++;
+                nameEnd = PortableUnicodeIdentifier.End(source, nameEnd);
                 string name = source[(index + 1)..nameEnd];
                 if (name is "Inject" or "StateBacked" or "MutableStateContainer" or "StateContainer")
                     throw new FormatException(
@@ -1061,13 +1062,12 @@ public static partial class OresStructuredParser
                         ((source[index + 1] == '+' || source[index + 1] == '-') &&
                           index + 2 < source.Length && Digit(source[index + 2])))) ||
                      (source[index] == 'd' && (index + 1 == source.Length ||
-                         !(char.IsLetterOrDigit(source[index + 1]) || source[index + 1] == '_')))))
+                         PortableUnicodeIdentifier.PartWidth(source, index + 1) == 0))))
                     throw new FormatException($"Floating-point/decimal literal requires typed numeric lowering at offset {offset}");
             }
-            else if (Alpha(ch) || ch == '_')
+            else if (PortableUnicodeIdentifier.StartWidth(source, index) != 0)
             {
-                do { index++; } while (index < source.Length &&
-                    (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
+                index = PortableUnicodeIdentifier.End(source, index);
                 string word = source[offset..index];
                 // Check complete keyword suffix before any effect token is consumed.
                 if ((word is "trap" or "throw" or "raise" or "panic" or "copy" or "take" or "move" or
@@ -1076,7 +1076,7 @@ public static partial class OresStructuredParser
                     (index + 1 >= source.Length || source[index + 1] != '=') &&
                     !(source.AsSpan(index).StartsWith("!eq", StringComparison.Ordinal) &&
                       (index + 3 == source.Length ||
-                       !(char.IsLetterOrDigit(source[index + 3]) || source[index + 3] == '_'))))
+                       PortableUnicodeIdentifier.PartWidth(source, index + 3) == 0)))
                 {
                     int after = index + (word == "copy" && index + 1 < source.Length && source[index + 1] == '!' ? 2 : 1);
                     if (after >= source.Length || source[after] is not (' ' or '\t' or '\r' or '\n' or '\v' or '\f'))
@@ -1086,7 +1086,7 @@ public static partial class OresStructuredParser
                     source[index] == '!' && (index + 1 == source.Length || source[index + 1] != '=') &&
                     !(index + 2 < source.Length && source[index + 1] == 'e' && source[index + 2] == 'q' &&
                         (index + 3 == source.Length ||
-                        !(Alpha(source[index + 3]) || Digit(source[index + 3]) || source[index + 3] == '_'))))
+                        PortableUnicodeIdentifier.PartWidth(source, index + 3) == 0)))
                     index++;
                 if (word == "select" &&
                     StaticSelectAdmission.FollowedByStaticSelect(source, offset))
@@ -1102,8 +1102,7 @@ public static partial class OresStructuredParser
                     !(index + 2 < source.Length && source[index + 1] == 'e' &&
                       source[index + 2] == 'q' &&
                       (index + 3 == source.Length ||
-                       !(char.IsLetterOrDigit(source[index + 3]) ||
-                         source[index + 3] == '_'))))
+                       PortableUnicodeIdentifier.PartWidth(source, index + 3) == 0)))
                 {
                     // Only the checked structured scalar profile admits copy.
                     // Borrow, move, share and linked-module ownership still fail closed.
@@ -1160,8 +1159,7 @@ public static partial class OresStructuredParser
             else if (ch == '!' && index + 2 < source.Length &&
                      source[index + 1] == 'e' && source[index + 2] == 'q' &&
                      (index + 3 == source.Length ||
-                      !(Alpha(source[index + 3]) || Digit(source[index + 3]) ||
-                        source[index + 3] == '_')))
+                      PortableUnicodeIdentifier.PartWidth(source, index + 3) == 0))
             {
                 // Contiguous AttoLang !eq alias; never split !equation.
                 // Lower into the existing static typed CIL NotEqualI64 path.
@@ -1177,8 +1175,7 @@ public static partial class OresStructuredParser
             else if (ch == '!' && index + 2 < source.Length &&
                      source[index + 1] == 'e' && source[index + 2] == 'q' &&
                      (index + 3 == source.Length ||
-                      !(char.IsLetterOrDigit(source[index + 3]) ||
-                        source[index + 3] == '_')))
+                      PortableUnicodeIdentifier.PartWidth(source, index + 3) == 0))
                 index += 3;
             else if (ch == '!' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
@@ -1198,7 +1195,7 @@ public static partial class OresStructuredParser
             // Prefix logical not already has typed boolean lowering in Unary.
             // Preserve the earlier != / !eq recognition and the separate
             // fail-closed macro and ownership admission gates.
-            else if (ch == '!') index++;
+            else if (ch is '!' or '¬') index++;
             else if (ch is '⧖' or '∂') index++;
             else if (booleanPackBracket || "()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
                 (ch == '|' && precededByString) ||
@@ -2730,7 +2727,7 @@ public static partial class OresStructuredParser
         private bool StartsScalarTypeFirst() => Current.Text is "int" or "bool" ||
             (Current.Text == "boolean" && index + 1 < tokens.Count &&
              tokens[index + 1].Text is { Length: > 0 } next &&
-             (Alpha(next[0]) || next[0] == '_'));
+             PortableUnicodeIdentifier.StartWidth(next, 0) != 0);
 
         private IrValueType Type()
         {
@@ -2835,8 +2832,7 @@ public static partial class OresStructuredParser
             if (CoreTypeRegistry.IsProtectedIdentity(name))
                 throw new FormatException($"E_PRELUDE_SPOOF: {name} is a compiler-owned type/constructor identity at offset {at}");
             if (name.Length is < 1 or > MaxIdentifier ||
-                !(Alpha(name[0]) || name[0] == '_') ||
-                !name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_') ||
+                !PortableUnicodeIdentifier.IsName(name) ||
                 name.StartsWith(TrappedBodyPrefix, StringComparison.Ordinal) ||
                 name is "if" or "ifnot" or "unless" or "else" or "while" or "loop" or "break" or "continue" or "return" or "let"
                     or "int" or "bool" or "true" or "false" or "and" or "or" or "xor"
@@ -3532,7 +3528,7 @@ public static partial class OresStructuredParser
             }
             // Prefix logical not on a bool operand. Lowered as a typed
             // conditional (operand ? false : true) over the existing bool CFG.
-            if (Current.Text == "!")
+            if (Current.Text is "!" or "¬")
             {
                 int at = Current.Offset;
                 index++;
