@@ -3088,6 +3088,18 @@ public static partial class OresStructuredParser
                 else if (Pair("+", "=")) compound = StructuredOperator.Add;
                 else if (Pair("-", "=")) compound = StructuredOperator.Subtract;
                 else if (Pair("*", "=")) compound = StructuredOperator.Multiply;
+                // The lexer retains comparison tokens <= and >=. Match the
+                // three contiguous tokens only in the explicit update clause,
+                // never by rewriting comparisons or stream operators.
+                else if (Current.Text is "<" or ">" &&
+                    AdjacentTokenAt(index + 1, Current.Text) &&
+                    AdjacentTokenAt(index + 2, Current.Text + "="))
+                {
+                    compound = Current.Text == "<" ? StructuredOperator.ShiftLeft
+                        : StructuredOperator.ShiftRightLogical;
+                    index += 3;
+                }
+                else if (Pair("ashr", "=")) compound = StructuredOperator.ShiftRightArithmetic;
             }
             if (!increment && compound is null && Take("^^=")) compound = StructuredOperator.BitXor;
             if (compound is null) Expect("=");
