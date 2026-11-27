@@ -1374,6 +1374,8 @@ public static partial class OresParser
         private Expression ParseUnary(int depth)
         {
             CheckDepth(depth);
+            if (Current.Text == "spawn")
+                throw new FormatException($"E_SPAWN_OPTIONS_UNSUPPORTED: actor spawn requires typed initialization, resource admission and runtime lowering at offset {Current.Offset}");
             if (_patternScope is not null)
             {
                 if (_patternScope.TryGetValue(Current.Text,out int id))
