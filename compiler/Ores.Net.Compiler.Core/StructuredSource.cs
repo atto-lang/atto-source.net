@@ -944,6 +944,8 @@ public static partial class OresStructuredParser
         private bool insideBooleanLiteralPack;
         private bool previousWasConst;
         private bool sawTupleDeclaration;
+        private bool sawPatternDeclaration;
+        private int patternBracketDepth;
         public Token Read()
         {
             while (index < source.Length)
@@ -1018,7 +1020,24 @@ public static partial class OresStructuredParser
                 insideBooleanLiteralPack = false;
                 booleanPackBracket = true;
             }
-            if (!booleanPackBracket && !(allowStaticTupleProjection && sawTupleDeclaration))
+            // Only the standalone reader owns the final per-offset proof.
+            // Lexically admit candidate pattern brackets, not general arrays.
+            bool patternBracket = false;
+            if (allowStaticTupleProjection && ch == '[' &&
+                (patternBracketDepth > 0 || previousToken == "in" ||
+                 previousToken == "Pattern" && beforePreviousToken == "const" ||
+                 sawPatternDeclaration && previousToken == "="))
+            {
+                if (++patternBracketDepth > 32)
+                    throw new FormatException($"Pattern bracket nesting limit at offset {offset}");
+                patternBracket = true;
+            }
+            else if (allowStaticTupleProjection && ch == ']' && patternBracketDepth > 0)
+            {
+                patternBracketDepth--;
+                patternBracket = true;
+            }
+            if (!patternBracket && !booleanPackBracket && !(allowStaticTupleProjection && sawTupleDeclaration))
                 SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, offset);
             // Injection changes ownership and lifetime authority. The scalar
             // CIL bootstrap cannot treat an annotation as harmless metadata.
@@ -1197,7 +1216,7 @@ public static partial class OresStructuredParser
             // fail-closed macro and ownership admission gates.
             else if (ch is '!' or '¬') index++;
             else if (ch is '⧖' or '∂') index++;
-            else if (booleanPackBracket || "()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
+            else if (patternBracket || booleanPackBracket || "()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
                 (ch == '|' && precededByString) ||
                 (allowStaticTupleProjection && sawTupleDeclaration && ch is ('[' or ']')) ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
@@ -1221,6 +1240,7 @@ public static partial class OresStructuredParser
             previousWasString = tokenText is "String" or "string";
             previousWasSync = tokenText == "sync";
             sawTupleDeclaration |= previousWasConst && tokenText == "Tuple";
+            sawPatternDeclaration |= previousWasConst && tokenText == "Pattern";
             previousWasConst = tokenText == "const";
             beforePreviousToken = previousToken;
             previousToken = tokenText;
@@ -1330,10 +1350,17 @@ public static partial class OresStructuredParser
         private readonly HashSet<int> verifiedBooleanPackBrackets = new();
         public StructuredProgram ReadProgram()
         {
+            while (Current.Text == "const" && index + 1 < tokens.Count && tokens[index + 1].Text == "Pattern")
+                ReadPatternConstant();
             var program = ReadDeclarations(true);
             foreach (var token in tokens)
-                if (token.Text is "[" or "]" && !verifiedTupleBrackets.Contains(token.Offset) && !verifiedBooleanPackBrackets.Contains(token.Offset))
+            {
+                if (token.Text is "[" or "]" && !verifiedTupleBrackets.Contains(token.Offset) &&
+                    !verifiedBooleanPackBrackets.Contains(token.Offset) && !verifiedPatternBrackets.Contains(token.Offset))
                     SafeCollectionSourceAdmission.RejectUnverifiedBracket(token.Text[0], token.Offset);
+                if (patternConstants.ContainsKey(token.Text) && !patternNameUses.Contains(token.Offset))
+                    throw new FormatException($"PATTERN_ESCAPE: compile-time Pattern name cannot escape or be shadowed at offset {token.Offset}");
+            }
             return program;
         }
 

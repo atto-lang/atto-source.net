@@ -61,10 +61,22 @@ public static partial class OresStructuredParser
                     bool membershipHead = Take("in");
                     if (!membershipHead) Take("on");
                     if (++statements > MaxStatements) throw Error("Structured match statement budget exceeded");
-                    var membership = membershipHead ? ReadMatchMembership(subject.Type) : null;
-                    var literal = !membershipHead && subject.Type == IrValueType.I64 && Current.Text != "is" ? ReadMatchLiteral() : null;
-                    var (tags, binding, bindingType) = literal is null && membership is null
-                        ? ReadMatchPattern(subject.Type) : ((MatchTags)0, null, null);
+                    IReadOnlyList<long>? membership = null;
+                    long? literal = null;
+                    MatchTags tags = 0;
+                    string? binding = null;
+                    IrValueType? bindingType = null;
+                    if (membershipHead || patternConstants.ContainsKey(Current.Text) || Current.Text == "is")
+                    {
+                        var descriptor = membershipHead ? ReadPatternMembership(0)
+                            : Current.Text == "is" ? ReadPatternDescriptor(0) : ReadPatternRef(false);
+                        (tags, membership) = ResolveStoredPattern(descriptor, subject.Type);
+                    }
+                    else
+                    {
+                        literal = subject.Type == IrValueType.I64 ? ReadMatchLiteral() : null;
+                        if (literal is null) (tags, binding, bindingType) = ReadMatchPattern(subject.Type);
+                    }
                     if (membership is not null ? uncovered == 0 || membership.All(coveredLiterals.Contains)
                         : literal is long n ? uncovered == 0 || coveredLiterals.Contains(n) : (tags & uncovered) == 0)
                         throw Error("MATCH_UNREACHABLE_ARM: prior unguarded arms already cover this pattern");
@@ -137,26 +149,155 @@ public static partial class OresStructuredParser
             finally { expectedExpressionType = context; }
         }
 
-        private IReadOnlyList<long> ReadMatchMembership(IrValueType subject)
+        private sealed record CompilePattern(long[] Ints, bool[] Bools, IrValueType[] Types);
+        private readonly Dictionary<string, (bool Array, CompilePattern Pattern)> patternConstants = new(StringComparer.Ordinal);
+        private readonly HashSet<int> patternNameUses = new();
+        private readonly HashSet<int> verifiedPatternBrackets = new();
+
+        private bool TakePatternBracket(string text)
         {
-            if (subject != IrValueType.I64)
-                throw Error("MATCH_MEMBERSHIP_TYPE: literal membership requires int");
-            if (!Take("["))
-                throw Error("MATCH_MEMBERSHIP_UNSUPPORTED: runtime collection membership not implemented");
-            var values = new List<long>();
-            var distinct = new HashSet<long>();
-            if (Take("]")) throw Error("MATCH_UNREACHABLE_ARM: empty membership");
-            while (true)
+            int at = Current.Offset;
+            if (!Take(text)) return false;
+            verifiedPatternBrackets.Add(at);
+            return true;
+        }
+        private void ExpectPatternBracket(string text)
+        {
+            if (!TakePatternBracket(text)) throw Error("Expected pattern bracket " + text);
+        }
+        private CompilePattern CombinePatterns(List<CompilePattern> parts)
+        {
+            var ints = new HashSet<long>();
+            var bools = new HashSet<bool>();
+            var types = new HashSet<IrValueType>();
+            foreach (var part in parts)
             {
-                if (values.Count >= 64) throw Error("MATCH_MEMBERSHIP_LIMIT: at most 64 integer alternatives");
-                long value = ReadMatchLiteral() ?? throw Error("MATCH_MEMBERSHIP_TYPE: expected integer literal");
-                if (!distinct.Add(value)) throw Error("MATCH_DUPLICATE: duplicate membership alternative");
-                values.Add(value);
-                if (Take("]")) break;
-                Expect(",");
-                if (Take("]")) break;
+                foreach (long v in part.Ints)
+                    if (!ints.Add(v)) throw Error("PATTERN_DUPLICATE: duplicate integer alternative");
+                foreach (bool v in part.Bools)
+                    if (!bools.Add(v)) throw Error("PATTERN_DUPLICATE: duplicate boolean alternative");
+                foreach (var t in part.Types)
+                    if (!types.Add(t)) throw Error("PATTERN_DUPLICATE: duplicate canonical type alternative");
+                if (ints.Count + bools.Count + types.Count > 64)
+                    throw Error("PATTERN_LIMIT: at most 64 expanded alternatives");
             }
-            return values.AsReadOnly();
+            if (ints.Count + bools.Count + types.Count == 0) throw Error("PATTERN_EMPTY: empty set");
+            return new CompilePattern(ints.OrderBy(v => v).ToArray(), bools.OrderBy(v => v).ToArray(),
+                types.OrderBy(v => v).ToArray());
+        }
+        private CompilePattern ReadPatternRef(bool array)
+        {
+            int at = Current.Offset;
+            if (!patternConstants.TryGetValue(Current.Text, out var entry) || entry.Array != array)
+                throw Error("PATTERN_TYPE: unknown, forward/cyclic or wrong-category Pattern reference");
+            patternNameUses.Add(at);
+            index++;
+            return entry.Pattern;
+        }
+        private CompilePattern ReadPatternArray(int depth)
+        {
+            if (depth >= 32) throw Error("PATTERN_LIMIT: nesting limit");
+            ExpectPatternBracket("[");
+            var parts = new List<CompilePattern>();
+            do
+            {
+                if (parts.Count >= 64) throw Error("PATTERN_LIMIT: collection size");
+                parts.Add(ReadPatternDescriptor(depth + 1));
+                if (TakePatternBracket("]")) break;
+                Expect(",");
+                if (TakePatternBracket("]")) break;
+            } while (true);
+            return CombinePatterns(parts);
+        }
+        private CompilePattern ReadPatternMembership(int depth)
+        {
+            if (depth >= 32) throw Error("PATTERN_LIMIT: nesting limit");
+            if (Current.Text != "[") return ReadPatternRef(true);
+            string next = tokens[index + 1].Text;
+            if (next is "on" or "is" or "in" || patternConstants.ContainsKey(next))
+                return ReadPatternArray(depth + 1);
+            ExpectPatternBracket("[");
+            var parts = new List<CompilePattern>();
+            do
+            {
+                if (parts.Count >= 64) throw Error("PATTERN_LIMIT: collection size");
+                long v = ReadMatchLiteral() ?? throw Error("PATTERN_TYPE: expected integer literal");
+                parts.Add(new CompilePattern([v], [], []));
+                if (TakePatternBracket("]")) break;
+                Expect(",");
+                if (TakePatternBracket("]")) break;
+            } while (true);
+            return CombinePatterns(parts);
+        }
+        private CompilePattern ReadPatternDescriptor(int depth)
+        {
+            if (depth >= 32) throw Error("PATTERN_LIMIT: nesting limit");
+            if (Take("on"))
+            {
+                if (Take("true")) return new CompilePattern([], [true], []);
+                if (Take("false")) return new CompilePattern([], [false], []);
+                if (patternConstants.ContainsKey(Current.Text)) return ReadPatternRef(false);
+                long v = ReadMatchLiteral() ?? throw Error("PATTERN_TYPE: expected constant int/bool pattern");
+                return new CompilePattern([v], [], []);
+            }
+            if (Take("in")) return ReadPatternMembership(depth + 1);
+            if (Take("is"))
+            {
+                bool list = Take("in");
+                if (list && Current.Text != "[")
+                {
+                    var p = ReadPatternRef(true);
+                    if (p.Ints.Length != 0 || p.Bools.Length != 0)
+                        throw Error("PATTERN_TYPE: is in requires type-only Pattern[]");
+                    return p;
+                }
+                if (list) ExpectPatternBracket("[");
+                var parts = new List<CompilePattern>();
+                do
+                {
+                    var type = Current.Text switch
+                    {
+                        "int" or "Int" => IrValueType.I64,
+                        "bool" or "boolean" => IrValueType.Bool,
+                        _ => throw Error("PATTERN_TYPE: unsupported or unresolved scalar type")
+                    };
+                    index++;
+                    parts.Add(new CompilePattern([], [], [type]));
+                    if (!list || TakePatternBracket("]")) break;
+                    Expect(",");
+                } while (true);
+                return CombinePatterns(parts);
+            }
+            return ReadPatternRef(false);
+        }
+        private void ReadPatternConstant()
+        {
+            Expect("const"); Expect("Pattern");
+            bool array = TakePatternBracket("[");
+            if (array) ExpectPatternBracket("]");
+            int at = Current.Offset;
+            string name = Name();
+            if (name is "Pattern" or "Int" or "boolean" or "on" or "in" or "_" ||
+                patternConstants.ContainsKey(name) || patternConstants.Count >= 128)
+                throw Error("PATTERN_NAME: duplicate, reserved or over-budget declaration");
+            Expect("=");
+            var p = array ? ReadPatternArray(0) : ReadPatternDescriptor(0);
+            Expect(";");
+            patternConstants.Add(name, (array, p));
+            patternNameUses.Add(at);
+        }
+        private (MatchTags, IReadOnlyList<long>?) ResolveStoredPattern(CompilePattern p, IrValueType subject)
+        {
+            if (p.Types.Contains(subject)) return (MatchTags.Any, null);
+            if (subject == IrValueType.I64 && p.Ints.Length != 0)
+                return (0, p.Ints);
+            if (subject == IrValueType.Bool && p.Bools.Length != 0)
+            {
+                MatchTags tags = 0;
+                foreach (bool b in p.Bools) tags |= b ? MatchTags.Positive : MatchTags.Negative;
+                return (tags, null);
+            }
+            throw Error("PATTERN_TYPE: no alternative matches subject");
         }
 
         private long? ReadMatchLiteral()
@@ -178,30 +319,6 @@ public static partial class OresStructuredParser
         private (MatchTags Tags, string? Binding, IrValueType? BindingType) ReadMatchPattern(IrValueType subject)
         {
             if (Current.Text == "default") throw MatchDefaultError();
-            if (Take("is"))
-            {
-                bool list = Take("in");
-                if (list) Expect("[");
-                var types = new HashSet<IrValueType>();
-                do
-                {
-                    string type = Current.Text;
-                    if (type is not ("int" or "bool"))
-                        throw Error("MATCH_TYPE_PATTERN_UNSUPPORTED: only statically proven int/bool type patterns are supported");
-                    index++;
-                    var expected = type == "int" ? IrValueType.I64 : IrValueType.Bool;
-                    if (!types.Add(expected))
-                        throw Error("MATCH_DUPLICATE: duplicate type-list alternative");
-                    if (!list) break;
-                    if (Take("]")) break;
-                    Expect(",");
-                } while (true);
-                if (!types.Contains(subject))
-                    throw Error("MATCH_PATTERN_TYPE: type pattern is not statically proven for this subject");
-                if (Current.Text == "as")
-                    throw Error("MATCH_TYPE_PATTERN_UNSUPPORTED: type pattern bindings require dedicated lowering");
-                return (MatchTags.Any, null, null);
-            }
             if (Take("_")) return (MatchTags.Any, null, null);
             if (subject == IrValueType.Bool)
             {

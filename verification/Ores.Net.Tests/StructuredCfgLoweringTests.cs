@@ -10,6 +10,12 @@ internal static class StructuredCfgLoweringTests
     {
         // Exercise production structured CFG + emitted CIL, not a host matcher.
         foreach (var (source, label) in new[] {
+            ("const Pattern p = on 5; fnc main():int{return match 5 over on p -> 42, on _ -> 0 end;}", "named pattern"),
+            ("const Pattern[] z = [on 1,in [2,3],on true]; fnc main():int{return match 3 over in z -> 42, on _ -> 0 end;}", "mixed set int"),
+            ("const Pattern[] z = [on 1,on true]; fnc main():int{return match true over in z -> 42, on _ -> 0 end;}", "mixed set bool"),
+            ("const Pattern[] z = [on true,on false]; fnc main():int{return match false over in z -> 42 end;}", "exhaustive bool set"),
+            ("const Pattern[] z = [is Int,is bool]; fnc main():int{return match 7 over is in z -> 42 end;}", "named type set"),
+            ("fnc main():int{return match 2 over in [on 1,in [2,3]] -> 42, on _ -> 0 end;}", "inline set"),
             ("fnc main():int{return match 2 over in [0,1,2] -> 42, on _ -> 0 end;}", "membership hit"),
             ("fnc main():int{return match 7 over in [0,1,2] -> 0, on _ -> 42 end;}", "membership miss"),
             ("fnc main():int{return match 2 over on 2 -> 42, in [1,2,3] -> 0, on _ -> 0 end;}", "membership priority"),
@@ -18,6 +24,14 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{return match true over is in [int,bool] -> 42 end;}", "static bool type-list coverage")
         }) Check(source, 42, label);
         foreach (var invalid in new[] {
+            "const Pattern p = on 5; fnc main():int{return p;}",
+            "const Pattern p = on q; const Pattern q = on p; fnc main():int{return 42;}",
+            "const Pattern[] z = [is int,on 1]; fnc main():int{return match 2 over is in z -> 42 end;}",
+            "const Pattern[] z = [on 1,2]; fnc main():int{return 42;}",
+            "const Pattern[] z = [on 1,on 1]; fnc main():int{return 42;}",
+            "const Pattern p = on 1; fnc main():int{return match 1 over in p -> 42,on _ -> 0 end;}",
+            "const Pattern[] z = [on 1]; fnc main():int{return match 1 over on z -> 42,on _ -> 0 end;}",
+            "const Pattern p = on 1; fnc main():int{return [1,2];}",
             "fnc main():int{return match 2 over in [] -> 42, on _ -> 0 end;}",
             "fnc main():int{return match 2 over in [2,2] -> 42, on _ -> 0 end;}",
             "fnc main():int{return match 2 over in [1,2] -> 42, on 2 -> 0, on _ -> 0 end;}",
