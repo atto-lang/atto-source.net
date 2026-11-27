@@ -206,11 +206,11 @@ internal static class CfgCilEmitter
                                     new Version(1, 0, 0, 0), default, default, default, default);
                                 var owner = metadata.AddTypeReference(runtime, metadata.GetOrAddString("Ores.Net.Runtime"),
                                     metadata.GetOrAddString("GuestDeferredStdout"));
-                                var signature = new BlobBuilder();
-                                new BlobEncoder(signature).MethodSignature().Parameters(1,
+                                var stdoutSignature = new BlobBuilder();
+                                new BlobEncoder(stdoutSignature).MethodSignature().Parameters(1,
                                     result => result.Type().Boolean(), parameters => parameters.AddParameter().Type().String());
                                 deferredStdout = metadata.AddMemberReference(owner, metadata.GetOrAddString("WriteLiteral"),
-                                    metadata.GetOrAddBlob(signature));
+                                    metadata.GetOrAddBlob(stdoutSignature));
                             }
                             il.LoadString(metadata.GetOrAddUserString(op.TextOperand!));
                             il.Call(deferredStdout);
