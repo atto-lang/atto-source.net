@@ -40,6 +40,14 @@ if (args.Length == 1 && args[0] == "--static-select-admission")
     return;
 }
 
+// Focused state-alias diagnostics, not general guest/AOT certification.
+if (args.Length == 1 && args[0] == "--declared-state-intrinsics")
+{
+    DeclaredActorCounterV2Tests.Run();
+    Console.WriteLine("NET_DECLARED_STATE_INTRINSICS_FOCUSED_PASS; NOT_GENERAL_GUEST_OR_NATIVEAOT_CERTIFICATION");
+    return;
+}
+
 DisjointFieldPlaceAdmissionTests.Run(); // reject-only; never guest parity
 ReadonlyShapeProjectionV1Tests.Run();
 NativeSourceIdentityV1SelfTest.Run();
