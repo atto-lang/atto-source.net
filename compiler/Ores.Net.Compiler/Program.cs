@@ -54,7 +54,7 @@ bool mathI64Granted = args.Length >= 4 &&
     args[^2] == "--capability" && args[^1] == "interop.dotnet.math-i64";
 if (mathI64Granted) args = args[..^2];
 bool deferredStdoutGranted = args.Length >= 4 &&
-    args[^2] == "--capability" && args[^1] == "stdio.stdout.write";
+    args[^2] == "--capability" && args[^1] == "stdio.out.write";
 if (deferredStdoutGranted) args = args[..^2];
 var dotnetPolicy = mathI64Granted
     ? DotnetHostImportPolicy.MathI64V0
