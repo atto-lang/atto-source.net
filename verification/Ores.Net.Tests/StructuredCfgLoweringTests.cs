@@ -347,6 +347,71 @@ internal static class StructuredCfgLoweringTests
 
     public static void Run()
     {
+        foreach (var body in new[]{
+            "let int x=40; set x++; set ++x; return x;",
+            "let int x=44; set x--; set --x; return x;",
+            "let int x=20; set x+=2; set x-=1; set x*=2; return x;",
+            "let int x=40; set x=x+2; return x;",
+            "let int x=0; while x<42 { set x++; } return x;"})
+            Check("fnc main():int{"+body+"}",42,"explicit update "+body);
+        foreach (var body in new[]{
+            "val int x=40; set x++; return x;",
+            "set missing++; return 42;",
+            "let bool x=true; set x++; return 42;",
+            "let int x=40; set x+ =2; return x;",
+            "let int x=40; set ++x++; return x;"})
+            Reject("fnc main():int{"+body+"}","explicit update "+body);
+        CheckOverflow("fnc main():int{let int x=9223372036854775807;set x++;return x;}",
+            "explicit counter overflow");
+        Check("fnc main():int{let int x=40;set! (x=x+2);return x;}",42,"wrapped local explicit update");
+        Check("fnc main():int{let int x=40;set! (x=x+1);set! x=x+1;return x;}",42,"wrapped and unwrapped update");
+        RejectWithDiagnostic("fnc main():int{val int x=40;set! (x=x+2);return x;}",
+            "E_IMMUTABLE_REBIND","wrapped fixed binding");
+        foreach (var body in new[]{
+            "let int x=40; return set!(x=42);",
+            "let int x=40; set!(42); return x;",
+            "let int x=40; set!(x==42); return x;",
+            "let int x=40; other!(x=42); return x;",
+            "let int x=40; set !(x=42); return x;",
+            "let int x=40; set! (x.field=42); return x;"})
+            RejectWithDiagnostic("fnc main():int{"+body+"}","NET_STRUCTURED_MACRO_EXPANDER_REQUIRED","macro boundary "+body);
+        Reject("fnc main():int{let int x=40;set!(x=42,43);return x;}","wrapped update cannot expand arguments");
+        Console.WriteLine("EXPLICIT_SCALAR_UPDATE_CFG_CIL_PASS positives=7 negatives=13 overflow=1");
+        foreach (var body in new[]{
+            "let x=32;for let i=0;i<10;set i++{set x++;}return x;",
+            "let x=32;for (let i=10;i>0;set --i){set x++;}return x;",
+            "let x=32;for let i=0;i<10;set i+=2{set x+=2;}return x;",
+            "let x=0;for (set x=40;x<42;set x++){}return x;",
+            "let n=0;for let i=0;i<10;set i++{if i==2{continue;}if i==5{break;}set n+=10;}return n+2;",
+            "let x=42;for let i=9223372036854775807;i<0;set i++{set x=0;}return x;",
+            "let x=42;for let i=9223372036854775807;i>0;set i++{break;}return x;",
+            "let x=30;for let i=0;i<3;set i++{for let j=0;j<4;set j++{set x++;}}return x;",
+            "let x=40;for let i=0;i<2;set i++{set x++;continue;}return x;"})
+            Check("fnc main():int{"+body+"}",42,"regular for "+body);
+        foreach (var body in new[]{
+            "for let i=0;i<10;i++{}return 42;",
+            "for let i=0;i<10;let i++{}return 42;",
+            "for let i=0;true;set missing++{}return 42;",
+            "for let i=0;i;set i++{}return 42;",
+            "for let i=0;i<1;set i++{}return i;",
+            "val int i=0;for (;i<1;set i++){}return 42;",
+            "for let i=0;i<1;set i+ =1{}return 42;"})
+            Reject("fnc main():int{"+body+"}","regular for "+body);
+        CheckOverflow("fnc main():int{for let i=9223372036854775807;i>0;set i++{}return 42;}",
+            "regular for checked update overflow");
+        Console.WriteLine("EXPLICIT_REGULAR_FOR_CFG_CIL_PASS positives=9 negatives=7 overflow=1");
+
+
+        Check("fnc main():int{return match 42 over on _ as int z -> z end;}", 42, "typed scalar alias");
+        Check("fnc main():int{return match 42 over on 41 as z when z==42 -> 0, on _ as const z -> z end;}", 42, "guard fallback scalar alias");
+        Check("fnc main():int{let n=20;let r=0;do match n over on _ as rebind int z -> {z=z+2;r=z;} end return n+r;}", 42, "rebind alias does not write back subject");
+        CheckModule("fnc bump(rebind int n):int{n=n+2;return n;} fnc main():int{let n=20;return bump(n)+n;}", 42, "rebind formal does not write back caller");
+        CheckModule("fnc bump(rebind n:int):int{n=n+2;return n;} fnc main():int{let n=20;return bump(n)+n;}", 42, "name-first rebind formal");
+        RejectWithDiagnostic("fnc main():int{do match 42 over on _ as int z -> {z=0;} end return 0;}", "E_IMMUTABLE_REBIND", "fixed alias");
+        RejectWithDiagnostic("fnc main():int{return match 42 over on _ as bool z -> 0 end;}", "MATCH_ALIAS_TYPE", "wrong alias type");
+        RejectWithDiagnostic("fnc main():int{return match 42 over on _ as rebind rebind int z -> z end;}", "MATCH_ALIAS_MODIFIER", "duplicate marker");
+        RejectWithDiagnostic("fnc main():int{return match 42 over on _ as mut z -> 0 end;}", "MATCH_ALIAS_MUT_UNSUPPORTED", "scalar referent mutation");
+        RejectWithDiagnostic("fnc bump(int n):int{n=n+2;return n;} fnc main():int{return bump(40);}", "E_IMMUTABLE_REBIND", "fixed formal");
         NegatedDoIfAotControlFlow();
         Check("""
             fnc main(): int {

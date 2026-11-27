@@ -1,0 +1,1 @@
+fnc main():int{return match 42 over on 41 as z when z==42 -> 0, on _ as const z -> z end;}

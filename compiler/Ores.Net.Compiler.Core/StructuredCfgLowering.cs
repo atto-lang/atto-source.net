@@ -111,7 +111,7 @@ public static partial class OresStructuredCfgLowering
             new Dictionary<string, StructuredFunction>(StringComparer.Ordinal);
         private int nextValue;
         private IReadOnlyDictionary<string, CfgCallSignature>? callSignatures;
-        private sealed record LoopTarget(Block Header, Block Exit, string[] Names);
+        private sealed record LoopTarget(Func<Block> ContinueTarget, Block Exit, string[] Names);
         private readonly Stack<LoopTarget> loopTargets = new();
 
         public VerifiedCfgFunction LowerHelper(StructuredFunction helper,
@@ -793,7 +793,7 @@ public static partial class OresStructuredCfgLowering
                         if (loopTargets.Count == 0)
                             throw new FormatException("continue outside structured CFG loop");
                         var loop = loopTargets.Peek();
-                        current.Terminator = new CfgJump(loop.Header.Name,
+                        current.Terminator = new CfgJump(loop.ContinueTarget().Name,
                             Values(loop.Names, variables));
                         current = null;
                         break;
@@ -894,10 +894,17 @@ public static partial class OresStructuredCfgLowering
         private Block While(StructuredWhile statement, Block origin,
             Dictionary<string, Binding> variables, Action<Block, Dictionary<string, Binding>, int?>? localExit)
         {
-            var names = Names(variables);
+            var outerNames = Names(variables);
+            // A header declaration exists only within this loop. No synthetic
+            // heap state or source rewriting; only typed block parameters.
+            var loopVariables = new Dictionary<string, Binding>(variables, StringComparer.Ordinal);
+            if (statement.Initializer is { } initializer)
+                origin = EmitStatements(new[] { initializer }, origin, loopVariables, localExit)
+                    ?? throw new FormatException("For initializer must fall through");
+            var names = Names(loopVariables);
             var headerVariables = new Dictionary<string, Binding>(StringComparer.Ordinal);
-            Block header = Join(names, variables, headerVariables);
-            origin.Terminator = new CfgJump(header.Name, Values(names, variables));
+            Block header = Join(names, loopVariables, headerVariables);
+            origin.Terminator = new CfgJump(header.Name, Values(names, loopVariables));
 
             Block conditionBlock = header;
             int condition = Expression(statement.Condition, ref conditionBlock, headerVariables);
@@ -908,15 +915,27 @@ public static partial class OresStructuredCfgLowering
             Block body = NewBlock();
             var bodyVariables = new Dictionary<string, Binding>(
                 headerVariables, StringComparer.Ordinal);
-            loopTargets.Push(new LoopTarget(header, exit, names));
+            // Lazily create the latch only when a fallthrough or continue
+            // edge exists. An all-break/return body has no reachable update.
+            Block? latch = null;
+            var latchVariables = new Dictionary<string, Binding>(StringComparer.Ordinal);
+            Block ContinueTarget() => statement.Update is null ? header :
+                latch ??= Join(names, headerVariables, latchVariables);
+            loopTargets.Push(new LoopTarget(ContinueTarget, exit, names));
             Block? bodyEnd;
             try { bodyEnd = EmitStatements(statement.Body, body, bodyVariables, localExit); }
             finally { loopTargets.Pop(); }
             if (bodyEnd is not null)
-                bodyEnd.Terminator = new CfgJump(header.Name, Values(names, bodyVariables));
+                bodyEnd.Terminator = new CfgJump(ContinueTarget().Name, Values(names, bodyVariables));
+            if (latch is not null && statement.Update is { } update)
+            {
+                var latchEnd = EmitStatements(new StructuredStmt[] { update }, latch, latchVariables, localExit)
+                    ?? throw new FormatException("For update must fall through");
+                latchEnd.Terminator = new CfgJump(header.Name, Values(names, latchVariables));
+            }
             conditionBlock.Terminator = new CfgBranch(condition, body.Name,
                 Array.Empty<int>(), exit.Name, Values(names, headerVariables));
-            foreach (string name in names)
+            foreach (string name in outerNames)
                 variables[name] = exitVariables[name];
             return exit;
         }

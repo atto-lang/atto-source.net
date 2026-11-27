@@ -87,7 +87,7 @@ public static partial class OresStructuredCfgLowering
 
         private Binding MatchBinding(StructuredMatchArm arm, Binding subject, Block block)
         {
-            if (arm.Tags == MatchTags.Any) return subject;
+            if (arm.WholeAlias || arm.Tags == MatchTags.Any) return subject;
             if (subject.Type == IrValueType.OptionI64)
                 return new Binding(IrValueType.I64, subject.PayloadId!.Value);
             if (arm.BindingType == IrValueType.OptionI64)

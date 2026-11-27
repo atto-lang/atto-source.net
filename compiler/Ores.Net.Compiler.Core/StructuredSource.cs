@@ -90,7 +90,8 @@ public sealed record StructuredIf(int At, StructuredExpr Condition,
     IReadOnlyList<StructuredStmt> Then, IReadOnlyList<StructuredStmt>? Else)
     : StructuredStmt(At);
 public sealed record StructuredWhile(int At, StructuredExpr Condition,
-    IReadOnlyList<StructuredStmt> Body) : StructuredStmt(At);
+    IReadOnlyList<StructuredStmt> Body, StructuredStmt? Initializer = null,
+    StructuredSet? Update = null) : StructuredStmt(At);
 // Lexical loop transfers share the same typed CFG/SSA environment.
 public sealed record StructuredBreak(int At) : StructuredStmt(At);
 public sealed record StructuredContinue(int At) : StructuredStmt(At);
@@ -125,10 +126,29 @@ public static partial class OresStructuredParser
                 throw new FormatException(
                     $"NET_STRUCTURED_MACRO_EXPANDER_REQUIRED: macro declarations require typed AST expansion before OresIR/CIL at offset {tokens[i].Offset}; runtime fallback is forbidden");
             if (tokens[i].Text == "!" && i + 1 < tokens.Count &&
-                tokens[i + 1].Text == "(" && !IsPrefixBangPosition(tokens, i))
+                tokens[i + 1].Text == "(" && !IsPrefixBangPosition(tokens, i) &&
+                !IsExplicitWrappedAssignment(tokens, i))
                 throw new FormatException(
                     $"NET_STRUCTURED_MACRO_EXPANDER_REQUIRED: macro invocation requires typed AST expansion before OresIR/CIL at offset {tokens[i].Offset}; runtime fallback is forbidden");
         }
+    }
+
+    // Only the reserved explicit local assignment statement shape can bypass
+    // the generic macro denial. The typed Reader still checks the entire
+    // statement, target authority, expression, closing ')' and terminator.
+    // In particular a call, member, nested value or arbitrary macro remains denied.
+    private static bool IsExplicitWrappedAssignment(IReadOnlyList<Token> tokens, int bang)
+    {
+        if (bang < 2 || bang + 3 >= tokens.Count) return false;
+        var verb = tokens[bang - 1];
+        if (verb.Text != "set" || verb.Offset + verb.Text.Length != tokens[bang].Offset ||
+            tokens[bang - 2].Text is not ("{" or ";") ||
+            tokens[bang + 1].Text != "(" || tokens[bang + 3].Text != "=")
+            return false;
+        var name = tokens[bang + 2].Text;
+        return name.Length is >= 1 and <= MaxIdentifier &&
+            (Alpha(name[0]) || name[0] == '_') &&
+            name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_');
     }
 
     // A parenthesized boolean operand is not a macro splice. Permit only
@@ -1746,6 +1766,11 @@ public static partial class OresStructuredParser
                         // Both x: int and int x use the same static ABI slot.
                         // The name-level '?' in x?: int is a distinct,
                         // as-yet-unlowered omission contract, not Option<T>.
+                        bool rebind = Current.Text == "rebind" && index + 1 < tokens.Count && tokens[index + 1].Text != ":";
+                        if (rebind) index++;
+                        if (rebind && Current.Text == "mut") throw Error("PARAM_REBIND_UNSUPPORTED: mutable reference formal");
+                        if (rebind && Current.Text == "rebind" && index + 1 < tokens.Count && tokens[index + 1].Text != ":")
+                            throw Error("PARAM_REBIND_MODIFIER: duplicate rebind marker");
                         string? nameFirst = null;
                         if (index + 2 < tokens.Count &&
                             tokens[index + 1].Text == "?" &&
@@ -1762,8 +1787,10 @@ public static partial class OresStructuredParser
                         string parameter = nameFirst ?? Name();
                         if (Current.Text is "?" or "=")
                             throw Error("E_OPTIONAL_FORMAL_ABI_UNSUPPORTED: name-level '?' and parameter defaults require checked full-arity binding");
+                        if (rebind && type is not (IrValueType.I64 or IrValueType.Bool))
+                            throw Error("PARAM_REBIND_UNSUPPORTED: only copied scalar formals are admitted");
                         if (!parameterTypes.TryAdd(parameter,
-                            new LocalBinding(type, StructuredBindingKind.Val, null)))
+                            new LocalBinding(type, rebind ? StructuredBindingKind.Let : StructuredBindingKind.Val, null)))
                             throw Error("Duplicate typed helper parameter");
                         parameters.Add(new StructuredParameter(parameter, type));
                     }
@@ -2948,6 +2975,52 @@ public static partial class OresStructuredParser
                 Expect(";");
                 return (new StructuredContinue(at), true);
             }
+            if (Take("for"))
+            {
+                // First bounded slice: one scalar local or explicit existing-local
+                // initializer; mandatory bool predicate and explicit scalar update.
+                // The loop scope is independent of the body scope.
+                bool parenthesized = Take("(");
+                scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
+                localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+                aggregateScopes.Add(new Dictionary<string, StaticAggregate>(StringComparer.Ordinal));
+                namedAggregateScopes.Add(new Dictionary<string, NamedAggregateType>(StringComparer.Ordinal));
+                try
+                {
+                    StructuredStmt? initializer = null;
+                    if (Take(";")) { }
+                    else if (Current.Text == "let")
+                    {
+                        var (decl, _) = Statement(depth + 1);
+                        if (decl is not StructuredLet { ValueType: IrValueType.I64 or IrValueType.Bool })
+                            throw Error("E_FOR_SCALAR_ONLY: expected scalar let initializer");
+                        initializer = decl;
+                    }
+                    else
+                    {
+                        initializer = ReadLocalUpdate(depth + 1, Current.Offset, true);
+                        Expect(";");
+                    }
+                    var condition = Expr(depth + 1);
+                    Require(condition, IrValueType.Bool, "For condition must be bool");
+                    Expect(";");
+                    var update = ReadLocalUpdate(depth + 1, Current.Offset, true);
+                    if (parenthesized) Expect(")");
+                    if (loopDepth >= MaxDepth) throw Error("Loop nesting limit exceeded");
+                    loopDepth++;
+                    IReadOnlyList<StructuredStmt> body;
+                    try { (body, _) = Block(depth + 1); }
+                    finally { loopDepth--; }
+                    return (new StructuredWhile(at, condition, body, initializer, update), false);
+                }
+                finally
+                {
+                    scopes.RemoveAt(scopes.Count - 1);
+                    localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+                    aggregateScopes.RemoveAt(aggregateScopes.Count - 1);
+                    namedAggregateScopes.RemoveAt(namedAggregateScopes.Count - 1);
+                }
+            }
             if (Take("while") || Take("loop"))
             {
                 bool unconditional = tokens[index - 1].Text == "loop";
@@ -2965,6 +3038,36 @@ public static partial class OresStructuredParser
                 // Even a constant-true loop is not accepted as a return proof.
                 return (new StructuredWhile(at, condition, body), false);
             }
+            var assignment = ReadLocalUpdate(depth, at, false);
+            Expect(";");
+            return (assignment, false);
+        }
+
+        private StructuredSet ReadLocalUpdate(int depth, int at, bool forHeader)
+        {
+            // Contextual explicit update, using existing typed local authority.
+            // A local actually named set followed by '=' remains compatible.
+            bool Pair(string a, string b)
+            {
+                if (index + 1 >= tokens.Count || Current.Text != a ||
+                    tokens[index + 1].Text != b ||
+                    Current.Offset + a.Length != tokens[index + 1].Offset) return false;
+                index += 2;
+                return true;
+            }
+            bool explicitSet = Current.Text == "set" && index + 1 < tokens.Count &&
+                tokens[index + 1].Text is { Length: > 0 } following &&
+                (Alpha(following[0]) || following[0] == '_' || following is "!" or "+" or "-");
+            if (forHeader && !explicitSet) throw Error("E_EXPLICIT_REBIND: for clause requires set");
+            bool wrapped = false, increment = false;
+            StructuredOperator? compound = null;
+            if (explicitSet)
+            {
+                index++;
+                if (Take("!")) wrapped = Take("(");
+                if (Pair("+", "+")) { compound = StructuredOperator.Add; increment = true; }
+                else if (Pair("-", "-")) { compound = StructuredOperator.Subtract; increment = true; }
+            }
             int variableAt = Current.Offset;
             string variable = Name();
             var binding = Lookup(variable, variableAt);
@@ -2973,20 +3076,31 @@ public static partial class OresStructuredParser
                     $"E_IMMUTABLE_REBIND: Cannot reassign {binding.Kind.ToString().ToLowerInvariant()} binding '{variable}' at offset {variableAt}");
             if (inlineValueBindingFloor is int floor && scopes.Take(floor).Any(scope => scope.ContainsKey(variable)))
                 throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: value-context sync task cannot yet assign a surrounding local");
-            bool compoundXor = Take("^^=");
-            if (!compoundXor) Expect("=");
-            if (compoundXor && binding.Type != IrValueType.I64)
-                throw Error("Compound XOR requires a mutable int local");
-            // A compound RHS must not acquire the special complete-statement
-            // writeback permission of an ordinary assignment. Preserve the
-            // existing lexical task, suspension and ownership gates.
-            var assigned = ReadStatementValue(depth + 1, binding.Type, allowWriteback: !compoundXor);
+            if (!increment && explicitSet)
+            {
+                if (Pair("+", "+")) { compound = StructuredOperator.Add; increment = true; }
+                else if (Pair("-", "-")) { compound = StructuredOperator.Subtract; increment = true; }
+                else if (Pair("+", "=")) compound = StructuredOperator.Add;
+                else if (Pair("-", "=")) compound = StructuredOperator.Subtract;
+                else if (Pair("*", "=")) compound = StructuredOperator.Multiply;
+            }
+            if (!increment && compound is null && Take("^^=")) compound = StructuredOperator.BitXor;
+            if (compound is null) Expect("=");
+            if (compound is not null && binding.Type != IrValueType.I64)
+                throw Error(compound == StructuredOperator.BitXor
+                    ? "Compound XOR requires a mutable int local"
+                    : "Compound update requires a mutable int local");
+            // A compound RHS must not acquire complete-statement writeback permission.
+            if (forHeader && binding.Type is not (IrValueType.I64 or IrValueType.Bool))
+                throw Error("E_FOR_SCALAR_ONLY: expected scalar update");
+            StructuredExpr assigned = increment ? new StructuredInt(variableAt, 1) :
+                forHeader ? Expr(depth + 1) : ReadStatementValue(depth + 1, binding.Type, allowWriteback: compound is null);
             Require(assigned, binding.Type, "Assignment has wrong type");
-            if (compoundXor)
-                assigned = CheckedBinary(variableAt, StructuredOperator.BitXor,
+            if (compound is { } op)
+                assigned = CheckedBinary(variableAt, op,
                     new StructuredRead(variableAt, variable, IrValueType.I64), assigned, IrValueType.I64);
-            Expect(";");
-            return (new StructuredSet(at, variable, assigned), false);
+            if (wrapped) Expect(")");
+            return new StructuredSet(at, variable, assigned);
         }
         // The compatibility spelling remains a contextual type name. A value
         // named boolean followed by = or : retains its existing interpretation.
