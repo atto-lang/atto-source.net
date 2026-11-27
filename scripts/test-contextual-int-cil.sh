@@ -22,7 +22,8 @@ program 'int factor, int offset' 'factor * value + offset' 'const x = Scale::(2,
 program 'int factor' 'factor * value' 'const x = Scale::(6); const y = x; return y.apply(7);' >"$work/alias.atto"
 program 'int factor, int offset' 'factor * value + offset' 'const x = Scale::(offset=7,factor=5); return x.apply(7);' >"$work/named.atto"
 program 'int factor, int offset' 'factor * value + offset' 'let n = 3; const x = Scale::(offset=n+1,factor=n); set n = 9; return x.apply(5) + Scale::(2,1).apply(7);' >"$work/set-snapshot.atto"
-for spec in direct:42 reuse:20 multi:50 alias:42 named:42 set-snapshot:34; do
+program 'int factor, int offset' 'factor * value + offset' 'return Scale::(offset=7,factor=5).apply(7);' >"$work/direct-named.atto"
+for spec in direct:42 reuse:20 multi:50 alias:42 named:42 set-snapshot:34 direct-named:42; do
   name="${spec%:*}"; expected="${spec#*:}"
   rm -f "$guest"
   compile "$work/$name.atto" "$guest"
@@ -30,7 +31,7 @@ for spec in direct:42 reuse:20 multi:50 alias:42 named:42 set-snapshot:34; do
   dotnet build "$host" -c Release -t:Rebuild
   expect_exit "$expected" dotnet run --no-build -c Release --project "$host"
   echo "PASS CONTEXT_CORECLR $name exit=$expected"
-  if [[ "$name" == multi || "$name" == alias || "$name" == named || "$name" == set-snapshot ]]; then
+  if [[ "$name" == multi || "$name" == alias || "$name" == named || "$name" == set-snapshot || "$name" == direct-named ]]; then
     dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true --self-contained true -o "$work/native-$name"
     expect_exit "$expected" "$work/native-$name/Atto.Cil.Guest.Host"
     echo "PASS CONTEXT_NATIVEAOT $name exit=$expected"
@@ -64,4 +65,14 @@ for body in 'set n = 9; return Scale::(2,1).apply(3);' 'const x = Scale::(2,1); 
   grep -Fq 'E_CONTEXT_PROFILE:' "$work/stderr"
   test ! -e "$work/rejected.dll"
   echo "PASS CONTEXT_SET_REJECT $body"
+done
+
+for body in 'return 1 + Scale::(offset=7,factor=5).apply(7);' 'return Scale::(offset=7,factor=5).apply(7) + 1;' 'return Scale::(offset=7,offset=5).apply(7);'; do
+  program 'int factor, int offset' 'factor * value + offset' "$body" >"$work/negative.atto"
+  rm -f "$work/rejected.dll"
+  status=0; compile "$work/negative.atto" "$work/rejected.dll" >"$work/stdout" 2>"$work/stderr" || status=$?
+  test "$status" = 2
+  grep -Fq 'E_CONTEXT_PROFILE:' "$work/stderr"
+  test ! -e "$work/rejected.dll"
+  echo "PASS CONTEXT_DIRECT_NAMED_REJECT $body"
 done
