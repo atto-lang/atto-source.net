@@ -1,0 +1,11 @@
+define struct Point { int x; int y; } with {
+ constructor(int x, int y) { self.x = x; self.y = y; }
+ mtd int • sum() { return self.x + self.y; }
+ mtd int <- product() { return self.x * self.y; }
+ mtd is_origin() -> bool { return self.x == 0 && self.y == 0; }
+}
+define struct Rectangle { Point a; Point b; } with {
+ constructor(Point a, Point b) { self.a = a; self.a = b; self.b = b; }
+ mtd area() -> int { return (self.b.x - self.a.x) * (self.b.y - self.a.y); }
+}
+pub fnc main():int { let p = Point(1, 2); let q = Point(4, 6); let Rectangle r = Rectangle(p,q); let snapshot = copy! r; return snapshot.area() + p.sum() + q.product() + 3; }
