@@ -437,8 +437,7 @@ internal static class StructuredCfgLoweringTests
             }
             """;
         Check(sum, 45, "two loop-carried SSA values sum 0..9");
-        // A type-first scalar is compile-time const. Runtime helper values
-        // remain legal as non-rebindable val, not as constant-folded calls.
+        // Type-first and explicit const can capture runtime scalar values.
         foreach (var (source, label) in new[] {
             ("fnc main():int{int x=7;return x;}", "type-first scalar literal"),
             ("fnc main():int{const x=7;return x;}", "inferred const literal"),
@@ -459,8 +458,13 @@ internal static class StructuredCfgLoweringTests
             "fnc inc(int p):int{return p+1;}fnc main():int{const int x=inc(6);return x;}",
             "fnc inc(int p):int{return p+1;}fnc main():int{const x:int=inc(6);return x;}"
         })
-            RejectWithDiagnostic(source, "E_NON_CONST_INITIALIZER",
-                "runtime helper cannot initialize implicit/explicit const");
+            Check(source, 7, "runtime helper initializes implicit/explicit const");
+        Check("fnc inc(int p):int{return p+1;}fnc main():int{const x as int=inc(41);return x;}",
+            42, "name-first runtime const through typed CFG/CIL");
+        Check("fnc main():int{let int x=40;const int y=x;x=0;return y+2;}",
+            42, "runtime const snapshots before later assignment");
+        Check("fnc main():int{const mut x as int=42;return x;}", 42,
+            "const mut normalizes to fixed val in CIL");
         RejectWithDiagnostic("fnc main():int{int x=7;x=8;return x;}",
             "E_IMMUTABLE_REBIND", "type-first constant cannot rebind");
         RejectWithDiagnostic("fnc main():int{const int x=7;x=8;return x;}",
@@ -655,8 +659,8 @@ internal static class StructuredCfgLoweringTests
             42, "type-first int with checked identity cast");
         Check("fnc plus(int n):int{return n+1;}fnc main():int{val int x=plus(41);return x;}",
             42, "val runtime helper result (type-first int is const)");
-        RejectWithDiagnostic("fnc plus(int n):int{return n+1;}fnc main():int{int x=plus(41);return x;}",
-            "E_NON_CONST_INITIALIZER", "type-first int cannot hold a runtime helper result");
+        Check("fnc plus(int n):int{return n+1;}fnc main():int{int x=plus(41);return x;}",
+            42, "type-first int eagerly evaluates runtime helper");
         Reject("fnc main():int{int x=7;x=8;return x;}",
             "type-first int binding is immutable by default");
         Reject("fnc main():int{int x=true;return 0;}",
@@ -1018,10 +1022,10 @@ internal static class StructuredCfgLoweringTests
             42, "val snapshots current mutable binding value");
         Check("fnc main():int{val int x=40;val int y=x;return y+2;}",
             42, "val accepts runtime single-assignment source value");
-        Reject("fnc main():int{let int x=40;const int y=x;return y+2;}",
-            "const must not snapshot runtime mutable local");
-        Reject("fnc main():int{val int x=40;int y=x;return y+2;}",
-            "implicit const must not copy runtime val as constexpr");
+        Check("fnc main():int{let int x=40;const int y=x;return y+2;}",
+            42, "const snapshots runtime mutable scalar local");
+        Check("fnc main():int{val int x=40;int y=x;return y+2;}",
+            42, "implicit const snapshots runtime val");
         Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
             "const overflow is rejected before CIL");
 
