@@ -69,6 +69,17 @@ internal static class VmActorStateCellsTests
             "out-of-bounds index");
         Deny(() => host.ReadActorStateInt64(tenantB, b1, turnA, read, 0),
             "cross-isolate state read");
+        // Denial must leave the parent active and unchanged.
+        Deny(() => host.BeginActorStateLoan(tenantA, a1, turnA, writable: true),
+            "read-only parent cannot authorize nested writer");
+        if (host.ReadActorStateInt64(tenantA, a1, turnA, read, 0) != 0)
+            throw new Exception("denied nested admission changed parent state");
+        var readChild = host.BeginActorStateLoan(tenantA, a1, turnA);
+        Deny(() => host.BeginActorStateLoan(tenantA, a1, turnA, writable: true),
+            "nested read-only parent cannot authorize writer");
+        Deny(() => host.ReadActorStateInt64(tenantA, a1, turnA, read, 0),
+            "nested read fences parent");
+        host.EndActorStateLoan(tenantA, a1, turnA, readChild);
         host.EndActorStateLoan(tenantA, a1, turnA, read);
 
         var write = host.BeginActorStateLoan(tenantA, a1, turnA, writable: true);
@@ -79,6 +90,14 @@ internal static class VmActorStateCellsTests
         var nested = host.BeginActorStateLoan(tenantA, a1, turnA);
         Deny(() => host.AddActorStateInt64(tenantA, a1, turnA, write, 0, 1),
             "nested read-only loan must fence writable parent");
+        Deny(() => host.BeginActorStateLoan(tenantA, a1, turnA, writable: true),
+            "read-only child of writer cannot reacquire write authority");
+        Deny(() => host.CompleteActorTurn(tenantA, a1, turnA),
+            "completion with nested state loan");
+        Deny(() => host.SuspendActorTurn(tenantA, a1, turnA),
+            "suspension with nested state loan");
+        Deny(() => host.RetireActor(tenantA, a1),
+            "retirement with live state loan");
         host.EndActorStateLoan(tenantA, a1, turnA, nested);
         host.WriteActorStateInt64(tenantA, a1, turnA, write, 0, long.MaxValue);
         try {
@@ -118,11 +137,28 @@ internal static class VmActorStateCellsTests
             throw new Exception("foreign tenant signed counter mismatch");
         Deny(() => host.ReadActorStateInt64(tenantB, b1, turnB, write, 0),
             "cross-actor stale state loan");
+        var cancelledChild = host.BeginActorStateLoan(tenantB, b1, turnB);
+        Deny(() => host.CompleteActorTurn(tenantB, b1, turnB),
+            "premature completion with outstanding loans");
         host.CancelActorTurn(tenantB, b1, turnB);
+        Deny(() => host.CompleteActorTurn(tenantB, b1, turnB),
+            "cancelled turn cannot later complete successfully");
+        Deny(() => host.CancelActorTurn(tenantB, b1, turnB),
+            "duplicate cancellation");
+        Deny(() => host.ResumeActorTurn(tenantB, b1, turnB),
+            "cancelled turn cannot resume");
+        Deny(() => host.EndActorStateLoan(tenantB, b1, turnB, cancelledChild),
+            "cancelled child cannot release authority twice");
+        Deny(() => host.EndActorStateLoan(tenantB, b1, turnB, bloan),
+            "cancelled parent cannot release authority twice");
         Deny(() => host.WriteActorStateInt64(tenantB, b1, turnB, bloan, 0, 8),
             "cancelled turn write must be denied");
         var bnext = host.BeginActorTurn(tenantB, b1);
         var bread = host.BeginActorStateLoan(tenantB, b1, bnext);
+        Deny(() => host.ReadActorStateInt64(tenantB, b1, bnext, cancelledChild, 0),
+            "cancelled child cannot cross turn generation");
+        Deny(() => host.ReadActorStateInt64(tenantB, b1, bnext, bloan, 0),
+            "cancelled parent cannot cross turn generation");
         if (host.ReadActorStateInt64(tenantB, b1, bnext, bread, 0) != -4)
             throw new Exception("cancel should retain committed state");
         host.EndActorStateLoan(tenantB, b1, bnext, bread);
