@@ -29,7 +29,10 @@ dotnet build "$compiler" -c Release
 for fixture in \
   fixtures/cil/pointer-local-rt.atto \
   fixtures/cil/pointer-local-mixed-bang.atto \
-  fixtures/cil/pointer-local-all-bang.atto; do
+  fixtures/cil/pointer-local-all-bang.atto \
+  fixtures/cil/pointer-slot-rebind.atto \
+  fixtures/cil/pointer-slot-empty.atto \
+  fixtures/cil/pointer-slot-survivor.atto; do
   name="$(basename "$fixture" .atto)"
   rm -f "$guest"
   dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$guest"
@@ -42,7 +45,7 @@ for fixture in \
   test -x "$output/Atto.Cil.Guest.Host"
   expect_42 POINTER_NATIVEAOT_GUEST "$output/Atto.Cil.Guest.Host"
 done
-echo "ATTO_POINTER_LOCAL_CIL_NATIVEAOT_PASS guests=3"
+echo "ATTO_POINTER_LOCAL_CIL_NATIVEAOT_PASS guests=6"
 
 # All pointer-negative fixtures require a scoped E_POINTER_* failure and
 # an empty emitted-artifact directory. This is compiled-source rejection,
@@ -70,7 +73,7 @@ for fixture in fixtures/cil/negative/pointer-*.atto; do
   }
   pointer_reject_count=$((pointer_reject_count + 1))
 done
-test "$pointer_reject_count" -eq 19
+test "$pointer_reject_count" -eq 27
 echo "ATTO_POINTER_LOCAL_CIL_NEGATIVE_PASS rejected=$pointer_reject_count"
 
 # Additional fail-closed lexical and authority cases; comments are not tokens.

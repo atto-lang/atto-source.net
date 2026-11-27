@@ -1,0 +1,2 @@
+// expect-error: E_POINTER_SLOT_PROFILE
+pub fnc main(): int { let a: int = 42; let mut RawPointer<int> p = RawPointer.empty<int>(); val x = deref! p; return x; }
