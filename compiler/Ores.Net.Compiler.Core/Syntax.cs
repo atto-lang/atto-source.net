@@ -4,6 +4,7 @@ namespace Ores.Net.Compiler;
 
 public abstract record Expression;
 public sealed record Literal(long Value) : Expression;
+internal sealed record UnsignedLiteral(ulong Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
 // Source-only closed scalar projection. Each root has one ordered evaluation;
@@ -893,7 +894,7 @@ public static partial class OresParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy, string source, int? languageVersion)
+    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy, string source, int? languageVersion, bool unsignedScalar = false)
     {
         // Macro definitions are compiler-only. Neither these declarations nor
         // their arguments appear in OresIR/CIL, and no runtime expansion exists.
@@ -1175,6 +1176,18 @@ public static partial class OresParser
 
         public Expression ParseProgram()
         {
+            if (unsignedScalar)
+            {
+                Expect("pub");
+                Expect("fnc"); Expect("main"); Expect("("); Expect(")");
+                Expect(":");
+                if (!Take("u64")) Expect("uint");
+                Expect("{"); Expect("return");
+                var result = ParseAdd(0);
+                Expect(";"); Expect("}");
+                if (Current.Text.Length != 0) throw new FormatException($"Unexpected unsigned source at offset {Current.Offset}");
+                return result;
+            }
             SkipFileExports();
             if (Take("import"))
             {
@@ -1336,7 +1349,7 @@ public static partial class OresParser
         private Expression ParseAdd(int depth)
         {
             CheckDepth(depth);
-            Expression left = PatternAhead() ? ParseTuplePattern(depth + 1) : ParseMul(depth + 1);
+            Expression left = !unsignedScalar && PatternAhead() ? ParseTuplePattern(depth + 1) : ParseMul(depth + 1);
             while (Current.Text is "+" or "-")
             {
                 char op = Current.Text[0];
@@ -1361,7 +1374,7 @@ public static partial class OresParser
                 char op = Current.Text[0];
                 // Checked int/int division remains unsupported in this
                 // i64-only bootstrap; % is removed at lexical admission.
-                if (op == '/')
+                if (op == '/' && !unsignedScalar)
                     throw new FormatException(
                         "Checked integer division requires typed guest error lowering; unsupported in the i64 source subset");
                 _index++;
@@ -1374,6 +1387,23 @@ public static partial class OresParser
         private Expression ParseUnary(int depth)
         {
             CheckDepth(depth);
+            if (unsignedScalar)
+            {
+                if (Take("("))
+                {
+                    var inner = ParseAdd(depth + 1);
+                    Expect(")");
+                    return inner;
+                }
+                string raw = Current.Text;
+                string digits = raw.Replace("_", "", StringComparison.Ordinal);
+                if (digits.Length == 0 || digits.Any(ch => ch is < '0' or > '9') ||
+                    (digits.Length > 1 && digits[0] == '0') ||
+                    !ulong.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out ulong value))
+                    throw new FormatException($"Expected exact u64 literal at offset {Current.Offset}");
+                _index++;
+                return new UnsignedLiteral(value);
+            }
             if (_patternScope is not null)
             {
                 if (_patternScope.TryGetValue(Current.Text,out int id))
