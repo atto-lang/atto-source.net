@@ -934,7 +934,7 @@ public static partial class OresStructuredParser
 
     private readonly record struct Token(string Text, int Offset);
     private sealed class Lexer(string source, bool moduleMode = false,
-        bool allowStaticTupleProjection = false, bool attachedStructTarget = false)
+        bool allowStaticTupleProjection = false, bool attachedStructTarget = false, bool ownedUnwind = false)
     {
         private int index;
         private bool previousWasWith;
@@ -1106,11 +1106,11 @@ public static partial class OresStructuredParser
                 {
                     // Only the checked structured scalar profile admits copy.
                     // Borrow, move, share and linked-module ownership still fail closed.
-                    if (word != "copy" || moduleMode)
+                    if (!(ownedUnwind && word == "take") && (word != "copy" || moduleMode))
                         throw new FormatException(
                             $"OWNERSHIP_BANG_BACKEND_UNSUPPORTED: '{word}!' requires typed ownership and actor-arena Native AOT lowering at offset {offset}");
                     index++;
-                    if (index < source.Length && source[index] == '!')
+                    if (word == "copy" && index < source.Length && source[index] == '!')
                         index++;
                     if (index < source.Length && source[index] == '!')
                         throw new FormatException($"E_COPY_SYNTAX: at most two adjacent copy bangs at offset {offset}");
@@ -1189,7 +1189,7 @@ public static partial class OresStructuredParser
                      ((ch == '|' && source[index + 1] == '>') ||
                       (ch == '<' && source[index + 1] == '|')))
                 index += 2;
-            else if (ch == '|' && !moduleMode && !precededByString)
+            else if (ch == '|' && !moduleMode && !precededByString && !ownedUnwind)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
             // Prefix logical not already has typed boolean lowering in Unary.
@@ -1198,7 +1198,7 @@ public static partial class OresStructuredParser
             else if (ch is '!' or '¬') index++;
             else if (ch is '⧖' or '∂') index++;
             else if (booleanPackBracket || "()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
-                (ch == '|' && precededByString) ||
+                (ch == '|' && (precededByString || ownedUnwind)) ||
                 (allowStaticTupleProjection && sawTupleDeclaration && ch is ('[' or ']')) ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
