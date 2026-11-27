@@ -122,6 +122,9 @@ public static partial class OresParser
                     throw new FormatException($"EXPORT_BACKEND_UNSUPPORTED: only fnc main is lowered in .NET NativeAOT scalar compiler at offset {token.Offset}");
                 if (declaration.Scope != ExplicitExportScope.Public)
                     throw new FormatException($"EXPORT_PACKAGE_LINKER_UNSUPPORTED: package-only main needs module-scoped linkage at offset {token.Offset}");
+                // Keep the checked directive's position in the grammar. Only
+                // Reader's file-root production may consume this marker.
+                stripped.Add(token);
                 i = j;
                 continue;
             }
@@ -1159,12 +1162,20 @@ public static partial class OresParser
 
         private void Expect(string value)
         {
+            if (Current.Text == "export" && value != "export")
+                throw new FormatException($"EXPORT_SCOPE: exports must be file-level at offset {Current.Offset}");
             if (!Take(value))
                 throw new FormatException($"Expected '{value}' at offset {Current.Offset}");
         }
 
+        private void SkipFileExports()
+        {
+            while (Take("export")) { }
+        }
+
         public Expression ParseProgram()
         {
+            SkipFileExports();
             if (Take("import"))
             {
                 Expect("dotnet");
@@ -1186,7 +1197,9 @@ public static partial class OresParser
                 _dotnetMathAlias = alias;
                 Expect(";");
             }
+            SkipFileExports();
             ParseMacroPrelude();
+            SkipFileExports();
             bool defined = false, exposed = false;
             while (Current.Text is "define" or "pub")
             {
@@ -1272,6 +1285,7 @@ public static partial class OresParser
                 if (Current.Text == ";")
                     throw new FormatException("E_SYNTAX: comma body requires ',' not ';'");
                 Expect("end");
+                SkipFileExports();
                 if (Current.Text.Length != 0)
                     throw new FormatException($"Unexpected token at offset {Current.Offset}");
                 return last;
@@ -1288,6 +1302,7 @@ public static partial class OresParser
                 throw new FormatException("E_LANGUAGE_VERSION: v2 comma body requires '::'");
             Expect(";");
             Expect(braced ? "}" : "end");
+            SkipFileExports();
             if (Current.Text.Length != 0)
                 throw new FormatException($"Unexpected token at offset {Current.Offset}");
             return expression;
