@@ -35,7 +35,7 @@ internal sealed record ReturnStmt(Expression Value) : Statement;
 // Signed i64 guest results; bool is internal to guards.
 internal enum CheckedType { Int, Bool, Void }
 internal sealed record Function(string Name, List<string> Args,
-    CheckedType ReturnType, List<Statement> Body, long? MutableWrite = null, bool MutableScalar = false);
+    CheckedType ReturnType, List<Statement> Body, long? MutableWrite = null, bool MutableScalar = false, bool CompilerGenerated = false);
 
 // Typed, local-only read lease. Source pointer authority is verified and
 // erased before ordinary CIL lowering; it is never represented as a raw
@@ -260,6 +260,10 @@ internal sealed class Parser
             result.Add(new Function(name, args, returnType, statements));
             if (result.Count > 64) throw new CompilerError("E_LIMIT", "64 function limit");
         }
+        // Only the closed nominal Record adapter may introduce these helper
+        // definitions; ordinary user functions retain their existing metadata.
+        if (records is not null)
+            result = result.Select(f => f.Name == "main" ? f : f with { CompilerGenerated = true }).ToList();
         return result;
     }
     private void PointerNeed(string spelling, string code = "E_POINTER_PROFILE")
@@ -1273,7 +1277,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 f.Args.Count,
                 r => { if (f.MutableWrite != null) r.Void(); else r.Type().Int64(); },
                 p => { foreach (var arg in f.Args) p.AddParameter().Type(isByRef: f.MutableWrite != null && arg == "$exclusive_slot").Int64(); });
-            metadata.AddMethodDefinition((f.MutableWrite != null ? MethodAttributes.Private : MethodAttributes.Public) |
+            metadata.AddMethodDefinition((f.MutableWrite != null || f.CompilerGenerated ? MethodAttributes.Private : MethodAttributes.Public) |
                 MethodAttributes.Static | MethodAttributes.HideBySig,
                 MethodImplAttributes.IL, metadata.GetOrAddString(f.Name),
                 metadata.GetOrAddBlob(signature), bodyOffsets[i],
