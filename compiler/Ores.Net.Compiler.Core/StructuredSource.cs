@@ -947,7 +947,7 @@ public static partial class OresStructuredParser
         return false;
     }
 
-    private readonly record struct Token(string Text, int Offset);
+    private readonly record struct Token(string Text, int Offset, bool NewlineBefore = false);
     private sealed class Lexer(string source, bool moduleMode = false,
         bool allowStaticTupleProjection = false, bool attachedStructTarget = false, bool ownedUnwind = false)
     {
@@ -956,14 +956,25 @@ public static partial class OresStructuredParser
         private bool previousWasString;
         private bool previousWasSync;
         private string previousToken = "", beforePreviousToken = "";
+        private readonly Queue<string> recentTokens = new();
+        private void Remember(string word)
+        {
+            if (recentTokens.Count == 5) recentTokens.Dequeue();
+            recentTokens.Enqueue(word);
+        }
         private bool insideBooleanLiteralPack;
         private bool previousWasConst;
         private bool sawTupleDeclaration;
         public Token Read()
         {
+            bool newlineBefore = false;
             while (index < source.Length)
             {
-                if (char.IsWhiteSpace(source[index])) { index++; continue; }
+                if (char.IsWhiteSpace(source[index]))
+                {
+                    newlineBefore |= source[index] is '\n' or '\r';
+                    index++; continue;
+                }
                 if (source[index] == '/' && index + 1 < source.Length &&
                     source[index + 1] == '/')
                 {
@@ -1010,7 +1021,14 @@ public static partial class OresStructuredParser
             bool precededByString = previousWasString;
             previousWasWith = false;
             previousWasString = false;
-            if (precededByWith && ch == '{' && !attachedStructTarget)
+            // The only newly admitted with prefix is a local scalar const
+            // binding. All other uses keep the existing lexer denial.
+            var withPrefix = precededByWith && ch == '{' ? recentTokens.ToArray() : Array.Empty<string>();
+            bool scalarWith = !moduleMode && withPrefix.Length == 5 &&
+                withPrefix[0] == "const" && withPrefix[2] == "=" &&
+                PortableUnicodeIdentifier.IsName(withPrefix[1]) &&
+                PortableUnicodeIdentifier.IsName(withPrefix[3]) && withPrefix[4] == "with";
+            if (precededByWith && ch == '{' && !attachedStructTarget && !scalarWith)
                 throw new FormatException(
                     $"WITH_BACKEND_UNSUPPORTED: immutable with requires checked rt copy/take, "
                     + $"owned field layout/drop and Native AOT reconstruction at offset {index}");
@@ -1055,7 +1073,8 @@ public static partial class OresStructuredParser
                 index = QuotedSourceSyntax.Scan(source, offset);
                 beforePreviousToken = previousToken;
                 previousToken = source[offset..index];
-                return new Token(previousToken, offset);
+                Remember(previousToken);
+                return new Token(previousToken, offset, newlineBefore);
             }
             if (Digit(ch))
             {
@@ -1239,7 +1258,8 @@ public static partial class OresStructuredParser
             previousWasConst = tokenText == "const";
             beforePreviousToken = previousToken;
             previousToken = tokenText;
-            return new Token(tokenText, offset);
+            Remember(tokenText);
+            return new Token(tokenText, offset, newlineBefore);
         }
     }
 
@@ -1994,6 +2014,7 @@ public static partial class OresStructuredParser
             {
                 if (tokens[index + 2].Text != "=") return false;
                 if (tokens[index + 3].Text == "{") return true;
+                if (index + 5 < tokens.Count && tokens[index + 4].Text == "with" && tokens[index + 5].Text == "{") return true;
                 // Do not reinterpret an ordinary grouped scalar expression.
                 return tokens[index + 3].Text == "(" &&
                     (tokens[index + 4].Text == ")" ||
@@ -2080,6 +2101,18 @@ public static partial class OresStructuredParser
             if (introduce && (alias == rowName || scopes.Any(scope => scope.ContainsKey(alias!)) ||
                 aggregateScopes.Any(scope => scope.ContainsKey(alias!))))
                 throw Error("E_DUPLICATE_TYPE: inferred aggregate alias collides");
+            StaticAggregate? withBase = null;
+            if (wrapper == "Record" && index + 1 < tokens.Count && tokens[index + 1].Text == "with")
+            {
+                string originName = NamedAggregateIdentifier();
+                Expect("with");
+                withBase = FindAggregate(originName);
+                if (withBase is null || withBase.Shape.Kind != ClosedAggregateKind.ReadonlyRecord ||
+                    withBase.Wrapper == "Tuple" || scopes.Any(scope => scope.ContainsKey(originName)) ||
+                    withBase.Values.Values.Any(v => v is not StructuredInt and not StructuredBool))
+                    throw Error("WITH_BACKEND_UNSUPPORTED: E_RECORD_WITH: requires earlier immutable scalar Record");
+                if (Current.Text != "{") throw Error("E_RECORD_WITH: expected braces");
+            }
             if (!explicitWrapper && Current.Text == "(")
             {
                 if (tokens[index + 1].Text == ")") wrapper = "Tuple";
@@ -2096,6 +2129,11 @@ public static partial class OresStructuredParser
             var values = new Dictionary<string, StructuredExpr>(StringComparer.Ordinal);
             var explicitFields = new HashSet<string>(StringComparer.Ordinal);
             var overlap = new HashSet<string>(StringComparer.Ordinal);
+            if (withBase is not null)
+            {
+                plan.AddCheckedSpread(withBase.Shape);
+                foreach (var entry in withBase.Values) values.Add(entry.Key, entry.Value);
+            }
             int entries = 0;
             if (Current.Text == close && !explicitWrapper && wrapper == "Record")
                 throw Error("E_EMPTY_AGGREGATE: untyped empty braces are ambiguous");
@@ -2107,8 +2145,9 @@ public static partial class OresStructuredParser
                 if (wrapper == "Record" && open == "{" && Take("."))
                 {
                     Expect("."); Expect(".");
-                    var origin = FindAggregate(NamedAggregateIdentifier());
-                    if (origin is null || origin.Shape.Kind != ClosedAggregateKind.ReadonlyRecord ||
+                    string originName = NamedAggregateIdentifier();
+                    var origin = FindAggregate(originName);
+                    if (origin is null || scopes.Any(scope => scope.ContainsKey(originName)) || origin.Shape.Kind != ClosedAggregateKind.ReadonlyRecord ||
                         origin.Wrapper == "Tuple" || origin.Values.Values.Any(v => v is not StructuredInt and not StructuredBool))
                         throw Error("E_RECORD_SPREAD: requires an earlier constant Record");
                     foreach (var entry in origin.Values)
@@ -2126,6 +2165,7 @@ public static partial class OresStructuredParser
                 int offset = Current.Offset;
                 string field = wrapper == "Tuple"
                     ? values.Count.ToString(CultureInfo.InvariantCulture) : NamedAggregateIdentifier();
+                bool pairEntry = false;
                 if (wrapper == "Record")
                 {
                     if (!explicitWrapper && open == "(")
@@ -2133,9 +2173,10 @@ public static partial class OresStructuredParser
                         if (!Take(":"))
                             throw Error("E_LITERAL_KIND: inferred parenthesized Record fields require colon");
                     }
-                    else if (!Take(":="))
+                    else
                     {
-                        if (!Take(":")) Expect("=");
+                        pairEntry = Take(":=");
+                        if (!pairEntry && !Take(":")) Expect("=");
                     }
                 }
                 else if (wrapper == "struct") Expect(":");
@@ -2152,7 +2193,13 @@ public static partial class OresStructuredParser
                 values[field] = expr.Type == IrValueType.Bool
                     ? new StructuredBool(offset, value != 0) : new StructuredInt(offset, value);
                 if (values.Count > 64) throw Error("AGGREGATE_FIELD_BUDGET");
-                if (!Take(",") || Current.Text == close) break;
+                if (!Take(","))
+                {
+                    if (pairEntry && open == "{" && Current.NewlineBefore &&
+                        PortableUnicodeIdentifier.IsName(Current.Text)) continue;
+                    break;
+                }
+                if (Current.Text == close) break;
             }
             Expect(close);
             Expect(";");
