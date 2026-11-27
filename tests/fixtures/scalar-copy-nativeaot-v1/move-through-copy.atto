@@ -1,0 +1,1 @@
+pub fnc main(): int { val int n = 42; return copy!! (take! n); }
