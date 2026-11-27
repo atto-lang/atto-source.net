@@ -38,21 +38,40 @@ public static partial class OresStructuredCfgLowering
             MatchTags remaining = MatchTags.Any;
             foreach (var arm in match.Arms)
             {
-                bool testsPattern = arm.Literal is not null || (arm.Tags & remaining) != remaining;
+                bool testsPattern = arm.Membership is not null || arm.Literal is not null || (arm.Tags & remaining) != remaining;
                 Block? next = testsPattern || arm.Guard is not null ? NewBlock() : null;
                 Block selected = block;
                 if (testsPattern)
                 {
                     selected = NewBlock();
-                    int condition = tag;
-                    if (arm.Literal is long literal)
+                    if (arm.Membership is { } values)
                     {
-                        int constant = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64, value: literal);
-                        condition = Emit(block, CfgOpcode.EqualI64, IrValueType.Bool, left: subject.ValueId, right: constant);
+                        if (values.Count == 0) throw new FormatException("Missing membership witness");
+                        // Every comparison uses the already-evaluated subject.
+                        // All successful comparisons share one selected body.
+                        var testBlock = block;
+                        for (int i = 0; i < values.Count; i++)
+                        {
+                            var miss = i + 1 == values.Count ? next! : NewBlock();
+                            int constant = Emit(testBlock, CfgOpcode.ConstantI64, IrValueType.I64, value: values[i]);
+                            int equal = Emit(testBlock, CfgOpcode.EqualI64, IrValueType.Bool,
+                                left: subject.ValueId, right: constant);
+                            testBlock.Terminator = new CfgBranch(equal, selected.Name, [], miss.Name, []);
+                            testBlock = miss;
+                        }
                     }
-                    bool inverted = arm.Tags == MatchTags.Negative;
-                    block.Terminator = new CfgBranch(condition, inverted ? next!.Name : selected.Name, [],
-                        inverted ? selected.Name : next!.Name, []);
+                    else
+                    {
+                        int condition = tag;
+                        if (arm.Literal is long literal)
+                        {
+                            int constant = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64, value: literal);
+                            condition = Emit(block, CfgOpcode.EqualI64, IrValueType.Bool, left: subject.ValueId, right: constant);
+                        }
+                        bool inverted = arm.Tags == MatchTags.Negative;
+                        block.Terminator = new CfgBranch(condition, inverted ? next!.Name : selected.Name, [],
+                            inverted ? selected.Name : next!.Name, []);
+                    }
                 }
 
                 var environment = new Dictionary<string, Binding>(variables, StringComparer.Ordinal);

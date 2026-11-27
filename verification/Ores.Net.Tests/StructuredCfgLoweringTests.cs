@@ -8,6 +8,30 @@ internal static class StructuredCfgLoweringTests
 {
     public static void RunUnicodeIdentifierNegation()
     {
+        // Exercise production structured CFG + emitted CIL, not a host matcher.
+        foreach (var (source, label) in new[] {
+            ("fnc main():int{return match 2 over in [0,1,2] -> 42, on _ -> 0 end;}", "membership hit"),
+            ("fnc main():int{return match 7 over in [0,1,2] -> 0, on _ -> 42 end;}", "membership miss"),
+            ("fnc main():int{return match 2 over on 2 -> 42, in [1,2,3] -> 0, on _ -> 0 end;}", "membership priority"),
+            ("fnc main():int{return match 2 over in [1,2] when false -> 0, in [1,2] -> 42, on _ -> 0 end;}", "membership guard fallback"),
+            ("fnc main():int{return match 7 over is in [bool,int] -> 42 end;}", "static type-list coverage"),
+            ("fnc main():int{return match true over is in [int,bool] -> 42 end;}", "static bool type-list coverage")
+        }) Check(source, 42, label);
+        foreach (var invalid in new[] {
+            "fnc main():int{return match 2 over in [] -> 42, on _ -> 0 end;}",
+            "fnc main():int{return match 2 over in [2,2] -> 42, on _ -> 0 end;}",
+            "fnc main():int{return match 2 over in [1,2] -> 42, on 2 -> 0, on _ -> 0 end;}",
+            "fnc main():int{return match 2 over in [1,2] -> 42 end;}",
+            "fnc main():int{return match 7 over is in [int,int] -> 42 end;}",
+            "fnc main():int{return match 7 over is in [] -> 42 end;}",
+            "fnc main():int{return match 7 over is in [int,42] -> 42 end;}"
+        })
+        {
+            try { _ = OresStructuredCfgLowering.Lower(invalid); }
+            catch (FormatException) { continue; }
+            throw new Exception("Membership accepted invalid source: " + invalid);
+        }
+
         const string source = "pub fnc main(): int { val int Φ = 10; val int φ = 20; val int 数量 = 30; val int 𠮷 = 40; if ¬false && ¬¬true then return Φ + φ + 数量 + 𠮷; else return 0; fi }";
         Check(source, 100, "Unicode names and negation");
         Check(source.Replace("¬", "!", StringComparison.Ordinal), 100, "ASCII negation alias");

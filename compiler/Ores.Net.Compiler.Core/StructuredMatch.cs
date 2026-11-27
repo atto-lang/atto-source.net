@@ -6,7 +6,8 @@ namespace Ores.Net.Compiler;
 internal enum MatchTags { Negative = 1, Positive = 2, Any = Negative | Positive }
 
 internal sealed record StructuredMatchArm(MatchTags Tags, long? Literal, string? Binding, IrValueType? BindingType,
-    StructuredExpr? Guard, IReadOnlyList<StructuredStmt>? Body, StructuredExpr? Value);
+    StructuredExpr? Guard, IReadOnlyList<StructuredStmt>? Body, StructuredExpr? Value,
+    IReadOnlyList<long>? Membership = null);
 internal sealed record StructuredMatch(StructuredExpr Subject, IReadOnlyList<StructuredMatchArm> Arms,
     IrValueType Type, bool Completes);
 internal sealed record StructuredDoMatch(int At, StructuredMatch Match) : StructuredStmt(At);
@@ -55,14 +56,17 @@ public static partial class OresStructuredParser
                 MatchTags uncovered = MatchTags.Any;
                 var coveredLiterals = new HashSet<long>();
                 bool completes = !imperative;
-                while (Current.Text is "on" or "is")
+                while (Current.Text is "on" or "is" or "in")
                 {
-                    Take("on"); // optional only when the next token is the type-test introducer
+                    bool membershipHead = Take("in");
+                    if (!membershipHead) Take("on");
                     if (++statements > MaxStatements) throw Error("Structured match statement budget exceeded");
-                    var literal = subject.Type == IrValueType.I64 && Current.Text != "is" ? ReadMatchLiteral() : null;
-                    var (tags, binding, bindingType) = literal is null
+                    var membership = membershipHead ? ReadMatchMembership(subject.Type) : null;
+                    var literal = !membershipHead && subject.Type == IrValueType.I64 && Current.Text != "is" ? ReadMatchLiteral() : null;
+                    var (tags, binding, bindingType) = literal is null && membership is null
                         ? ReadMatchPattern(subject.Type) : ((MatchTags)0, null, null);
-                    if (literal is long n ? uncovered == 0 || coveredLiterals.Contains(n) : (tags & uncovered) == 0)
+                    if (membership is not null ? uncovered == 0 || membership.All(coveredLiterals.Contains)
+                        : literal is long n ? uncovered == 0 || coveredLiterals.Contains(n) : (tags & uncovered) == 0)
                         throw Error("MATCH_UNREACHABLE_ARM: prior unguarded arms already cover this pattern");
 
                     var scope = new Dictionary<string, LocalBinding>(StringComparer.Ordinal);
@@ -84,6 +88,7 @@ public static partial class OresStructuredParser
                         }
                         var guard = Take("when") ? Expr(depth + 1) : null;
                         if (guard is not null) Require(guard, IrValueType.Bool, "Match guard must be bool");
+                        else if (membership is not null) coveredLiterals.UnionWith(membership);
                         else if (literal is long covered) coveredLiterals.Add(covered);
                         else uncovered &= ~tags;
                         bool arrow = Take("->");
@@ -96,7 +101,7 @@ public static partial class OresStructuredParser
                             {
                                 var (body, terminal) = Block(depth + 1);
                                 completes |= !terminal || scopeReturn.HasExit;
-                                arms.Add(new StructuredMatchArm(tags, literal, binding, bindingType, guard, body, null));
+                                arms.Add(new StructuredMatchArm(tags, literal, binding, bindingType, guard, body, null, membership));
                             }
                             finally { localReturn = previousReturn; }
                         }
@@ -117,19 +122,41 @@ public static partial class OresStructuredParser
                                 Expect("}");
                             }
                             else Take(";");
-                            arms.Add(new StructuredMatchArm(tags, literal, binding, bindingType, guard, null, value));
+                            arms.Add(new StructuredMatchArm(tags, literal, binding, bindingType, guard, null, value, membership));
                         }
                     }
                     finally { scopes.RemoveAt(scopes.Count - 1); }
                     Take(",");
                 }
                 if (Current.Text == "default") throw MatchDefaultError();
-                if (!Take(end)) throw Error("MATCH_SYNTAX: expected 'on', 'is' or the end of match");
+                if (!Take(end)) throw Error("MATCH_SYNTAX: expected 'on', 'in', 'is' or the end of match");
                 if (uncovered != 0)
                     throw Error("MATCH_NON_EXHAUSTIVE: cover all tags with unguarded arms or add 'on _'");
                 return new StructuredMatch(subject, arms.AsReadOnly(), result!.Value, completes);
             }
             finally { expectedExpressionType = context; }
+        }
+
+        private IReadOnlyList<long> ReadMatchMembership(IrValueType subject)
+        {
+            if (subject != IrValueType.I64)
+                throw Error("MATCH_MEMBERSHIP_TYPE: literal membership requires int");
+            if (!Take("["))
+                throw Error("MATCH_MEMBERSHIP_UNSUPPORTED: runtime collection membership not implemented");
+            var values = new List<long>();
+            var distinct = new HashSet<long>();
+            if (Take("]")) throw Error("MATCH_UNREACHABLE_ARM: empty membership");
+            while (true)
+            {
+                if (values.Count >= 64) throw Error("MATCH_MEMBERSHIP_LIMIT: at most 64 integer alternatives");
+                long value = ReadMatchLiteral() ?? throw Error("MATCH_MEMBERSHIP_TYPE: expected integer literal");
+                if (!distinct.Add(value)) throw Error("MATCH_DUPLICATE: duplicate membership alternative");
+                values.Add(value);
+                if (Take("]")) break;
+                Expect(",");
+                if (Take("]")) break;
+            }
+            return values.AsReadOnly();
         }
 
         private long? ReadMatchLiteral()
@@ -153,12 +180,23 @@ public static partial class OresStructuredParser
             if (Current.Text == "default") throw MatchDefaultError();
             if (Take("is"))
             {
-                string type = Current.Text;
-                if (type is not ("int" or "bool"))
-                    throw Error("MATCH_TYPE_PATTERN_UNSUPPORTED: only statically proven int/bool type patterns are supported");
-                index++;
-                var expected = type == "int" ? IrValueType.I64 : IrValueType.Bool;
-                if (subject != expected)
+                bool list = Take("in");
+                if (list) Expect("[");
+                var types = new HashSet<IrValueType>();
+                do
+                {
+                    string type = Current.Text;
+                    if (type is not ("int" or "bool"))
+                        throw Error("MATCH_TYPE_PATTERN_UNSUPPORTED: only statically proven int/bool type patterns are supported");
+                    index++;
+                    var expected = type == "int" ? IrValueType.I64 : IrValueType.Bool;
+                    if (!types.Add(expected))
+                        throw Error("MATCH_DUPLICATE: duplicate type-list alternative");
+                    if (!list) break;
+                    if (Take("]")) break;
+                    Expect(",");
+                } while (true);
+                if (!types.Contains(subject))
                     throw Error("MATCH_PATTERN_TYPE: type pattern is not statically proven for this subject");
                 if (Current.Text == "as")
                     throw Error("MATCH_TYPE_PATTERN_UNSUPPORTED: type pattern bindings require dedicated lowering");
