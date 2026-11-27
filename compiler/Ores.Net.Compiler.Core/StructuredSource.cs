@@ -729,6 +729,7 @@ public static partial class OresStructuredParser
                 }
                 int cursor = member;
                 if (tokens[cursor].Text is "pub" or "private") cursor++;
+                bool obsoleteMethodIntroducer = false;
                 bool staticMethod = cursor < tokens.Count &&
                     tokens[cursor].Text == "static";
                 if (staticMethod)
@@ -743,9 +744,18 @@ public static partial class OresStructuredParser
                     }
                     cursor++;
                 }
-                else if (cursor < tokens.Count &&
-                    (tokens[cursor].Text is "mtd" or "method" or "fnc"))
+                else if (cursor < tokens.Count && tokens[cursor].Text == "fnc")
+                    cursor++; // compatibility introducer, never a callable name
+                else if (cursor + 2 < tokens.Count &&
+                    (tokens[cursor].Text is "mtd" or "method") &&
+                    IsSimpleNominalWord(tokens[cursor + 1].Text) &&
+                    tokens[cursor + 2].Text == "(")
+                {
+                    // Inspect a complete declaration before diagnosing the obsolete marker.
+                    // A callable literally named method() is not an introducer.
+                    obsoleteMethodIntroducer = tokens[cursor].Text == "method";
                     cursor++;
+                }
                 if (cursor < tokens.Count && tokens[cursor].Text == "constructor")
                 {
                     // Constructors do not occupy ordinary method slots.
@@ -802,6 +812,8 @@ public static partial class OresStructuredParser
                     member++;
                     continue;
                 }
+                if (obsoleteMethodIntroducer)
+                    throw new FormatException($"Obsolete method introducer; use mtd at offset {tokens[member].Offset}");
                 try
                 {
                     slots.DeclareLowered(owner, name, checked(values + (staticMethod ? 0 : 1)),
