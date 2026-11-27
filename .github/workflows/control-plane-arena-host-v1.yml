@@ -1,0 +1,34 @@
+name: Control-plane arena host v1 (not guest certification)
+on:
+  pull_request:
+    paths:
+      - 'verification/Ores.Net.ControlPlaneArenaProbe/**'
+      - 'runtime/Ores.Net.Runtime/ControlPlaneArena32.cs'
+      - 'runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj'
+      - 'Directory.Build.props'
+      - 'global.json'
+      - '.github/workflows/control-plane-arena-host-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'verification/Ores.Net.ControlPlaneArenaProbe/**'
+      - 'runtime/Ores.Net.Runtime/ControlPlaneArena32.cs'
+      - 'runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj'
+      - 'Directory.Build.props'
+      - 'global.json'
+      - '.github/workflows/control-plane-arena-host-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: bash verification/Ores.Net.ControlPlaneArenaProbe/run-host-probe.sh
