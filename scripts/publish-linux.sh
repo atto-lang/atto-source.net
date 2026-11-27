@@ -65,6 +65,9 @@ bash verification/assert-linux-native-release.sh "$compiler"
 "$compiler" "$compile_mode" "$source_file" --out "$generated" "${compiler_args[@]}"
 [[ -s "$generated" ]] || { echo 'native compiler did not emit CIL' >&2; exit 1; }
 # Stable OresGenerated assembly identity requires clearing previous host inputs.
+# A prior CoreCLR build may have left an assets file without the native RID.
+# Restore the exact RID before clean so MSBuild can resolve its target graph.
+dotnet restore "$host" -r "$rid" "-p:GeneratedAssembly=$generated"
 dotnet clean "$host" -c Release -r "$rid" "-p:GeneratedAssembly=$generated"
 dotnet publish "$host" -c Release -r "$rid" -o "$app_dir" \
   "-p:GeneratedAssembly=$generated" -warnaserror

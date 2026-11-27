@@ -21,9 +21,8 @@ public sealed record StructuredPropagate(int At, StructuredExpr Operand, IrValue
     : StructuredExpr(At, PayloadType);
 public sealed record StructuredErrorTest(int At, StructuredExpr Error, string Name, bool IsType)
     : StructuredExpr(At, IrValueType.Bool);
+internal sealed record StructuredLexicalDefer(int At, IReadOnlyList<StructuredSet> Cleanup) : StructuredStmt(At);
 public sealed record StructuredSignal(int At, StructuredExpr Error, CfgGuestEffect Effect)
-    : StructuredStmt(At);
-internal sealed record StructuredLexicalDefer(int At, IReadOnlyList<StructuredStmt> Body)
     : StructuredStmt(At);
 
 internal static class GuestResultTypes
@@ -178,51 +177,51 @@ public static partial class OresStructuredParser
                 new StructuredTrap(at, value, IrValueType.ResultI64), StructuredBindingKind.Val));
             body.Add(new StructuredIf(at,
                 new StructuredResultInspect(at, read, CfgOpcode.ResultIsErr, IrValueType.Bool),
-                TrapInlineExit(read, cleanup), null));
+                ExitWithCleanup(read, cleanup), null));
             // Only the Ok edge reaches installation. The error edge exits
             // with the original typed Error payload, not a reconstructed one.
             body.Add(install(new StructuredResultInspect(at, read,
                 CfgOpcode.ResultUnwrap, IrValueType.I64)));
         }
 
-        // Freeze the result (including the original Error) before cleanup.
-        // Each exit has exactly the registrations encountered on its path.
-        // Root-only registration avoids conditional lifetime ambiguity.
-        private IReadOnlyList<StructuredStmt> TrapInlineExit(StructuredExpr result,
+        private IReadOnlyList<StructuredStmt> ExitWithCleanup(StructuredExpr result,
             IReadOnlyList<StructuredLexicalDefer> cleanup)
         {
-            if (cleanup.Count == 0)
-                return new StructuredStmt[] { new StructuredLocalExit(result.Offset, result) };
+            if (cleanup.Count == 0) return new StructuredStmt[] { new StructuredLocalExit(result.Offset, result) };
             int at = result.Offset;
-            string name = TrappedBodyPrefix + "exit_" + lexicalTrapRhsId++;
-            var body = new List<StructuredStmt> {
+            string name = TrappedBodyPrefix + "cleanup_" + lexicalTrapRhsId++;
+            // Snapshot return/error before any deferred mutation. The result
+            // itself is not recomputed after cleanup.
+            var exit = new List<StructuredStmt> {
                 new StructuredLet(at, name, IrValueType.ResultI64, result, StructuredBindingKind.Val)
             };
+            // Reverse registration order, but preserve statement order inside
+            // each defer block. Bound the total cloned cleanup statements.
             for (int i = cleanup.Count - 1; i >= 0; i--)
             {
-                lexicalDeferExpansion += cleanup[i].Body.Count;
+                lexicalDeferExpansion += cleanup[i].Cleanup.Count;
                 if (lexicalDeferExpansion > MaxStatements)
                     throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: cleanup expansion budget");
-                body.AddRange(cleanup[i].Body);
+                exit.AddRange(cleanup[i].Cleanup);
             }
-            body.Add(new StructuredLocalExit(at, new StructuredRead(at, name, IrValueType.ResultI64)));
-            return body.AsReadOnly();
+            exit.Add(new StructuredLocalExit(at, new StructuredRead(at, name, IrValueType.ResultI64)));
+            return exit.AsReadOnly();
         }
 
         private IReadOnlyList<StructuredStmt> TrapInlineStatements(IReadOnlyList<StructuredStmt> statements,
             IReadOnlyList<StructuredLexicalDefer>? inherited = null)
         {
-            var body = new List<StructuredStmt>(statements.Count);
             var cleanup = new List<StructuredLexicalDefer>(inherited ?? Array.Empty<StructuredLexicalDefer>());
+            var body = new List<StructuredStmt>(statements.Count);
             foreach (var stmt in statements)
             {
                 switch (stmt)
                 {
                     case StructuredLexicalDefer deferred:
-                        if (inherited is not null || cleanup.Count >= 16 ||
-                            deferred.Body.Count == 0 || deferred.Body.Count > 16 ||
-                            deferred.Body.Any(s => s is not StructuredSet set || !TrapInlinePure(set.Value)))
-                            throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: only root scalar assignment defers are verified");
+                        if (inherited is not null || cleanup.Count >= 8 ||
+                            deferred.Cleanup.Count == 0 || deferred.Cleanup.Count > 16 ||
+                            deferred.Cleanup.Any(set => !TrapInlinePure(set.Value)))
+                            throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: only eight root scalar registrations with at most sixteen assignments each are admitted");
                         cleanup.Add(deferred);
                         break;
                     case StructuredLet declaration when TrapInlinePure(declaration.Initializer):
@@ -245,20 +244,22 @@ public static partial class OresStructuredParser
                         break;
                     case StructuredLocalExit { Value: { } value } returned when
                         value.Type == IrValueType.I64 && TrapInlinePure(value):
-                        body.AddRange(TrapInlineExit(
+                        body.AddRange(ExitWithCleanup(
                             new StructuredResult(returned.Offset, value, true, IrValueType.ResultI64), cleanup));
                         break;
                     case StructuredLocalExit { Value: { } value } returned when TrapInlineCheckedI64(value):
-                        body.AddRange(TrapInlineExit(
+                        body.AddRange(ExitWithCleanup(
                             new StructuredTrap(returned.Offset, value, IrValueType.ResultI64), cleanup));
                         break;
                     case StructuredSignal { Effect: CfgGuestEffect.Throw, Error: StructuredGuestError } signal:
-                        body.AddRange(TrapInlineExit(
+                        body.AddRange(ExitWithCleanup(
                             new StructuredResult(signal.Offset, signal.Error, false, IrValueType.ResultI64), cleanup));
                         break;
                     // Terminal effects remain terminal and never become Err.
                     case StructuredSignal { Effect: CfgGuestEffect.Panic or CfgGuestEffect.Raise,
-                        Error: StructuredGuestError } when cleanup.Count == 0:
+                        Error: StructuredGuestError }:
+                        if (cleanup.Count != 0)
+                            throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: terminal effect cleanup needs a verified policy");
                         body.Add(stmt);
                         break;
                     default:

@@ -329,6 +329,16 @@ public static partial class OresStructuredParser
         while (true)
         {
             var token = lexer.Read();
+            // Probe only direct top-level nominal struct declaration headers.
+            // Expression-level with retains its original lexical gate.
+            if (braceDepth == 0 && token.Text == "struct" && tokens.Count >= 3 &&
+                tokens[^3].Text == "type" && IsSimpleNominalWord(tokens[^2].Text) &&
+                tokens[^1].Text == "=")
+                RejectAttachedStructTarget(source, token.Offset, tokens[^2].Text);
+            if (braceDepth == 0 && token.Text == "{" && tokens.Count >= 3 &&
+                tokens[^3].Text == "define" && tokens[^2].Text == "struct" &&
+                IsSimpleNominalWord(tokens[^1].Text))
+                RejectAttachedStructTarget(source, token.Offset, tokens[^1].Text, startAtBrace: true);
             // Comments and trivia are already stripped by this Lexer. Deny
             // namespace member access until ETS/pg isolation, ownership,
             // generational table handles and mailbox ingress exist in Native AOT.
@@ -924,7 +934,7 @@ public static partial class OresStructuredParser
 
     private readonly record struct Token(string Text, int Offset);
     private sealed class Lexer(string source, bool moduleMode = false,
-        bool allowStaticTupleProjection = false)
+        bool allowStaticTupleProjection = false, bool attachedStructTarget = false)
     {
         private int index;
         private bool previousWasWith;
@@ -985,7 +995,7 @@ public static partial class OresStructuredParser
             bool precededByString = previousWasString;
             previousWasWith = false;
             previousWasString = false;
-            if (precededByWith && ch == '{')
+            if (precededByWith && ch == '{' && !attachedStructTarget)
                 throw new FormatException(
                     $"WITH_BACKEND_UNSUPPORTED: immutable with requires checked rt copy/take, "
                     + $"owned field layout/drop and Native AOT reconstruction at offset {index}");
@@ -1131,6 +1141,8 @@ public static partial class OresStructuredParser
             // still rejects arrow syntax outside its admitted grammar.
             else if (ch == '-' && index + 1 < source.Length &&
                      source[index + 1] == '>') index += 2;
+            else if (attachedStructTarget && ch == '\u2022') index++;
+            else if (attachedStructTarget && ch == '<' && index + 1 < source.Length && source[index + 1] == '-') index += 2;
             else if (ch == '~')
                 throw new FormatException(
                     $"TILDE_AGGREGATE_BACKEND_UNSUPPORTED: typed Map/Record literals require a checked AST, key domains, ownership, transactional constructor and NativeAOT layout at offset {offset}");
@@ -1908,7 +1920,7 @@ public static partial class OresStructuredParser
                 if (terminated) throw Error("Unreachable statement");
                 if (++statements > MaxStatements)
                     throw Error("Structured statement budget exceeded");
-                var (statement, returns) = Statement(depth + 1, outerElse);
+                var (statement, returns) = Statement(depth + 1, outerElse, keywordArm: true);
                 body.Add(statement);
                 terminated = returns;
             }
@@ -2069,7 +2081,7 @@ public static partial class OresStructuredParser
                 new StructuredInt(at, 0), StructuredBindingKind.Const), false);
         }
 
-        private (StructuredStmt Statement, bool Returns) Statement(int depth, bool outerElse = false)
+        private (StructuredStmt Statement, bool Returns) Statement(int depth, bool outerElse = false, bool keywordArm = false)
         {
             Budget(depth);
             int at = Current.Offset;
@@ -2387,14 +2399,23 @@ public static partial class OresStructuredParser
                 inlineTaskDepth == 1 && trapOperandDepth == 1 && guardFailureDepth == 0)
             {
                 index++;
-                if (Current.Text != "{")
-                    throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: only braced scalar assignment defer is verified");
-                var (cleanup, terminal) = Block(depth + 1);
-                if (terminal || cleanup.Count == 0 || cleanup.Count > 16 ||
-                    cleanup.Any(s => s is not StructuredSet set || !TrapInlinePure(set.Value)))
-                    throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: cleanup must contain only nonthrowing scalar assignments");
-                Take(";");
-                return (new StructuredLexicalDefer(at, cleanup), false);
+                // Both forms share one root-registration ledger. A block is
+                // an ordered group, not multiple independent registrations.
+                if (Current.Text == "{")
+                {
+                    var (statements, blockTerminal) = Block(depth + 1);
+                    if (blockTerminal || statements.Count == 0 || statements.Count > 16 ||
+                        statements.Any(stmt => stmt is not StructuredSet set || !TrapInlinePure(set.Value)))
+                        throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: block must contain only nonthrowing scalar assignments");
+                    Take(";");
+                    return (new StructuredLexicalDefer(at, statements.Cast<StructuredSet>().ToArray()), false);
+                }
+                if (index + 1 >= tokens.Count || tokens[index + 1].Text != "=")
+                    throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: expected nonthrowing scalar assignment");
+                var (cleanup, terminal) = Statement(depth + 1);
+                if (terminal || cleanup is not StructuredSet set || !TrapInlinePure(set.Value))
+                    throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: expected nonthrowing scalar assignment");
+                return (new StructuredLexicalDefer(at, new[] { set }), false);
             }
             if ((localReturn is not null || guardFailureDepth != 0) && Current.Text is ("defer" or "using"))
                 throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: resource cleanup requires a verified unwind continuation");
@@ -2594,8 +2615,8 @@ public static partial class OresStructuredParser
                     throw Error("E_CONDITIONAL_STATEMENT: use 'do if' (or do ifnot/unless) with then/fi, or a brace statement");
                 if (explicitDo && !delimited)
                     throw Error("do if/ifnot/unless requires 'then'");
-                // Legacy production entry only; strict conditionals retain their canonical grammar.
-                if (!strictConditionals && !explicitDo && !delimited && !semicolon)
+                // Suffix do is first-class in strict and migration profiles.
+                if (!explicitDo && !delimited && !semicolon)
                     delimited = Take("do");
                 // Preserve modern-main legacy if/ifnot/unless ... then ...
                 // imperative acceptance; a separate spec migration must not
@@ -2611,13 +2632,16 @@ public static partial class OresStructuredParser
                 else (yes, yesReturns) = Block(depth + 1);
                 IReadOnlyList<StructuredStmt>? no = null;
                 bool noReturns = false;
-                if (Take("else"))
+                // A completed brace arm leaves an enclosing keyword else/fi
+                // untouched. A braced else must itself begin with a brace.
+                if ((delimited || !keywordArm ||
+                        (index + 1 < tokens.Count && tokens[index + 1].Text == "{")) && Take("else"))
                 {
                     if (delimited) (no, noReturns) = DelimitedArm(depth + 1);
                     else (no, noReturns) = Block(depth + 1);
                 }
                 if (delimited) Expect("fi");
-                else if (Take("fi") && strictConditionals)
+                else if (!keywordArm && Take("fi") && strictConditionals)
                     throw Error("E_CONDITIONAL_STATEMENT: brace statements must not end with fi"); // Legacy entry points retain the optional fi.
                 return (new StructuredIf(at, condition, yes, no),
                     yesReturns && noReturns);
@@ -3436,6 +3460,8 @@ public static partial class OresStructuredParser
         {
             Budget(depth);
             int offset = Current.Offset;
+            if (Current.Text == "spawn")
+                throw new FormatException($"E_SPAWN_OPTIONS_UNSUPPORTED: actor spawn requires typed initialization, resource admission and runtime lowering at offset {offset}");
             if (Take("match")) return ReadMatchValue(offset, depth);
             if (AtSyncTask())
             {
