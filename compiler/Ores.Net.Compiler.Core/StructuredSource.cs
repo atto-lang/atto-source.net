@@ -125,10 +125,29 @@ public static partial class OresStructuredParser
                 throw new FormatException(
                     $"NET_STRUCTURED_MACRO_EXPANDER_REQUIRED: macro declarations require typed AST expansion before OresIR/CIL at offset {tokens[i].Offset}; runtime fallback is forbidden");
             if (tokens[i].Text == "!" && i + 1 < tokens.Count &&
-                tokens[i + 1].Text == "(" && !IsPrefixBangPosition(tokens, i))
+                tokens[i + 1].Text == "(" && !IsPrefixBangPosition(tokens, i) &&
+                !IsExplicitWrappedAssignment(tokens, i))
                 throw new FormatException(
                     $"NET_STRUCTURED_MACRO_EXPANDER_REQUIRED: macro invocation requires typed AST expansion before OresIR/CIL at offset {tokens[i].Offset}; runtime fallback is forbidden");
         }
+    }
+
+    // Only the reserved explicit local assignment statement shape can bypass
+    // the generic macro denial. The typed Reader still checks the entire
+    // statement, target authority, expression, closing ')' and terminator.
+    // In particular a call, member, nested value or arbitrary macro remains denied.
+    private static bool IsExplicitWrappedAssignment(IReadOnlyList<Token> tokens, int bang)
+    {
+        if (bang < 2 || bang + 3 >= tokens.Count) return false;
+        var verb = tokens[bang - 1];
+        if (verb.Text != "set" || verb.Offset + verb.Text.Length != tokens[bang].Offset ||
+            tokens[bang - 2].Text is not ("{" or ";") ||
+            tokens[bang + 1].Text != "(" || tokens[bang + 3].Text != "=")
+            return false;
+        var name = tokens[bang + 2].Text;
+        return name.Length is >= 1 and <= MaxIdentifier &&
+            (Alpha(name[0]) || name[0] == '_') &&
+            name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_');
     }
 
     // A parenthesized boolean operand is not a macro splice. Permit only
