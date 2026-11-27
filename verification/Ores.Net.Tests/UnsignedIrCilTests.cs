@@ -23,6 +23,20 @@ internal static class UnsignedIrCilTests
 
     public static void Run()
     {
+        var parsed = OresParser.LowerUnsigned("pub fnc main():uint { return (2+3)*4/2; }");
+        Require(parsed.ResultType == IrValueType.U64, "source result signedness");
+        Require(parsed.Instructions.Where(x => x.Opcode != IrOpcode.ConstantU64).Select(x => x.Opcode)
+            .SequenceEqual(new[] { IrOpcode.CheckedAddU64, IrOpcode.CheckedMultiplyU64, IrOpcode.CheckedDivideU64 }),
+            "source precedence and ordered SSA");
+        Require(OresParser.LowerUnsigned("pub fnc main():u64 {return 18_446_744_073_709_551_615;}").Instructions[0].UnsignedConstant == ulong.MaxValue,
+            "source literal full width");
+        foreach (string invalid in new[] { "-1", "01", "18446744073709551616", "1.0", "1^^2", "x", "f()", "1;return 2", new string('(', 130) + "1" + new string(')', 130) })
+            Reject(() => OresParser.LowerUnsigned("pub fnc main():u64{return " + invalid + ";}"));
+        Reject(() => OresParser.LowerUnsigned("pub fnc main():int{return 1;}"));
+        Reject(() => OresParser.LowerUnsigned("pub fnc main():u64{return 1;} fnc f():u64{return 2;}"));
+        Reject(() => OresParser.Parse("pub fnc main():u64{return 1;}"));
+        Reject(() => OresParser.LowerUnsigned("pub fnc main():u64{return " + string.Join("+", Enumerable.Repeat("1", 9000)) + ";}"));
+
         var input = new[] {
             Constant(0, ulong.MaxValue), Constant(1, 1),
             Binary(2, IrOpcode.CheckedSubtractU64, 0, 1),
