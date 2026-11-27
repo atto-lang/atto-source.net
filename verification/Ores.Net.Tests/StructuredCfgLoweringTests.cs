@@ -283,6 +283,16 @@ internal static class StructuredCfgLoweringTests
 
     public static void Run()
     {
+        Check("fnc main():int{return match 42 over on _ as int z -> z end;}", 42, "typed scalar alias");
+        Check("fnc main():int{return match 42 over on 41 as z when z==42 -> 0, on _ as const z -> z end;}", 42, "guard fallback scalar alias");
+        Check("fnc main():int{let n=20;let r=0;do match n over on _ as rebind int z -> {z=z+2;r=z;} end return n+r;}", 42, "rebind alias does not write back subject");
+        CheckModule("fnc bump(rebind int n):int{n=n+2;return n;} fnc main():int{let n=20;return bump(n)+n;}", 42, "rebind formal does not write back caller");
+        CheckModule("fnc bump(rebind n:int):int{n=n+2;return n;} fnc main():int{let n=20;return bump(n)+n;}", 42, "name-first rebind formal");
+        RejectWithDiagnostic("fnc main():int{do match 42 over on _ as int z -> {z=0;} end return 0;}", "E_IMMUTABLE_REBIND", "fixed alias");
+        RejectWithDiagnostic("fnc main():int{return match 42 over on _ as bool z -> 0 end;}", "MATCH_ALIAS_TYPE", "wrong alias type");
+        RejectWithDiagnostic("fnc main():int{return match 42 over on _ as rebind rebind int z -> z end;}", "MATCH_ALIAS_MODIFIER", "duplicate marker");
+        RejectWithDiagnostic("fnc main():int{return match 42 over on _ as mut z -> 0 end;}", "MATCH_ALIAS_MUT_UNSUPPORTED", "scalar referent mutation");
+        RejectWithDiagnostic("fnc bump(int n):int{n=n+2;return n;} fnc main():int{return bump(40);}", "E_IMMUTABLE_REBIND", "fixed formal");
         NegatedDoIfAotControlFlow();
         Check("""
             fnc main(): int {

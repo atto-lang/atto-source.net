@@ -1671,6 +1671,11 @@ public static partial class OresStructuredParser
                         // Both x: int and int x use the same static ABI slot.
                         // The name-level '?' in x?: int is a distinct,
                         // as-yet-unlowered omission contract, not Option<T>.
+                        bool rebind = Current.Text == "rebind" && index + 1 < tokens.Count && tokens[index + 1].Text != ":";
+                        if (rebind) index++;
+                        if (rebind && Current.Text == "mut") throw Error("PARAM_REBIND_UNSUPPORTED: mutable reference formal");
+                        if (rebind && Current.Text == "rebind" && index + 1 < tokens.Count && tokens[index + 1].Text != ":")
+                            throw Error("PARAM_REBIND_MODIFIER: duplicate rebind marker");
                         string? nameFirst = null;
                         if (index + 2 < tokens.Count &&
                             tokens[index + 1].Text == "?" &&
@@ -1687,8 +1692,10 @@ public static partial class OresStructuredParser
                         string parameter = nameFirst ?? Name();
                         if (Current.Text is "?" or "=")
                             throw Error("E_OPTIONAL_FORMAL_ABI_UNSUPPORTED: name-level '?' and parameter defaults require checked full-arity binding");
+                        if (rebind && type is not (IrValueType.I64 or IrValueType.Bool))
+                            throw Error("PARAM_REBIND_UNSUPPORTED: only copied scalar formals are admitted");
                         if (!parameterTypes.TryAdd(parameter,
-                            new LocalBinding(type, StructuredBindingKind.Val, null)))
+                            new LocalBinding(type, rebind ? StructuredBindingKind.Let : StructuredBindingKind.Val, null)))
                             throw Error("Duplicate typed helper parameter");
                         parameters.Add(new StructuredParameter(parameter, type));
                     }

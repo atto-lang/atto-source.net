@@ -6,7 +6,7 @@ namespace Ores.Net.Compiler;
 internal enum MatchTags { Negative = 1, Positive = 2, Any = Negative | Positive }
 
 internal sealed record StructuredMatchArm(MatchTags Tags, long? Literal, string? Binding, IrValueType? BindingType,
-    StructuredExpr? Guard, IReadOnlyList<StructuredStmt>? Body, StructuredExpr? Value);
+    StructuredExpr? Guard, IReadOnlyList<StructuredStmt>? Body, StructuredExpr? Value, bool WholeAlias = false);
 internal sealed record StructuredMatch(StructuredExpr Subject, IReadOnlyList<StructuredMatchArm> Arms,
     IrValueType Type, bool Completes);
 internal sealed record StructuredDoMatch(int At, StructuredMatch Match) : StructuredStmt(At);
@@ -65,6 +65,37 @@ public static partial class OresStructuredParser
                     if (literal is long n ? uncovered == 0 || coveredLiterals.Contains(n) : (tags & uncovered) == 0)
                         throw Error("MATCH_UNREACHABLE_ARM: prior unguarded arms already cover this pattern");
 
+                    // Only copied scalar subjects have this first whole-alias lowering.
+                    bool wholeAlias = Take("as");
+                    bool rebind = false;
+                    if (wholeAlias)
+                    {
+                        if (binding is not null || subject.Type is not (IrValueType.I64 or IrValueType.Bool))
+                            throw Error("MATCH_ALIAS_UNSUPPORTED: whole aliases require an unbound scalar pattern");
+                        rebind = Current.Text == "rebind" && index + 1 < tokens.Count &&
+                            tokens[index + 1].Text is not ("when" or "->" or ":" or "{");
+                        if (rebind) index++;
+                        if (Current.Text == "mut")
+                            throw Error("MATCH_ALIAS_MUT_UNSUPPORTED: scalar aliases have no writable referent");
+                        if (rebind && Current.Text is "const" or "val" or "let")
+                            throw Error("MATCH_ALIAS_MODIFIER: conflicting alias modifiers");
+                        if (Take("const") || Take("val")) { }
+                        else if (Take("let")) rebind = true;
+                        if (Current.Text == "rebind" && index + 1 < tokens.Count &&
+                            tokens[index + 1].Text is not ("when" or "->" or ":" or "{"))
+                            throw Error("MATCH_ALIAS_MODIFIER: duplicate alias modifier");
+                        if (Current.Text == "mut")
+                            throw Error("MATCH_ALIAS_MUT_UNSUPPORTED: scalar aliases have no writable referent");
+                        if (Current.Text is "int" or "bool" or "boolean" or "Option" or "Array" or "Result")
+                        {
+                            if (Type() != subject.Type)
+                                throw Error("MATCH_ALIAS_TYPE: annotation must equal the subject type");
+                        }
+                        binding = Name();
+                        if (binding == "_") throw Error("MATCH_ALIAS_UNSUPPORTED: discard is not a named alias");
+                        bindingType = subject.Type;
+                    }
+
                     var scope = new Dictionary<string, LocalBinding>(StringComparer.Ordinal);
                     if (binding is not null)
                     {
@@ -86,6 +117,8 @@ public static partial class OresStructuredParser
                         if (guard is not null) Require(guard, IrValueType.Bool, "Match guard must be bool");
                         else if (literal is long covered) coveredLiterals.Add(covered);
                         else uncovered &= ~tags;
+                        // Guard checking sees a fixed slot; only the selected arm may rebind.
+                        if (rebind) scope[binding!] = new LocalBinding(bindingType!.Value, StructuredBindingKind.Let, null);
                         bool arrow = Take("->");
                         if (imperative)
                         {
@@ -96,7 +129,7 @@ public static partial class OresStructuredParser
                             {
                                 var (body, terminal) = Block(depth + 1);
                                 completes |= !terminal || scopeReturn.HasExit;
-                                arms.Add(new StructuredMatchArm(tags, literal, binding, bindingType, guard, body, null));
+                                arms.Add(new StructuredMatchArm(tags, literal, binding, bindingType, guard, body, null, wholeAlias));
                             }
                             finally { localReturn = previousReturn; }
                         }
@@ -117,7 +150,7 @@ public static partial class OresStructuredParser
                                 Expect("}");
                             }
                             else Take(";");
-                            arms.Add(new StructuredMatchArm(tags, literal, binding, bindingType, guard, null, value));
+                            arms.Add(new StructuredMatchArm(tags, literal, binding, bindingType, guard, null, value, wholeAlias));
                         }
                     }
                     finally { scopes.RemoveAt(scopes.Count - 1); }
