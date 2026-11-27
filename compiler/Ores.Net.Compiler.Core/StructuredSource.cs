@@ -2495,9 +2495,8 @@ public static partial class OresStructuredParser
             }
             if ((Current.Text is "let" or "val" or "const") || StartsScalarTypeFirst())
             {
-                // In the v1 scalar subset, a type-first local is exactly const:
-                // both spellings need a statically evaluable initializer.
-                // val is the fixed runtime binding; let is rebindable.
+                // Type-first scalar locals are exactly const. All ordinary
+                // scalar const forms permit eager, once-only runtime initialization.
                 bool typeFirstImmutable = StartsScalarTypeFirst();
                 StructuredBindingKind kind = typeFirstImmutable
                     ? StructuredBindingKind.Const
@@ -2568,15 +2567,9 @@ public static partial class OresStructuredParser
                 if (kind == StructuredBindingKind.Const && type is not (IrValueType.I64 or IrValueType.Bool))
                     throw new FormatException(
                         $"E_OPTION_CONST_UNSUPPORTED: non-scalar const folding needs a typed proof at offset {at}");
-                // Typed scalar const (type-first `int x=e`, `const int x=e`,
-                // `const x:int=e`) must be compile-time evaluable (spec #49,
-                // java #3066). Untyped `const x=e` keeps java's stage-one
-                // meaning: folded when constant, otherwise a fixed readonly
-                // runtime binding.
-                if (kind == StructuredBindingKind.Const && annotated &&
-                    !IsCompileTimeScalar(initializer))
-                    throw new FormatException(
-                        $"E_NON_CONST_INITIALIZER: typed const scalar initializer must be compile-time evaluable at offset {initializer.Offset}");
+                // Local const v2: fixed runtime binding regardless of type
+                // annotation position. Proven scalar literals may still fold;
+                // checked calls and runtime reads remain ordinary initializers.
                 if (kind == StructuredBindingKind.Const && IsCompileTimeScalar(initializer))
                 {
                     try { constantValue = ConstantValue(initializer); }
