@@ -39,8 +39,8 @@ try{
     const helperIds=['postfix','composite-eq','composite-equal'];
     let witness=null;
     if(helperIds.includes(c.id)){
-      witness=c.source.replace('pub fnc main(bool b): bool','fnc probe(bool b): bool')+
-        ' pub fnc main(): int { return 42; }';
+      const op={postfix:'b¬','composite-eq':'b ¬eq true','composite-equal':'b ¬= true'}[c.id];
+      witness='fnc probe(bool b): bool { return '+op+'; } pub fnc main(): int { return 42; }';
     }else if(c.id==='unicode-not-not-a-bang-keyword'){
       witness='pub fnc main(): int { val int copy = 1; return copy¬ 42; }';
     }
