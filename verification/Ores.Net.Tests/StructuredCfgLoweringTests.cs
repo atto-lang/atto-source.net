@@ -9,7 +9,7 @@ internal static class StructuredCfgLoweringTests
     public static void RunUnicodeIdentifierNegation()
     {
         // Exercise production structured CFG + emitted CIL, not a host matcher.
-        foreach (var (source, label) in new[] {
+        foreach (var (patternSource, label) in new[] {
             ("const Pattern p = on 5; fnc main():int{return match 5 over on p -> 42, on _ -> 0 end;}", "named pattern"),
             ("const Pattern[] z = [on 1,in [2,3],on true]; fnc main():int{return match 3 over in z -> 42, on _ -> 0 end;}", "mixed set int"),
             ("const Pattern[] z = [on 1,on true]; fnc main():int{return match true over in z -> 42, on _ -> 0 end;}", "mixed set bool"),
@@ -22,7 +22,7 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{return match 2 over in [1,2] when false -> 0, in [1,2] -> 42, on _ -> 0 end;}", "membership guard fallback"),
             ("fnc main():int{return match 7 over is in [bool,int] -> 42 end;}", "static type-list coverage"),
             ("fnc main():int{return match true over is in [int,bool] -> 42 end;}", "static bool type-list coverage")
-        }) Check(source, 42, label);
+        }) Check(patternSource, 42, label);
         foreach (var invalid in new[] {
             "const Pattern p = on 5; fnc main():int{return p;}",
             "const Pattern p = on q; const Pattern q = on p; fnc main():int{return 42;}",
