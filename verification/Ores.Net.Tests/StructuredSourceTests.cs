@@ -472,8 +472,16 @@ pub async routine main(): void {
             "E_NON_CONST_INITIALIZER");
         RejectFeature("fnc runtime_value():int{return 42;}fnc main():int{const x:int=runtime_value();return x;}",
             "E_NON_CONST_INITIALIZER");
-        RejectFeature("fnc main():int{const mut int x=42;return x;}",
-            "E_CONST_MUT_UNSUPPORTED");
+        foreach (string spelling in new[] { "const mut int x=42;", "const mut x:int=42;",
+            "const mut x as int=42;", "const mut x=42;", "val int x=42;" })
+        {
+            var fixedLocal = OresStructuredParser.Parse("fnc main():int{" + spelling + "return x;}");
+            Require(fixedLocal.Body[0] is StructuredLet {
+                Name: "x", Kind: StructuredBindingKind.Val, ValueType: IrValueType.I64,
+                Initializer: StructuredInt { Value: 42 }
+            }, "const mut and val must share fixed binding: " + spelling);
+            Reject("fnc main():int{" + spelling + "x=7;return x;}", "fixed alias cannot rebind");
+        }
         var shorthandConstant = OresStructuredParser.Parse(
             "fnc main():int{int answer=6*7;return answer;}");
         Require(shorthandConstant.Body[0] is StructuredLet {
