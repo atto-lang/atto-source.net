@@ -90,7 +90,8 @@ public sealed record StructuredIf(int At, StructuredExpr Condition,
     IReadOnlyList<StructuredStmt> Then, IReadOnlyList<StructuredStmt>? Else)
     : StructuredStmt(At);
 public sealed record StructuredWhile(int At, StructuredExpr Condition,
-    IReadOnlyList<StructuredStmt> Body) : StructuredStmt(At);
+    IReadOnlyList<StructuredStmt> Body, StructuredStmt? Initializer = null,
+    StructuredSet? Update = null) : StructuredStmt(At);
 // Lexical loop transfers share the same typed CFG/SSA environment.
 public sealed record StructuredBreak(int At) : StructuredStmt(At);
 public sealed record StructuredContinue(int At) : StructuredStmt(At);
@@ -2675,6 +2676,52 @@ public static partial class OresStructuredParser
                 Expect(";");
                 return (new StructuredContinue(at), true);
             }
+            if (Take("for"))
+            {
+                // First bounded slice: one scalar local or explicit existing-local
+                // initializer; mandatory bool predicate and explicit scalar update.
+                // The loop scope is independent of the body scope.
+                bool parenthesized = Take("(");
+                scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
+                localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+                aggregateScopes.Add(new Dictionary<string, StaticAggregate>(StringComparer.Ordinal));
+                namedAggregateScopes.Add(new Dictionary<string, NamedAggregateType>(StringComparer.Ordinal));
+                try
+                {
+                    StructuredStmt? initializer = null;
+                    if (Take(";")) { }
+                    else if (Current.Text == "let")
+                    {
+                        var (decl, _) = Statement(depth + 1);
+                        if (decl is not StructuredLet { ValueType: IrValueType.I64 or IrValueType.Bool })
+                            throw Error("E_FOR_SCALAR_ONLY: expected scalar let initializer");
+                        initializer = decl;
+                    }
+                    else
+                    {
+                        initializer = ReadLocalUpdate(depth + 1, Current.Offset, true);
+                        Expect(";");
+                    }
+                    var condition = Expr(depth + 1);
+                    Require(condition, IrValueType.Bool, "For condition must be bool");
+                    Expect(";");
+                    var update = ReadLocalUpdate(depth + 1, Current.Offset, true);
+                    if (parenthesized) Expect(")");
+                    if (loopDepth >= MaxDepth) throw Error("Loop nesting limit exceeded");
+                    loopDepth++;
+                    IReadOnlyList<StructuredStmt> body;
+                    try { (body, _) = Block(depth + 1); }
+                    finally { loopDepth--; }
+                    return (new StructuredWhile(at, condition, body, initializer, update), false);
+                }
+                finally
+                {
+                    scopes.RemoveAt(scopes.Count - 1);
+                    localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+                    aggregateScopes.RemoveAt(aggregateScopes.Count - 1);
+                    namedAggregateScopes.RemoveAt(namedAggregateScopes.Count - 1);
+                }
+            }
             if (Take("while") || Take("loop"))
             {
                 bool unconditional = tokens[index - 1].Text == "loop";
@@ -2692,6 +2739,13 @@ public static partial class OresStructuredParser
                 // Even a constant-true loop is not accepted as a return proof.
                 return (new StructuredWhile(at, condition, body), false);
             }
+            var assignment = ReadLocalUpdate(depth, at, false);
+            Expect(";");
+            return (assignment, false);
+        }
+
+        private StructuredSet ReadLocalUpdate(int depth, int at, bool forHeader)
+        {
             // Contextual explicit update, using existing typed local authority.
             // A local actually named set followed by '=' remains compatible.
             bool Pair(string a, string b)
@@ -2705,6 +2759,7 @@ public static partial class OresStructuredParser
             bool explicitSet = Current.Text == "set" && index + 1 < tokens.Count &&
                 tokens[index + 1].Text is { Length: > 0 } following &&
                 (Alpha(following[0]) || following[0] == '_' || following is "!" or "+" or "-");
+            if (forHeader && !explicitSet) throw Error("E_EXPLICIT_REBIND: for clause requires set");
             bool wrapped = false, increment = false;
             StructuredOperator? compound = null;
             if (explicitSet)
@@ -2737,15 +2792,16 @@ public static partial class OresStructuredParser
                     ? "Compound XOR requires a mutable int local"
                     : "Compound update requires a mutable int local");
             // A compound RHS must not acquire complete-statement writeback permission.
+            if (forHeader && binding.Type is not (IrValueType.I64 or IrValueType.Bool))
+                throw Error("E_FOR_SCALAR_ONLY: expected scalar update");
             StructuredExpr assigned = increment ? new StructuredInt(variableAt, 1) :
-                ReadStatementValue(depth + 1, binding.Type, allowWriteback: compound is null);
+                forHeader ? Expr(depth + 1) : ReadStatementValue(depth + 1, binding.Type, allowWriteback: compound is null);
             Require(assigned, binding.Type, "Assignment has wrong type");
             if (compound is { } op)
                 assigned = CheckedBinary(variableAt, op,
                     new StructuredRead(variableAt, variable, IrValueType.I64), assigned, IrValueType.I64);
             if (wrapped) Expect(")");
-            Expect(";");
-            return (new StructuredSet(at, variable, assigned), false);
+            return new StructuredSet(at, variable, assigned);
         }
         // The compatibility spelling remains a contextual type name. A value
         // named boolean followed by = or : retains its existing interpretation.
