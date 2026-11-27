@@ -122,9 +122,9 @@ public static partial class OresStructuredParser
 
         // Admit only source operations proven not to raise an ordinary
         // error, except the explicit throw that is converted to Err.
-        // This closed whitelist excludes checked arithmetic, calls,
-        // unwrap, suspension, loops, nested tasks and cleanup until their
-        // exceptional edges carry the current lexical environment.
+        // This pure whitelist excludes potentially throwing operations.
+        // Selected checked scalar RHS expressions use separate Err edges;
+        // calls, suspension, loops, nested tasks and cleanup remain closed.
         private static bool TrapInlinePure(StructuredExpr value) => value switch
         {
             StructuredInt or StructuredBool => true,
@@ -140,6 +140,43 @@ public static partial class OresStructuredParser
             _ => false
         };
 
+        // A checked scalar RHS has no lexical writes of its own. Use the
+        // existing ordinary-error trap ABI on just that RHS, not the task.
+        // The surrounding SSA error edge retains all completed assignments.
+        private static bool TrapInlineCheckedI64(StructuredExpr value) =>
+            value.Type == IrValueType.I64 && (TrapInlinePure(value) || value switch
+            {
+                StructuredNegate neg => TrapInlineCheckedI64(neg.Value),
+                StructuredBinary binary when binary.Operator is
+                    (StructuredOperator.Add or StructuredOperator.Subtract or
+                     StructuredOperator.Multiply or StructuredOperator.Divide or
+                     StructuredOperator.Remainder or StructuredOperator.Modulo) =>
+                        TrapInlineCheckedI64(binary.Left) && TrapInlineCheckedI64(binary.Right),
+                StructuredOptionUnwrap { Option: StructuredRead read } =>
+                    read.Type == IrValueType.OptionI64,
+                _ => false
+            });
+
+        private int lexicalTrapRhsId;
+        private void TrapInlineCheckedAssignment(List<StructuredStmt> body,
+            StructuredExpr value, Func<StructuredExpr, StructuredStmt> install)
+        {
+            int at = value.Offset;
+            // This prefix is reserved by the source reader. IDs are unique
+            // within the compilation and not visible to guest source.
+            string name = TrappedBodyPrefix + "rhs_" + lexicalTrapRhsId++;
+            var read = new StructuredRead(at, name, IrValueType.ResultI64);
+            body.Add(new StructuredLet(at, name, IrValueType.ResultI64,
+                new StructuredTrap(at, value, IrValueType.ResultI64), StructuredBindingKind.Val));
+            body.Add(new StructuredIf(at,
+                new StructuredResultInspect(at, read, CfgOpcode.ResultIsErr, IrValueType.Bool),
+                new StructuredStmt[] { new StructuredLocalExit(at, read) }, null));
+            // Only the Ok edge reaches installation. The error edge exits
+            // with the original typed Error payload, not a reconstructed one.
+            body.Add(install(new StructuredResultInspect(at, read,
+                CfgOpcode.ResultUnwrap, IrValueType.I64)));
+        }
+
         private IReadOnlyList<StructuredStmt> TrapInlineStatements(IReadOnlyList<StructuredStmt> statements)
         {
             var body = new List<StructuredStmt>(statements.Count);
@@ -151,6 +188,14 @@ public static partial class OresStructuredParser
                     case StructuredSet assignment when TrapInlinePure(assignment.Value):
                         body.Add(stmt);
                         break;
+                    case StructuredLet declaration when TrapInlineCheckedI64(declaration.Initializer):
+                        TrapInlineCheckedAssignment(body, declaration.Initializer,
+                            value => declaration with { Initializer = value });
+                        break;
+                    case StructuredSet assignment when TrapInlineCheckedI64(assignment.Value):
+                        TrapInlineCheckedAssignment(body, assignment.Value,
+                            value => assignment with { Value = value });
+                        break;
                     case StructuredIf conditional when TrapInlinePure(conditional.Condition):
                         body.Add(conditional with {
                             Then = TrapInlineStatements(conditional.Then),
@@ -161,6 +206,10 @@ public static partial class OresStructuredParser
                         value.Type == IrValueType.I64 && TrapInlinePure(value):
                         body.Add(new StructuredLocalExit(returned.Offset,
                             new StructuredResult(returned.Offset, value, true, IrValueType.ResultI64)));
+                        break;
+                    case StructuredLocalExit { Value: { } value } returned when TrapInlineCheckedI64(value):
+                        body.Add(new StructuredLocalExit(returned.Offset,
+                            new StructuredTrap(returned.Offset, value, IrValueType.ResultI64)));
                         break;
                     case StructuredSignal { Effect: CfgGuestEffect.Throw, Error: StructuredGuestError } signal:
                         body.Add(new StructuredLocalExit(signal.Offset,
