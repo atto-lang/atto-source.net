@@ -199,7 +199,7 @@ public static class OresIrLowering
 {
     private const int MaxAstNodes = 100_000;
     private const int MaxPendingValues = 256;
-    private readonly record struct Pending(Expression Node, bool Finish);
+    private readonly record struct Pending(Expression Node, bool Finish, bool Cleanup = false);
 
     public static VerifiedIrFunction Lower(Expression root, string name = "main",
         DotnetHostImportPolicy? policy = null)
@@ -210,6 +210,7 @@ public static class OresIrLowering
         var instructions = new List<IrInstruction>();
         pending.Push(new Pending(root, false));
         int visited = 0;
+        var patternValues = new Dictionary<int,int>();
 
         int Constant(long value)
         {
@@ -246,10 +247,37 @@ public static class OresIrLowering
             var current = pending.Pop();
             var node = current.Node ??
                 throw new FormatException("Null AST node");
+            if (current.Cleanup)
+            {
+                if (node is not ScalarPatternApply done)
+                    throw new FormatException("Invalid scalar pattern cleanup");
+                foreach (int slot in done.Slots)
+                    if (slot >= 0 && !patternValues.Remove(slot))
+                        throw new FormatException("Missing scalar pattern slot");
+                continue;
+            }
             if (current.Finish)
             {
                 switch (node)
                 {
+                    case ScalarPatternApply pattern:
+                    {
+                        if (pattern.Roots.Count != pattern.Slots.Count || pattern.Roots.Count > 8 ||
+                            results.Count < pattern.Roots.Count)
+                            throw new FormatException("Invalid scalar pattern arity");
+                        // Root instructions have already executed in source order.
+                        // Their SSA IDs, not AST expressions, are bound into the body.
+                        for (int i=pattern.Slots.Count-1;i>=0;i--)
+                        {
+                            int value=results.Pop();
+                            int slot=pattern.Slots[i];
+                            if (slot < -1 || (slot >= 0 && !patternValues.TryAdd(slot,value)))
+                                throw new FormatException("Invalid or duplicate scalar pattern slot");
+                        }
+                        pending.Push(new Pending(pattern, false, Cleanup: true));
+                        pending.Push(new Pending(pattern.Body, false));
+                        break;
+                    }
                     case Unary { Operator: '+' }:
                         break;
                     case Unary { Operator: '-' }:
@@ -266,6 +294,17 @@ public static class OresIrLowering
                         if (results.Count < 1)
                             throw new FormatException("CLR intrinsic operand underflow");
                         results.Push(EmitDotnetAbs(results.Pop()));
+                        break;
+                    }
+                    case EntryScalarProjection projection:
+                    {
+                        if (results.Count < 2)
+                            throw new FormatException("IR lowering Entry operand underflow");
+                        int right = results.Pop();
+                        int left = results.Pop();
+                        // Every SSA instruction is executed in order, including
+                        // the unused value; selecting an earlier ID is legal.
+                        results.Push(projection.SelectKey ? left : right);
                         break;
                     }
                     case DotnetMathMaxI64:
@@ -331,12 +370,29 @@ public static class OresIrLowering
                     throw new FormatException("IR AST node budget exceeded");
                 switch (node)
                 {
+                    case ScalarPatternSlot slot:
+                        if (!patternValues.TryGetValue(slot.Id,out int value))
+                            throw new FormatException("Unbound scalar pattern slot");
+                        results.Push(value);
+                        break;
+                    case ScalarPatternApply pattern:
+                        if (pattern.Roots.Count != pattern.Slots.Count || pattern.Roots.Count > 8)
+                            throw new FormatException("Invalid scalar pattern arity");
+                        pending.Push(new Pending(pattern,true));
+                        for (int i=pattern.Roots.Count-1;i>=0;i--)
+                            pending.Push(new Pending(pattern.Roots[i],false));
+                        break;
                     case Literal literal:
                         results.Push(Constant(literal.Value));
                         break;
                     case DotnetMathAbsI64 host:
                         pending.Push(new Pending(node, true));
                         pending.Push(new Pending(host.Value, false));
+                        break;
+                    case EntryScalarProjection projection:
+                        pending.Push(new Pending(node, true));
+                        pending.Push(new Pending(projection.Second, false));
+                        pending.Push(new Pending(projection.First, false));
                         break;
                     case DotnetMathMaxI64 hostMax:
                         pending.Push(new Pending(node, true));
@@ -379,7 +435,7 @@ public static class OresIrLowering
             if (results.Count > MaxPendingValues)
                 throw new FormatException("IR evaluation stack budget exceeded");
         }
-        if (results.Count != 1)
+        if (patternValues.Count != 0 || results.Count != 1)
             throw new FormatException("IR lowering must yield exactly one result");
         return OresIrVerifier.Verify(new IrFunction(name, IrValueType.I64,
             instructions, results.Pop()), policy);

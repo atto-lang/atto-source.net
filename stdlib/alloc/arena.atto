@@ -1,0 +1,15 @@
+// Scalar arena accounting only. No physical allocation or runtime authority.
+// Canonical remaining semantics: atto-spec#265, LLVM#986, Rust#667.
+define module arena as
+  pub fnc remaining(int used, int capacity): int {
+    if used < 0 || capacity < 0 do
+      return 0;
+    fi
+
+    if used >= capacity do
+      return 0;
+    fi
+
+    return capacity - used;
+  }
+end

@@ -40,3 +40,33 @@ test('native frontend rejects contradictory public and package directives', {ski
     assert.match(result.stderr + result.stdout, /EXPORT_/);
   }
 });
+
+test('identical checked main exports are idempotent in either position', {skip:!dotnet}, () => {
+  for (const source of [
+    'export pub main;\nexport pub fnc main;\n'+main,
+    'export pub fnc main;\n'+main+'export pub main;\n',
+    main+'export pub main;\nexport pub fnc main;\n'
+  ]) {
+    const result=check(source);
+    assert.equal(result.status,0,result.stderr+result.stdout);
+  }
+});
+test('raw export directive budget cannot be bypassed by duplicates', {skip:!dotnet}, () => {
+  const result=check('export pub main;\n'.repeat(128)+main+'export pub main;\n');
+  assert.notEqual(result.status,0);
+  assert.match(result.stderr+result.stdout,/EXPORT_SOURCE_LIMIT/);
+});
+
+test('file exports cannot disappear from end-delimited bodies or callable headers', {skip:!dotnet}, () => {
+  for(const src of [
+    'fnc main() -> int\nexport pub main;\nreturn 42;\nend',
+    'fnc main() -> int\nreturn 42;\nexport pub main;\nend',
+    'fnc export pub main; main(): int { return 42; }'
+  ]) {
+    const result=check(src);
+    assert.notEqual(result.status,0,src);
+    assert.match(result.stderr+result.stdout,/EXPORT_SCOPE/);
+  }
+  const result=check('export pub main;\nfnc main() -> int\nreturn 42;\nend\nexport pub fnc main;');
+  assert.equal(result.status,0,result.stderr+result.stdout);
+});

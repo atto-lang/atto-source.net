@@ -1,0 +1,9 @@
+// expect-error: E_POINTER_ESCAPE
+pub fnc main(): int {
+  let value: int = 42;
+  val Pointer<int> ptr = rt ref value;
+  val answer = deref! ptr;
+  unref! ptr;
+  return answer;
+}
+pub fnc other(): int { return 1; }

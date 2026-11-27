@@ -58,7 +58,7 @@ internal static class PortableScalarV1Tests
             Require(long.TryParse(expectedText, NumberStyles.AllowLeadingSign,
                 CultureInfo.InvariantCulture, out long expected), "invalid expected i64");
             string source = "pub fnc main():int{return " + expression + ";}";
-            var ir = OresIrLowering.Lower(OresParser.Parse(source));
+            var ir = OresIrLowering.Lower(OresParser.Parse(source, languageVersion: 1));
             Require(OresIrReferenceEvaluator.Evaluate(ir) == expected,
                 "typed compiler IR mismatch: " + id);
             string emitted = Path.Combine(work.Path, id + ".dll");
@@ -84,7 +84,7 @@ internal static class PortableScalarV1Tests
                 "literal-out-of-range", "unsupported rejection category");
             try
             {
-                _ = OresParser.Parse("pub fnc main():int{return " + expression + ";}");
+                _ = OresParser.Parse("pub fnc main():int{return " + expression + ";}", languageVersion: 1);
             }
             catch (FormatException)
             {
@@ -95,6 +95,10 @@ internal static class PortableScalarV1Tests
                 "portable scalar/v1: source parser admitted forbidden operator/literal: " + id);
         }
         Require(checks == 22, "partial source/CIL matrix was credited as complete");
+        // The pinned v1 rejection remains enforced; the later canonical spelling
+        // is separately evaluated through the verified v2 IR.
+        var xor = OresIrLowering.Lower(OresParser.Parse("pub fnc main():int{return 7 ^^ 3;}", languageVersion: 2));
+        Require(OresIrReferenceEvaluator.Evaluate(xor) == 4, "canonical v2 XOR result");
         Console.WriteLine("portable scalar/v1: 16 typed IR+CIL positives, 6 parser negatives; " +
             ExpectedGitBlob);
     }

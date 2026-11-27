@@ -14,7 +14,9 @@ internal static class ActorArenaSelfTest
         ReadLoanFreezesAllocationAcrossTurns();
         PairedLoanAndRetirementLeavePeerWritable();
         LifetimePinDelaysPhysicalReclaim();
+        ActorArenaExternalCompletionSelfTest.Run();
         AggregateBudgetAdmissionIsNeutral();
+        RepeatedQuotaDenialPreservesTailAndSibling();
         RuntimeBudgetsAlsoChargeProcessLimit();
         PersistentRootWithTailTempsDoesNotExhaustArena();
         RetirementSealsAdmissionButAllowsTurnCleanup();
@@ -23,6 +25,59 @@ internal static class ActorArenaSelfTest
         ActiveTurnRequiresExactTokenAndCarrier();
         ForgedLoanAndPinCannotPrematurelyReclaim();
         Console.WriteLine("PASS .NET actor-owned unmanaged arena, loans, pins and quiescent reclaim");
+    }
+
+    private static void RepeatedQuotaDenialPreservesTailAndSibling()
+    {
+        using var first = new ActorArena(87001, 1, 4096, 512, 2, 2, 2);
+        using var sibling = new ActorArena(87002, 1, 4096, 512, 2, 2, 2);
+        ActorArenaHandle root;
+        ActorArenaHandle peer;
+        using (var turn = sibling.EnterTurn(87002, 1))
+        {
+            peer = sibling.AllocatePersistent(turn, 8);
+            sibling.Write(turn, peer, 0, new byte[] { 9 });
+        }
+        using (var turn = first.EnterTurn(87001, 1))
+        {
+            root = first.AllocatePersistent(turn, 4088);
+            first.Write(turn, root, 0, new byte[] { 17 });
+            long reserved = first.ReservedNativeBytes;
+            for (int i = 0; i < 8; i++)
+            {
+                ExpectInvalid(() => first.AllocatePersistent(turn, 9),
+                    "quota denial must not consume the final slot or tail");
+                Require(first.ReservedNativeBytes == reserved,
+                    "denied allocation must not change native commitment");
+            }
+            var tail = first.AllocatePersistent(turn, 8);
+            var bytes = new byte[1];
+            first.Read(turn, tail, 0, bytes);
+            Require(bytes[0] == 0, "remaining tail is usable and zeroed");
+            ExpectInvalid(() => first.AllocatePersistent(turn, 1), "full arena rejects");
+            first.Read(turn, root, 0, bytes);
+            Require(bytes[0] == 17, "failed admission preserves root");
+            var scratch = first.AllocateScratch(turn, 8);
+            first.ReadScratch(turn, scratch, 0, bytes);
+            Require(bytes[0] == 0, "scratch remains independent");
+        }
+        Require(first.Retire(), "first actor reclaims");
+        using (var turn = sibling.EnterTurn(87002, 1))
+        {
+            var bytes = new byte[1];
+            sibling.Read(turn, peer, 0, bytes);
+            Require(bytes[0] == 9, "sibling bytes survive retirement");
+        }
+        using var restarted = new ActorArena(87001, 2, 4096, 512, 2, 2, 2);
+        using (var turn = restarted.EnterTurn(87001, 2))
+        {
+            var fresh = restarted.AllocatePersistent(turn, 4096);
+            var bytes = new byte[1];
+            restarted.Read(turn, fresh, 0, bytes);
+            Require(bytes[0] == 0, "restart has zeroed private bytes");
+            ExpectInvalid(() => restarted.Read(turn, root, 0, bytes), "stale root denied");
+        }
+        Require(restarted.Retire() && sibling.Retire(), "remaining actors reclaim");
     }
 
     private static void CheckedFourByteRefsRejectForeignAndStaleTargets()

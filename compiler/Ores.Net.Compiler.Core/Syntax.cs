@@ -6,7 +6,14 @@ public abstract record Expression;
 public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
-// Named intrinsic only. Single '^' is not AttoLang syntax ('^^' is boolean XOR).
+// Source-only closed scalar projection. Each root has one ordered evaluation;
+// -1 denotes discard and has no binding in the body. No aggregate escapes.
+internal sealed record ScalarPatternSlot(int Id) : Expression;
+internal sealed record ScalarPatternApply(IReadOnlyList<Expression> Roots,
+    IReadOnlyList<int> Slots, Expression Body) : Expression;
+// Eager closed i64 projection, not an owned aggregate or host tuple.
+public sealed record EntryScalarProjection(Expression First, Expression Second, bool SelectKey) : Expression;
+// Canonical integer ^^ and the named Integer.bitXor intrinsic share this AST.
 public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
 // Named signed-64 Integer.rem/mod/pow (Java StrictIntegerArithmetic parity):
 // truncating remainder, Euclidean modulus, checked nonnegative power.
@@ -61,7 +68,15 @@ public static partial class OresParser
     {
         if (languageVersion.HasValue && languageVersion.Value is not (1 or 2))
             throw new FormatException("E_LANGUAGE_VERSION: expected language version 1 or 2");
-        var tokens = StripFileExports(Tokenize(source, allowCaretReturn: languageVersion.HasValue), source);
+        var tokens = StripFileExports(Tokenize(source, allowCaretReturn: languageVersion.HasValue, allowScalarTupleProjection: true), source);
+        // Preserve the dedicated removal diagnostic for old tuple factory
+        // syntax even when it contains a bracket projection. Nothing is emitted.
+        for (int i = 0; i + 2 < tokens.Count; i++)
+            if (tokens[i].Text == "~" && tokens[i + 1].Text == "tuple" &&
+                tokens[i + 2].Text == "(")
+                throw new FormatException(
+                    $"E_COLLECTION_FACTORY_REMOVED: '~' denotes structural typing, not a collection constructor; use Tuple.of(...) at offset {tokens[i].Offset}");
+        RejectUnverifiedScalarBrackets(tokens);
         RejectUnsupportedSourceActors(tokens);
         RejectUnsupportedInvertedClasses(tokens);
         RejectUnsupportedScalarTokens(tokens);
@@ -80,7 +95,7 @@ public static partial class OresParser
     private static List<Token> StripFileExports(List<Token> tokens, string source)
     {
         var stripped = new List<Token>(tokens.Count);
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        int exportCount = 0;
         int braces = 0;
         for (int i = 0; i < tokens.Count; i++)
         {
@@ -101,12 +116,15 @@ public static partial class OresParser
                 if (declaration.Items.Count != 1 || declaration.Items[0].LocalName != declaration.Items[0].ExternalName)
                     throw new FormatException($"EXPORT_SCALAR_UNSUPPORTED: grouped/aliased exports at offset {token.Offset}");
                 string name = declaration.Items[0].LocalName;
-                if (!names.Add(name))
-                    throw new FormatException($"EXPORT_DUPLICATE: duplicate export {name} at offset {token.Offset}");
+                if (++exportCount > 128)
+                    throw new FormatException($"EXPORT_SOURCE_LIMIT: too many export directives at offset {token.Offset}");
                 if (declaration.Kind is not (null or ExplicitExportKind.Fnc) || name != "main")
                     throw new FormatException($"EXPORT_BACKEND_UNSUPPORTED: only fnc main is lowered in .NET NativeAOT scalar compiler at offset {token.Offset}");
                 if (declaration.Scope != ExplicitExportScope.Public)
                     throw new FormatException($"EXPORT_PACKAGE_LINKER_UNSUPPORTED: package-only main needs module-scoped linkage at offset {token.Offset}");
+                // Keep the checked directive's position in the grammar. Only
+                // Reader's file-root production may consume this marker.
+                stripped.Add(token);
                 i = j;
                 continue;
             }
@@ -117,7 +135,7 @@ public static partial class OresParser
         return stripped;
     }
 
-    private static List<Token> Tokenize(string source, bool allowCaretReturn = false)
+    private static List<Token> Tokenize(string source, bool allowCaretReturn = false, bool allowScalarTupleProjection = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
@@ -133,6 +151,9 @@ public static partial class OresParser
             // Original UTF-16 source must reject raw terminal controls in comments/literals.
             if (c == (char)0x001b || c == (char)0x007f)
                 throw new FormatException($"Source contains terminal control at offset {i}");
+            if (source[i] is '\u061c' or '\u200e' or '\u200f' or
+                >= '\u202a' and <= '\u202e' or >= '\u2066' and <= '\u2069')
+                throw new FormatException($"Source contains bidirectional Unicode control at offset {i}");
             if (char.IsHighSurrogate(c))
             {
                 if (i + 1 >= source.Length || !char.IsLowSurrogate(source[i + 1]))
@@ -149,7 +170,7 @@ public static partial class OresParser
         ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
-        var lexer = new Lexer(source, allowCaretReturn);
+        var lexer = new Lexer(source, allowCaretReturn, allowScalarTupleProjection);
         var tokens = new List<Token>();
         for (;;)
         {
@@ -220,6 +241,48 @@ public static partial class OresParser
             if (token.Text.Length == 0) break;
         }
         return tokens;
+    }
+
+    // Only the scalar parser's immediate Tuple.of literal projection can
+    // pass this bracket gate. No array literal, general indexing, nested
+    // bracket, arbitrary receiver, or dynamic index receives admission.
+    // The Reader still validates operands, witnesses, index and bounds.
+    private static void RejectUnverifiedScalarBrackets(List<Token> tokens)
+    {
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            if (tokens[i].Text is not ("[" or "]")) continue;
+            bool allowed = false;
+            if (tokens[i].Text == "[" && i >= 5 && i + 2 < tokens.Count &&
+                tokens[i - 1].Text == ")" && tokens[i + 2].Text == "]" &&
+                tokens[i + 1].Text.Length > 0 && tokens[i + 1].Text[0] is >= '0' and <= '9')
+            {
+                int j = i - 2;
+                // At most 32 signed literal operands and 32 type witnesses.
+                while (j >= 0 && i - j <= 100 &&
+                    (tokens[j].Text is "," or "+" or "-" ||
+                    (tokens[j].Text.Length > 0 && tokens[j].Text[0] is >= '0' and <= '9'))) j--;
+                if (j >= 0 && tokens[j].Text == "(")
+                {
+                    j--;
+                    if (j >= 0 && tokens[j].Text == ">")
+                    {
+                        j--;
+                        while (j >= 0 && i - j <= 170 &&
+                            tokens[j].Text is "int" or ",") j--;
+                        if (j >= 0 && tokens[j].Text == "<") j--;
+                        else j = -1;
+                    }
+                    allowed = j >= 2 && tokens[j].Text == "of" &&
+                        tokens[j - 1].Text == "." && tokens[j - 2].Text == "Tuple" &&
+                        (j == 2 || tokens[j - 3].Text != ".");
+                }
+            }
+            if (!allowed)
+                SafeCollectionSourceAdmission.RejectUnverifiedBracket(tokens[i].Text[0], tokens[i].Offset);
+            else
+                i += 2; // the exactly one literal index and its matching closer
+        }
     }
 
     private static void RejectUnsupportedScalarTokens(List<Token> tokens)
@@ -516,7 +579,7 @@ public static partial class OresParser
     }
     private readonly record struct Token(string Text, int Offset);
 
-    private sealed class Lexer(string text, bool allowCaretReturn)
+    private sealed class Lexer(string text, bool allowCaretReturn, bool allowScalarTupleProjection)
     {
         private int _i;
         private bool previousWasWith;
@@ -585,6 +648,7 @@ public static partial class OresParser
             var start = _i;
             if (_i == text.Length) return new Token("", start);
             var ch = text[_i];
+            if (ch is '⧖' or '∂') { _i++; return new Token("suspends", start); }
             if (ch is '\'' or '"' or '\u0060')
             {
                 _i = QuotedSourceSyntax.Scan(text, start);
@@ -604,7 +668,7 @@ public static partial class OresParser
             bool exportScopeBracket =
                 (ch == '[' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*$")) ||
                 (ch == ']' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*$"));
-            if (!exportScopeBracket)
+            if (!exportScopeBracket && !allowScalarTupleProjection)
                 SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
             // Scalar and structured CIL frontends must agree: state-changing
             // annotations are compiler effects, never inert metadata. Check
@@ -657,6 +721,20 @@ public static partial class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                // Mandatory whitespace follows the entire contextual keyword suffix.
+                // Keep exact inequality tokens distinct.
+                if ((word is "trap" or "throw" or "raise" or "panic" or "copy" or "take" or "move" or
+                    "borrow" or "share" or "pin" or "drop" or "pipe" or "rpipe" or "stop" or "expand") &&
+                    _i < text.Length && text[_i] == '!' &&
+                    (_i + 1 >= text.Length || text[_i + 1] != '=') &&
+                    !(text.AsSpan(_i).StartsWith("!eq", StringComparison.Ordinal) &&
+                      (_i + 3 == text.Length ||
+                       !(char.IsLetterOrDigit(text[_i + 3]) || text[_i + 3] == '_'))))
+                {
+                    int after = _i + (word == "copy" && _i + 1 < text.Length && text[_i + 1] == '!' ? 2 : 1);
+                    if (after >= text.Length || text[after] is not (' ' or '\t' or '\r' or '\n' or '\v' or '\f'))
+                        throw new FormatException($"E_BANG_KEYWORD_WHITESPACE: whitespace required after bang keyword at offset {start}");
+                }
                 if (word == "select" &&
                     StaticSelectAdmission.FollowedByStaticSelect(text, start))
                     throw StaticSelectAdmission.Unsupported(start);
@@ -742,7 +820,7 @@ public static partial class OresParser
                 if (word is "gen" or "generator")
                     throw new FormatException(
                         $"generator declarations require iterator-frame and continuation lowering in .NET Native AOT backend at offset {start}");
-                return new Token(word, start);
+                return new Token(word == "susp" ? "suspends" : word, start);
             }
             if (ch == '"')
             {
@@ -800,16 +878,16 @@ public static partial class OresParser
                     _i++;
                     return new Token("^", start);
                 }
-                // Rejected after lexical trivia and before any scalar instruction
-                // reaches typed IR or CIL. `^^` is the canonical boolean XOR
-                // (spec ch.16), but this frontend only types int scalars, so any
-                // `^^` here has non-bool operands; the structured frontend lowers
-                // it. Single `^` is not AttoLang syntax (use Integer.bitXor).
+                // Canonical adjacent ^^ is integer XOR. This scalar reader
+                // has no writable locals, so a following '=' is not consumed.
+                // Never join tokens separated by whitespace or comments.
                 if (_i + 1 < text.Length && text[_i + 1] == '^')
-                    throw new FormatException(
-                        $"Logical operator requires bool operands: '^^' in scalar int source at offset {start}");
+                {
+                    _i += 2;
+                    return new Token("^^", start);
+                }
                 throw new FormatException(
-                    $"Reserved AttoLang operator '^'; use Integer.bitXor(a, b) at offset {start}");
+                    $"Reserved AttoLang operator '^'; use ^^ or Integer.bitXor(a, b) at offset {start}");
             }
             throw new FormatException($"Invalid character at offset {start}");
         }
@@ -824,6 +902,92 @@ public static partial class OresParser
         private readonly Dictionary<string, ScalarMacro> _macros = new(StringComparer.Ordinal);
         private int _index;
         private int _macroExpansions;
+        private Dictionary<string,int>? _patternScope;
+        private int _nextPatternSlot;
+        private int _patternCount;
+        private Dictionary<int,int>? _parenEnds;
+        private bool PatternAhead()
+        {
+            if (Current.Text != "(") return false;
+            if (_parenEnds is null)
+            {
+                _parenEnds = new Dictionary<int,int>();
+                var stack = new Stack<int>();
+                for (int i=0;i<tokens.Count;i++)
+                {
+                    if (tokens[i].Text=="(") stack.Push(i);
+                    else if (tokens[i].Text==")" && stack.Count>0) _parenEnds.Add(stack.Pop(),i);
+                }
+            }
+            return _parenEnds.TryGetValue(_index,out int end) && end+3<tokens.Count &&
+                tokens[end+1].Text=="|>" && tokens[end+2].Text=="|" && tokens[end+3].Text=="(";
+        }
+
+        private FormatException PatternError(string reason) =>
+            new($"E_TUPLE_PATTERN: {reason} at offset {Current.Offset}");
+
+        private Expression ParseTuplePattern(int depth)
+        {
+            CheckDepth(depth);
+            if (++_patternCount>128) throw PatternError("maximum 128 patterns");
+            var outer=_patternScope;
+            try
+            {
+                _patternScope=outer ?? new Dictionary<string,int>(StringComparer.Ordinal);
+                Expect("(");
+                var roots=new List<Expression>();
+                bool comma=false;
+                if (!Take(")"))
+                {
+                    do
+                    {
+                        if (roots.Count>=8) throw PatternError("maximum arity 8");
+                        roots.Add(ParseAdd(depth+1));
+                        if (!Take(",")) {Expect(")");break;}
+                        comma=true;
+                    } while (!Take(")"));
+                }
+                if (roots.Count==1 && !comma) throw PatternError("singleton root requires trailing comma");
+                Expect("|>");Expect("|");Expect("(");
+                var scope=new Dictionary<string,int>(StringComparer.Ordinal);
+                var slots=new List<int>();
+                bool binderComma=false;
+                if (!Take(")"))
+                {
+                    do
+                    {
+                        if (slots.Count>=8) throw PatternError("maximum arity 8");
+                        string name=Current.Text;
+                        if (!IsMacroName(name) || name is "true" or "false" or "self" or "arguments")
+                            throw PatternError("expected scalar binder");
+                        _index++;
+                        if (Take(":"))
+                        {
+                            if (name=="_") throw PatternError("typed discard forbidden");
+                            if (!Take("int")) throw PatternError("only int leaf types admitted");
+                        }
+                        if (name=="_") slots.Add(-1);
+                        else
+                        {
+                            int id=_nextPatternSlot++;
+                            if (!scope.TryAdd(name,id)) throw PatternError("duplicate binding");
+                            slots.Add(id);
+                        }
+                        if (!Take(",")) {Expect(")");break;}
+                        binderComma=true;
+                    } while (!Take(")"));
+                }
+                if (slots.Count==1 && !binderComma) throw PatternError("singleton pattern requires trailing comma");
+                if (slots.Count!=roots.Count) throw PatternError("arity mismatch");
+                Expect("|");Expect("->");
+                _patternScope=scope;
+                var body=ParseAdd(depth+1);
+                if (Current.Text is not (")" or "," or ";" or "}" or "end" or ""))
+                    throw PatternError("unsupported body continuation");
+                return new ScalarPatternApply(roots.AsReadOnly(),slots.AsReadOnly(),body);
+            }
+            finally { _patternScope=outer; }
+        }
 
         private static FormatException UnsupportedMacro(int at, string reason) =>
             new($"NET_MACRO_EXPANDER_REQUIRED: {reason} at offset {at}; " +
@@ -998,12 +1162,20 @@ public static partial class OresParser
 
         private void Expect(string value)
         {
+            if (Current.Text == "export" && value != "export")
+                throw new FormatException($"EXPORT_SCOPE: exports must be file-level at offset {Current.Offset}");
             if (!Take(value))
                 throw new FormatException($"Expected '{value}' at offset {Current.Offset}");
         }
 
+        private void SkipFileExports()
+        {
+            while (Take("export")) { }
+        }
+
         public Expression ParseProgram()
         {
+            SkipFileExports();
             if (Take("import"))
             {
                 Expect("dotnet");
@@ -1025,7 +1197,9 @@ public static partial class OresParser
                 _dotnetMathAlias = alias;
                 Expect(";");
             }
+            SkipFileExports();
             ParseMacroPrelude();
+            SkipFileExports();
             bool defined = false, exposed = false;
             while (Current.Text is "define" or "pub")
             {
@@ -1096,7 +1270,7 @@ public static partial class OresParser
             {
                 if (Current.Text == "return" || Current.Text == "^")
                     throw new FormatException("E_SYNTAX: comma body uses expression-tail syntax");
-                Expression last = ParseAdd(0);
+                Expression last = ParseXor(0);
                 int steps = 0;
                 while (Take(","))
                 {
@@ -1106,11 +1280,12 @@ public static partial class OresParser
                         throw new FormatException("E_UNSUPPORTED: discarded comma-body value requires effect-safe lowering");
                     if (Current.Text is "," or "end" or ";" or "")
                         throw new FormatException("E_SYNTAX: empty comma-body item");
-                    last = ParseAdd(0);
+                    last = ParseXor(0);
                 }
                 if (Current.Text == ";")
                     throw new FormatException("E_SYNTAX: comma body requires ',' not ';'");
                 Expect("end");
+                SkipFileExports();
                 if (Current.Text.Length != 0)
                     throw new FormatException($"Unexpected token at offset {Current.Offset}");
                 return last;
@@ -1122,11 +1297,12 @@ public static partial class OresParser
                     $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {Current.Offset}");
             if (!(languageVersion.HasValue && Take("^")))
                 Expect("return");
-            var expression = ParseAdd(0);
+            var expression = ParseXor(0);
             if (!braced && languageVersion == 2 && Current.Text == ",")
                 throw new FormatException("E_LANGUAGE_VERSION: v2 comma body requires '::'");
             Expect(";");
             Expect(braced ? "}" : "end");
+            SkipFileExports();
             if (Current.Text.Length != 0)
                 throw new FormatException($"Unexpected token at offset {Current.Offset}");
             return expression;
@@ -1137,13 +1313,30 @@ public static partial class OresParser
             Literal => true,
             Unary unary => VersionedPureScalar(unary.Value),
             Binary binary => VersionedPureScalar(binary.Left) && VersionedPureScalar(binary.Right),
+            NamedBitXor xor => VersionedPureScalar(xor.Left) && VersionedPureScalar(xor.Right),
             _ => false
         };
+
+        private Expression ParseXor(int depth)
+        {
+            CheckDepth(depth);
+            Expression left = ParseAdd(depth);
+            while (Current.Text == "^^")
+            {
+                // The historical portable scalar-v1 contract rejects this spelling.
+                // Canonical unversioned and explicit v2 source use integer XOR.
+                if (languageVersion == 1)
+                    throw new FormatException($"Integer XOR requires canonical scalar syntax (language version 2) at offset {Current.Offset}");
+                Expect("^^");
+                left = new NamedBitXor(left, ParseAdd(depth));
+            }
+            return left;
+        }
 
         private Expression ParseAdd(int depth)
         {
             CheckDepth(depth);
-            Expression left = ParseMul(depth + 1);
+            Expression left = PatternAhead() ? ParseTuplePattern(depth + 1) : ParseMul(depth + 1);
             while (Current.Text is "+" or "-")
             {
                 char op = Current.Text[0];
@@ -1167,7 +1360,7 @@ public static partial class OresParser
             {
                 char op = Current.Text[0];
                 // Checked int/int division remains unsupported in this
-                // i64-only bootstrap; % and ^ are removed at lexical admission.
+                // i64-only bootstrap; % is removed at lexical admission.
                 if (op == '/')
                     throw new FormatException(
                         "Checked integer division requires typed guest error lowering; unsupported in the i64 source subset");
@@ -1181,6 +1374,19 @@ public static partial class OresParser
         private Expression ParseUnary(int depth)
         {
             CheckDepth(depth);
+            if (_patternScope is not null)
+            {
+                if (_patternScope.TryGetValue(Current.Text,out int id))
+                {
+                    _index++;
+                    return new ScalarPatternSlot(id);
+                }
+                // Pure scalar arithmetic only: no calls, casts, host access,
+                // capture, or implicit evaluation of unknown names.
+                if (Current.Text is not ("+" or "-" or "(") &&
+                    (Current.Text.Length==0 || Current.Text[0] is < '0' or > '9'))
+                    throw PatternError("expected closed int arithmetic over bound leaves");
+            }
             if (Current.Text.Length > 0 && Current.Text[0] is '\'' or '"' or '\u0060')
                 throw new FormatException(
                     $"STRING_BACKEND_UNSUPPORTED: quoted strings and template interpolation require typed String CIL/NativeAOT lowering at offset {Current.Offset}");
@@ -1216,7 +1422,7 @@ public static partial class OresParser
             if (verbIndex + 1 < tokens.Count &&
                 (Current.Text != "mut" ||
                     (tokens[verbIndex].Text == "borrow")) &&
-                (tokens[verbIndex].Text is "copy" or "take" or "borrow" or "share") &&
+                (tokens[verbIndex].Text is "copy" or "take" or "move" or "borrow" or "share") &&
                 tokens[verbIndex + 1].Text == "!" &&
                 (verbIndex + 2 >= tokens.Count ||
                     tokens[verbIndex + 2].Text is not ("=" or "eq")) &&
@@ -1246,7 +1452,7 @@ public static partial class OresParser
                 {
                     if (!Take("const"))
                         throw UnsupportedMacro(at, "Const<int> macro requires a const argument");
-                    argument = ParseAdd(depth + 1);
+                    argument = ParseXor(depth + 1);
                     Expect(")");
                     // Materialize a new checked literal in the compiler AST.
                     // No token-string rewriting, reflection or JIT execution.
@@ -1258,7 +1464,7 @@ public static partial class OresParser
                     IsMacroName(Current.Text) &&
                     (_index + 1 >= tokens.Count || tokens[_index + 1].Text != "!"))
                     throw UnsupportedMacro(at, "repeated unquote requires a closed integer literal; cannot duplicate a name or call before ownership analysis");
-                argument = ParseAdd(depth + 1);
+                argument = ParseXor(depth + 1);
                 Expect(")");
                 if (macro.Kind == MacroKind.SyntaxExprLiteralTwice)
                 {
@@ -1289,16 +1495,16 @@ public static partial class OresParser
                 if (Take("Abs"))
                 {
                     Expect("(");
-                    var value = ParseAdd(depth + 1);
+                    var value = ParseXor(depth + 1);
                     Expect(")");
                     return new DotnetMathAbsI64(value);
                 }
                 if (Take("Max"))
                 {
                     Expect("(");
-                    var left = ParseAdd(depth + 1);
+                    var left = ParseXor(depth + 1);
                     Expect(",");
-                    var right = ParseAdd(depth + 1);
+                    var right = ParseXor(depth + 1);
                     Expect(")");
                     return new DotnetMathMaxI64(left, right);
                 }
@@ -1350,9 +1556,9 @@ public static partial class OresParser
                         $"Unsupported Integer intrinsic at offset {Current.Offset}");
                 _index++;
                 Expect("(");
-                var left = ParseAdd(depth + 1);
+                var left = ParseXor(depth + 1);
                 Expect(",");
-                var right = ParseAdd(depth + 1);
+                var right = ParseXor(depth + 1);
                 Expect(")");
                 return operation switch
                 {
@@ -1375,10 +1581,16 @@ public static partial class OresParser
             }
             if (Take("("))
             {
-                var inner = ParseAdd(depth + 1);
+                var inner = ParseXor(depth + 1);
                 Expect(")");
                 return inner;
             }
+            // This closed scalar lane has no general name binding. Preserve
+            // identifier-shaped tokens as a distinct compile-time diagnostic,
+            // without admitting calls, names, or non-integer values.
+            if (Current.Text.Length > 0 &&
+                (Current.Text[0] is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or '_'))
+                throw new FormatException($"Unknown or unsupported scalar identifier at offset {Current.Offset}");
             if (Current.Text.Length == 0 || Current.Text[0] is < '0' or > '9')
                 throw new FormatException($"Expected integer at offset {Current.Offset}");
             var raw = Current.Text;
@@ -1389,7 +1601,7 @@ public static partial class OresParser
             return new Literal(result);
         }
 
-        // A nominal Entry<K,V> and a Pair<A,B> remain different source
+        // A nominal Entry<K,V> and a Pair<V> remain different source
         // families: an Entry exposes only .key/.value; a Pair exposes only
         // .first/.second. The scalar bootstrap can represent neither as an
         // escaping object. A checked pure literal immediate projection is
@@ -1400,15 +1612,41 @@ public static partial class OresParser
             CheckDepth(depth);
             if (Take("<"))
             {
-                Expect("int");
-                Expect(",");
-                Expect("int");
+                if (isEntry)
+                {
+                    Expect("int"); Expect(","); Expect("int");
+                }
+                else if (Take("string"))
+                {
+                    Expect(","); Expect("int");
+                }
+                else
+                {
+                    Expect("int");
+                    if (Current.Text == ",")
+                        throw new FormatException($"E_PAIR_KEY_TYPE: Pair first type argument must be string at offset {at}");
+                }
                 Expect(">");
             }
             Expect("(");
-            long first = ReadPureI64Literal();
+            Expression? first = null;
+            if (isEntry) first = ParseXor(depth + 1);
+            else
+            {
+                // Narrow, effect-free literal subset: discard only a proven
+                // plain string when projecting .second. No template, escapes,
+                // runtime string expression or owned Pair representation.
+                string key = Current.Text;
+                if (key.Length < 2 || key[0] != '"' || key[^1] != '"')
+                    throw new FormatException($"E_PAIR_KEY_TYPE: Pair requires a string key at offset {Current.Offset}");
+                foreach (char c in key.AsSpan(1, key.Length - 2))
+                    if (c < ' ' || c > '~' || c is '\\' or '"' or '$')
+                        throw new FormatException($"E_PAIR_KEY_UNSUPPORTED: only plain static string literals in scalar Pair projection at offset {Current.Offset}");
+                _index++;
+            }
             Expect(",");
-            long second = ReadPureI64Literal();
+            // Both Entry operands are eager. The static Pair key is pure.
+            Expression second = ParseXor(depth + 1);
             Expect(")");
             if (!Take("."))
                 throw new FormatException(
@@ -1418,12 +1656,17 @@ public static partial class OresParser
             _index++;
             if (isEntry)
             {
-                if (field == "key") return new Literal(first);
-                if (field == "value") return new Literal(second);
+                if (field is "key" or "value")
+                {
+                    if (first is Literal && second is Literal)
+                        return field == "key" ? first : second;
+                    return new EntryScalarProjection(first!, second, field == "key");
+                }
                 throw new FormatException($"E_ENTRY_FIELD: only key/value projections are supported at offset {fieldAt}");
             }
-            if (field == "first") return new Literal(first);
-            if (field == "second") return new Literal(second);
+            if (field == "first")
+                throw new FormatException($"E_PAIR_STRING_PROJECTION_UNSUPPORTED: string result needs typed CIL lowering at offset {fieldAt}");
+            if (field == "second") return second;
             throw new FormatException($"E_PAIR_FIELD: only first/second projections are supported at offset {fieldAt}");
         }
 

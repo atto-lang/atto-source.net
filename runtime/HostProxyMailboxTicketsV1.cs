@@ -41,6 +41,7 @@ public sealed class HostProxyMailboxTicketsV1
 {
     private readonly object gate = new();
     private readonly object owner = new();
+    private readonly ulong tenant;
     private readonly ulong actor;
     private readonly ulong incarnation;
     private readonly int capacity;
@@ -49,11 +50,11 @@ public sealed class HostProxyMailboxTicketsV1
     private bool closed, fenced;
     private long admitted, processed, failed, abandoned;
 
-    public HostProxyMailboxTicketsV1(ulong actor, ulong incarnation, int capacity)
+    public HostProxyMailboxTicketsV1(ulong tenant, ulong actor, ulong incarnation, int capacity)
     {
-        if (actor == 0 || incarnation == 0 || capacity is < 1 or > 4096)
+        if (tenant == 0 || actor == 0 || incarnation == 0 || capacity is < 1 or > 4096)
             throw new ArgumentException("invalid bounded actor mailbox");
-        this.actor = actor; this.incarnation = incarnation; this.capacity = capacity;
+        this.tenant = tenant; this.actor = actor; this.incarnation = incarnation; this.capacity = capacity;
     }
     // Authorization is the caller's obligation; the route only scopes the
     // issued handle. Enqueue and ticket issue have one linearization point.
@@ -61,7 +62,7 @@ public sealed class HostProxyMailboxTicketsV1
     {
         if (!route.IsValid)
             return new(HostTicketAdmissionStateV1.Invalid, null);
-        if (route.TargetActor != actor || route.TargetIncarnation != incarnation)
+        if (route.Tenant != tenant || route.TargetActor != actor || route.TargetIncarnation != incarnation)
             return new(HostTicketAdmissionStateV1.Stale, null);
         lock (gate)
         {

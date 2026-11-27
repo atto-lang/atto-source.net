@@ -730,6 +730,47 @@ public unsafe sealed class ActorArena : IDisposable
         }
     }
 
+    /// <summary>
+    /// Trusted host adapter: acquire a lifetime-only pin before starting the
+    /// external operation. The factory runs once outside the arena gate; it
+    /// must not capture a turn or use guest memory from a completion callback.
+    /// A terminal task is a physical completion receipt, not a guest-resume
+    /// authority or permission to free a still-running external operation.
+    /// </summary>
+    public System.Threading.Tasks.Task TrackExternalCompletion(
+        ActorArenaTurn turn, Func<System.Threading.Tasks.Task> start)
+    {
+        ArgumentNullException.ThrowIfNull(start);
+        var pin = AcquireLifetimePin(turn);
+        try
+        {
+            var pending = start() ?? throw new InvalidOperationException("External operation returned no completion task");
+            return ActorArenaExternalCompletion.Await(pending, pin);
+        }
+        catch
+        {
+            pin.Dispose();
+            throw;
+        }
+    }
+
+    public System.Threading.Tasks.Task<T> TrackExternalCompletion<T>(
+        ActorArenaTurn turn, Func<System.Threading.Tasks.Task<T>> start)
+    {
+        ArgumentNullException.ThrowIfNull(start);
+        var pin = AcquireLifetimePin(turn);
+        try
+        {
+            var pending = start() ?? throw new InvalidOperationException("External operation returned no completion task");
+            return ActorArenaExternalCompletion.Await(pending, pin);
+        }
+        catch
+        {
+            pin.Dispose();
+            throw;
+        }
+    }
+
     public ActorScratchHandle AllocateScratch(ActorArenaTurn turn, int bytes,
         int alignment = 8)
     {
@@ -1116,3 +1157,20 @@ public unsafe sealed class ActorArena : IDisposable
     }
 }
 
+// Safe async boundary: no native pointer or turn authority crosses await.
+internal static class ActorArenaExternalCompletion
+{
+    internal static async System.Threading.Tasks.Task Await(
+        System.Threading.Tasks.Task pending, ActorArenaLifetimePin pin)
+    {
+        using (pin)
+            await pending.ConfigureAwait(false);
+    }
+
+    internal static async System.Threading.Tasks.Task<T> Await<T>(
+        System.Threading.Tasks.Task<T> pending, ActorArenaLifetimePin pin)
+    {
+        using (pin)
+            return await pending.ConfigureAwait(false);
+    }
+}

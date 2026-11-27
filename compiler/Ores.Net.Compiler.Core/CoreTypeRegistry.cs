@@ -91,6 +91,8 @@ public static class CoreTypeRegistry
         Scalar("i64", "core/primitive/i64", Lowering.ContractOnly);
         Scalar("Int", "core/primitive/i64", Lowering.ContractOnly);
         Scalar("bool", "core/primitive/bool", Lowering.NetScalar);
+        // Contextual compatibility alias: existing value identifiers stay valid.
+        Scalar("boolean", "core/primitive/bool", Lowering.NetScalar);
         Scalar("Bool", "core/primitive/bool", Lowering.ContractOnly);
         Add("string", "core/primitive/string-view", Scope.Core, Kind.Type, 0, 0,
             Ownership.BorrowedView, Allocation.BorrowedView, DropPolicy.None,
@@ -227,7 +229,7 @@ public static class CoreTypeRegistry
     }
 
     public static bool IsProtectedIdentity(string name) =>
-        Entries.TryGetValue(name, out var info) &&
+        name != "boolean" && Entries.TryGetValue(name, out var info) &&
         (info.Kind == Kind.Constructor || info.Scope != Scope.Explicit);
 
     public static bool IsCoreConstructor(string name) =>

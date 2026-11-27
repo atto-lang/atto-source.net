@@ -67,7 +67,8 @@ public enum CfgOpcode
     ResultUnwrapTextErr,
     CheckedRemainder,
     CheckedModulo,
-    InlineCooperate
+    InlineCooperate,
+    BitXorI64
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -161,7 +162,7 @@ public static class OresCfgVerifier
         IReadOnlyDictionary<string, CfgCallSignature>? callees = null)
     {
         ArgumentNullException.ThrowIfNull(function);
-        if (!Identifier(function.Name) ||
+        if (!FunctionIdentifier(function.Name) ||
             !(IsValueType(function.ResultType) || function.ResultType is IrValueType.Void or IrValueType.OptionI64) ||
             !Identifier(function.Entry))
             throw new FormatException("Invalid CFG function signature");
@@ -448,7 +449,8 @@ public static class OresCfgVerifier
                         CheckGuestOp(op);
                         if (op.TextOperand is null || op.TextOperand.Length > 16_384 ||
                             op.Opcode == CfgOpcode.GuestErrorIsType && op.TextOperand is not
-                                ("Error" or "ArithmeticOverflowError" or "DivisionByZeroError"))
+                                ("Error" or "ArithmeticOverflowError" or "DivisionByZeroError" or
+                                 "OptionUnwrapError" or "ResultUnwrapError"))
                             throw new FormatException("Invalid guest Error comparison");
                         Use(i, opIndex, op.Left!.Value, IrValueType.GuestError);
                         break;
@@ -627,6 +629,7 @@ public static class OresCfgVerifier
                     case CfgOpcode.CheckedSubtract:
                     case CfgOpcode.CheckedMultiply:
                     case CfgOpcode.CheckedDivide:
+                    case CfgOpcode.BitXorI64:
                     case CfgOpcode.ShiftLeftI64:
                     case CfgOpcode.ShiftRightLogicalI64:
                     case CfgOpcode.ShiftRightArithmeticI64:
@@ -760,6 +763,10 @@ public static class OresCfgVerifier
     {
         if (actual != expected) throw new FormatException("CFG result type mismatch");
     }
+
+    // Callable names use the source scalar grammar; CFG labels stay ASCII.
+    private static bool FunctionIdentifier(string value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= 128 && PortableUnicodeIdentifier.IsName(value);
 
     private static bool Identifier(string value)
     {
