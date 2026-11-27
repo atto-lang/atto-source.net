@@ -8,8 +8,22 @@ public static partial class OresParser
     public static VerifiedCfgModule? TryLowerVerifiedRefinementModule(string source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        if (source.Length > 1_048_576 || !HasVerifiedRefinementPrefix(source)) return null;
-        var tokens = Tokenize(source);
+        if (source.Length > 1_048_576) return null;
+        List<Token> tokens;
+        if (HasVerifiedRefinementPrefix(source))
+            tokens = Tokenize(source);
+        else
+        {
+            if (!HasMeasurementMainPrefix(source)) return null;
+            tokens = Tokenize(source);
+            if (!RequestsMeasurePrelude(tokens)) return null;
+            // Preserve source offsets in user tokens. Catalog declarations have
+            // their own bounded compile-time token budget and never execute.
+            var declarations = Tokenize(MeasureSource.Value);
+            declarations.RemoveAt(declarations.Count - 1);
+            declarations.AddRange(tokens);
+            tokens = declarations;
+        }
         RejectUnsupportedInvertedClasses(tokens);
         var reader = new Reader(tokens, DotnetHostImportPolicy.DenyAll, source, null);
         var prelude = reader.ParseVerifiedPrelude();
