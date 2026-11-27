@@ -34,6 +34,7 @@ public static partial class OresStructuredParser
         private sealed record Argument(string Type, Dictionary<string, StructuredExpr> Slots);
         private readonly Lexer lexer;
         private Token current;
+        private Token? buffered;
         private int tokens, depth, nextSlot;
         private readonly Dictionary<string, Owner> owners = new(StringComparer.Ordinal);
         private readonly Dictionary<string, StructuredFunction> functions = new(StringComparer.Ordinal);
@@ -51,8 +52,10 @@ public static partial class OresStructuredParser
         private void Next()
         {
             if (++tokens > 16384) throw Error("E_SOURCE_LIMIT", "attached scalar token budget");
-            current = lexer.Read();
+            current = buffered ?? lexer.Read();
+            buffered = null;
         }
+        private Token Peek() { buffered ??= lexer.Read(); return buffered.Value; }
         private bool Eat(string t) { if (current.Text != t) return false; Next(); return true; }
         private void Expect(string t) { if (!Eat(t)) throw Error("E_STRUCT_SYNTAX", "expected " + t); }
         private string Word()
@@ -338,7 +341,7 @@ public static partial class OresStructuredParser
                 Expect("("); var args=new List<Argument>();
                 if(!Eat(")")){
                     do{
-                        if(values.TryGetValue(current.Text,out var v)){
+                        if(values.TryGetValue(current.Text,out var v) && Peek().Text != "."){
                             Next();
                             // Only whole nominal constructor arguments are admitted.
                             var leaves=new Dictionary<string,StructuredExpr>(StringComparer.Ordinal);

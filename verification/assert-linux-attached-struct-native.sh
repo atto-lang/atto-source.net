@@ -8,7 +8,7 @@ project=verification/Ores.Net.AttachedStructFixtures/Ores.Net.AttachedStructFixt
 dotnet build "$project" -c Release
 source=verification/Ores.Net.AttachedStructFixtures/nested.atto
 compile(){ dotnet run --no-build --project "$project" -c Release -- "$1" "$2"; }
-for fixture in nested:42 mutable:1316; do
+for fixture in nested:42 mutable:1316 ordered:1336; do
   source=verification/Ores.Net.AttachedStructFixtures/${fixture%:*}.atto
   expected=${fixture#*:}
   rm -rf "$work/published"
