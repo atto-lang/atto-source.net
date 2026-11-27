@@ -82,6 +82,41 @@ using (var exhausted = new ControlPlaneArena32(1))
     exhausted.Drop(current);
     Denied(() => { _ = exhausted.Allocate(); });
 }
+using (var fifo = new ControlPlaneArena32(3))
+{
+    for (uint generation = 1; generation <= 4095; generation++)
+    for (uint slot = 1; slot <= 3; slot++)
+    {
+        Check(fifo.TryAllocate(out ulong h), "FIFO allocation");
+        Check(((uint)h & ((1u << 20)-1)) == slot && ((uint)h >> 20) == generation, "FIFO word parity");
+        Check(fifo.ReadI64(h, 0) == 0 && fifo.ReadRef32(h) == 0, "FIFO scrub");
+        fifo.WriteI64(h,0,slot); fifo.Drop(h);
+    }
+    Check(!fifo.TryAllocate(out ulong denied) && denied == 0, "all generations retired");
+}
+using (var fifo = new ControlPlaneArena32(5))
+{
+    ulong[] held = new ulong[5];
+    for (int i=0;i<5;i++) held[i]=fifo.Allocate();
+    Check(!fifo.TryAllocate(out _), "full");
+    for (int i=4;i>=0;i--) fifo.Drop(held[i]);
+    for (int i=4;i>=0;i--)
+    {
+        ulong h=fifo.Allocate();
+        Check(h!=held[i] && ((uint)h & ((1u<<20)-1)) == (uint)i+1, "reverse FIFO release");
+        Denied(()=>fifo.ReadI64(held[0],0));
+    }
+}
+using (var longLived = new ControlPlaneArena32(256))
+{
+    for (int i=0;i<1_000_000;i++)
+    {
+        Check(longLived.TryAllocate(out ulong h), "long reuse");
+        Check(longLived.ReadI64(h,0)==0 && longLived.ReadRef32(h)==0,"scrub");
+        longLived.WriteI64(h,0,i);longLived.Drop(h);
+    }
+    Console.WriteLine("NET_CONTROL_FIFO_PASS cycles=1000000 retirement=12285");
+}
 var stopped = new ControlPlaneArena32(1);
 ulong old = stopped.Allocate();
 stopped.Dispose();
