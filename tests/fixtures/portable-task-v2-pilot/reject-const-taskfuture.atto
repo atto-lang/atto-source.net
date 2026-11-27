@@ -1,0 +1,4 @@
+pub suspends fnc main(): int {
+  const TaskFuture<int> pending = task<int> { return 42; };
+  return await pending;
+}

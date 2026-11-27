@@ -1,0 +1,34 @@
+name: Closed root TaskFuture exact NativeAOT
+on:
+  pull_request:
+    paths:
+      - 'compiler/**'
+      - 'runtime/**'
+      - 'host/**'
+      - 'ci/test-closed-root-taskfuture-nativeaot.sh'
+      - 'tests/fixtures/portable-task-v2-pilot/**'
+      - '.github/workflows/closed-root-taskfuture-nativeaot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build native compiler and execute shared cases
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev binutils
+          git log -1 --format='%H %T'
+          bash ci/test-closed-root-taskfuture-nativeaot.sh
