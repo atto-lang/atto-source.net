@@ -2403,6 +2403,14 @@ public static partial class OresStructuredParser
                 {
                     if (!allowDeferredStdout)
                         throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: E_PERMISSION: deferred stdout requires explicit host compile grant");
+                    string receiver = Current.Text;
+                    // Never reinterpret a lexical binding as a privileged process endpoint.
+                    if (scopes.Any(scope => scope.ContainsKey(receiver)) ||
+                        aggregateScopes.Any(scope => scope.ContainsKey(receiver)) ||
+                        localTypeScopes.Any(scope => scope.Contains(receiver)) ||
+                        namedAggregateScopes.Any(scope => scope.ContainsKey(receiver)) ||
+                        visible.ContainsKey(receiver) || frozenNamespaceBindings.ContainsKey(receiver))
+                        throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: deferred stdout requires an unshadowed endpoint");
                     bool processStdout = Current.Text == "process";
                     Expect(processStdout ? "process" : "stdio"); Expect("."); Expect(processStdout ? "stdout" : "out"); Expect("."); Expect("write"); Expect("(");
                     string literal = ErrorMessage();
