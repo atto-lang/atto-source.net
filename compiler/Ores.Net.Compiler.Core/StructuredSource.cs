@@ -329,6 +329,16 @@ public static partial class OresStructuredParser
         while (true)
         {
             var token = lexer.Read();
+            // Probe only direct top-level nominal struct declaration headers.
+            // Expression-level with retains its original lexical gate.
+            if (braceDepth == 0 && token.Text == "struct" && tokens.Count >= 3 &&
+                tokens[^3].Text == "type" && IsSimpleNominalWord(tokens[^2].Text) &&
+                tokens[^1].Text == "=")
+                RejectAttachedStructTarget(source, token.Offset, tokens[^2].Text);
+            if (braceDepth == 0 && token.Text == "{" && tokens.Count >= 3 &&
+                tokens[^3].Text == "define" && tokens[^2].Text == "struct" &&
+                IsSimpleNominalWord(tokens[^1].Text))
+                RejectAttachedStructTarget(source, token.Offset, tokens[^1].Text, startAtBrace: true);
             // Comments and trivia are already stripped by this Lexer. Deny
             // namespace member access until ETS/pg isolation, ownership,
             // generational table handles and mailbox ingress exist in Native AOT.
@@ -924,7 +934,7 @@ public static partial class OresStructuredParser
 
     private readonly record struct Token(string Text, int Offset);
     private sealed class Lexer(string source, bool moduleMode = false,
-        bool allowStaticTupleProjection = false)
+        bool allowStaticTupleProjection = false, bool attachedStructTarget = false)
     {
         private int index;
         private bool previousWasWith;
@@ -985,7 +995,7 @@ public static partial class OresStructuredParser
             bool precededByString = previousWasString;
             previousWasWith = false;
             previousWasString = false;
-            if (precededByWith && ch == '{')
+            if (precededByWith && ch == '{' && !attachedStructTarget)
                 throw new FormatException(
                     $"WITH_BACKEND_UNSUPPORTED: immutable with requires checked rt copy/take, "
                     + $"owned field layout/drop and Native AOT reconstruction at offset {index}");
@@ -1131,6 +1141,8 @@ public static partial class OresStructuredParser
             // still rejects arrow syntax outside its admitted grammar.
             else if (ch == '-' && index + 1 < source.Length &&
                      source[index + 1] == '>') index += 2;
+            else if (attachedStructTarget && ch == '\u2022') index++;
+            else if (attachedStructTarget && ch == '<' && index + 1 < source.Length && source[index + 1] == '-') index += 2;
             else if (ch == '~')
                 throw new FormatException(
                     $"TILDE_AGGREGATE_BACKEND_UNSUPPORTED: typed Map/Record literals require a checked AST, key domains, ownership, transactional constructor and NativeAOT layout at offset {offset}");
