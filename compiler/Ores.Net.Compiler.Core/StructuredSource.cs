@@ -2109,7 +2109,7 @@ public static partial class OresStructuredParser
                 if (withBase is null || withBase.Shape.Kind != ClosedAggregateKind.ReadonlyRecord ||
                     withBase.Wrapper == "Tuple" || scopes.Any(scope => scope.ContainsKey(originName)) ||
                     withBase.Values.Values.Any(v => v is not StructuredInt and not StructuredBool))
-                    throw Error("E_RECORD_WITH: requires earlier immutable scalar Record");
+                    throw Error("WITH_BACKEND_UNSUPPORTED: E_RECORD_WITH: requires earlier immutable scalar Record");
                 if (Current.Text != "{") throw Error("E_RECORD_WITH: expected braces");
             }
             string open = wrapper == "struct" || (wrapper == "Record" && Current.Text == "{") ? "{" : "(";
