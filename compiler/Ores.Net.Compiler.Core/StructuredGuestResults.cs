@@ -21,7 +21,8 @@ public sealed record StructuredPropagate(int At, StructuredExpr Operand, IrValue
     : StructuredExpr(At, PayloadType);
 public sealed record StructuredErrorTest(int At, StructuredExpr Error, string Name, bool IsType)
     : StructuredExpr(At, IrValueType.Bool);
-internal sealed record StructuredLexicalDefer(int At, StructuredSet Cleanup) : StructuredStmt(At);
+internal sealed record StructuredDeferredStdout(int At, string Text) : StructuredStmt(At);
+internal sealed record StructuredLexicalDefer(int At, StructuredStmt Cleanup) : StructuredStmt(At);
 public sealed record StructuredSignal(int At, StructuredExpr Error, CfgGuestEffect Effect)
     : StructuredStmt(At);
 
@@ -164,7 +165,7 @@ public static partial class OresStructuredParser
         private int lexicalTrapRhsId;
         private void TrapInlineCheckedAssignment(List<StructuredStmt> body,
             StructuredExpr value, Func<StructuredExpr, StructuredStmt> install,
-            IReadOnlyList<StructuredSet> cleanup)
+            IReadOnlyList<StructuredStmt> cleanup)
         {
             int at = value.Offset;
             // This prefix is reserved by the source reader. IDs are unique
@@ -183,7 +184,7 @@ public static partial class OresStructuredParser
         }
 
         private IReadOnlyList<StructuredStmt> ExitWithCleanup(StructuredExpr result,
-            IReadOnlyList<StructuredSet> cleanup)
+            IReadOnlyList<StructuredStmt> cleanup)
         {
             if (cleanup.Count == 0) return new StructuredStmt[] { new StructuredLocalExit(result.Offset, result) };
             int at = result.Offset;
@@ -199,9 +200,9 @@ public static partial class OresStructuredParser
         }
 
         private IReadOnlyList<StructuredStmt> TrapInlineStatements(IReadOnlyList<StructuredStmt> statements,
-            IReadOnlyList<StructuredSet>? inherited = null)
+            IReadOnlyList<StructuredStmt>? inherited = null)
         {
-            var cleanup = new List<StructuredSet>(inherited ?? Array.Empty<StructuredSet>());
+            var cleanup = new List<StructuredStmt>(inherited ?? Array.Empty<StructuredStmt>());
             var body = new List<StructuredStmt>(statements.Count);
             foreach (var stmt in statements)
             {
