@@ -1580,8 +1580,8 @@ pub async routine main(): void {
                 $"fnc main():int{{let int {captureName}=42;return {captureName};}}");
             Require(plainCaptureName.Body.Count == 2 &&
                     plainCaptureName.Body[1] is StructuredReturn {
-                        Value: StructuredRead { Type: IrValueType.I64 } read
-                    } && read.Name == captureName,
+                        Value: StructuredRead { Type: IrValueType.I64 } captureRead
+                    } && captureRead.Name == captureName,
                 captureName + " remains an ordinary scalar identifier");
         }
         // Ignored comment text cannot activate unsupported capture guards.
