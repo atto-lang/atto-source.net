@@ -67,15 +67,21 @@ jobs:
         run: |
           set -euo pipefail
           compiler=artifacts/compiler/linux-x64/oresnet
-          for name in literal-equivalence const-arithmetic bool-local runtime-val-let const-reference; do
+          # Historical fixture filenames are retained for exact shared blob
+          # identity; v2 now admits these three as ordinary local bindings.
+          for name in literal-equivalence const-arithmetic bool-local runtime-val-let const-reference implicit-nonconst explicit-nonconst const-mut-scalar; do
             "$compiler" check-structured "contracts/implicit-const-scalar-v1/$name.atto"
+          done
+          for name in implicit-nonconst explicit-nonconst const-mut-scalar; do
+            bash scripts/publish-linux.sh "contracts/implicit-const-scalar-v1/$name.atto" "artifacts/$name-native" --structured
+            guest="artifacts/$name-native/linux-x64/oreslang-app"
+            bash verification/assert-linux-native-release.sh "artifacts/$name-native/linux-x64/oreslang-app"
+            test "$("$guest")" = 42
+            echo "NET_LOCAL_BINDING_V2_GUEST|$name|42"
           done
           temp="$(mktemp -d)"
           trap 'rm -rf -- "$temp"' EXIT
           for row in \
-            'implicit-nonconst E_NON_CONST_INITIALIZER' \
-            'explicit-nonconst E_NON_CONST_INITIALIZER' \
-            'const-mut-scalar E_CONST_MUT_UNSUPPORTED' \
             'const-overflow E_CONST_OVERFLOW' \
             'implicit-rebind E_IMMUTABLE_REBIND' \
             'explicit-rebind E_IMMUTABLE_REBIND'; do

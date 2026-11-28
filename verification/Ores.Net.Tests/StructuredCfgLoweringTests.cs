@@ -412,6 +412,30 @@ internal static class StructuredCfgLoweringTests
         RejectWithDiagnostic("fnc main():int{return match 42 over on _ as rebind rebind int z -> z end;}", "MATCH_ALIAS_MODIFIER", "duplicate marker");
         RejectWithDiagnostic("fnc main():int{return match 42 over on _ as mut z -> 0 end;}", "MATCH_ALIAS_MUT_UNSUPPORTED", "scalar referent mutation");
         RejectWithDiagnostic("fnc bump(int n):int{n=n+2;return n;} fnc main():int{return bump(40);}", "E_IMMUTABLE_REBIND", "fixed formal");
+        Check("denote type Count = int; fnc main():int{let Count x=20;let Count x=40;set x+=2;return x;}",
+            42, "denoted shadow storage identity with explicit update");
+        Check("denote type Count = int; denote type Total = Count; fnc main():Total{val Count a=42;return a;}",
+            42, "denoted scalar CIL identity");
+        CheckModule("denote type Count = int; denote type Total = Count; fnc id(Count n):Total{return n;} pub fnc main():Total{val Count a=42;return id(a);}",
+            42, "denoted helper ABI");
+        CheckModule("denote type Flag = bool; fnc id(Flag b):Flag{return b;} pub fnc main():int{if id(true) then return 42; else return 0; fi}",
+            42, "denoted bool helper ABI");
+        Check("denote type First = Second; denote type Second = Third; denote type Third = int; fnc main():First{val Second a=42;return a;}",
+            42, "forward scalar denotation identity");
+        CheckModule("denote type Flag = Later; denote type Later = bool; fnc id(Flag b):Flag{return b;} pub fnc main():int{if id(true) then return 42; else return 0; fi}",
+            42, "forward bool helper ABI");
+        foreach (var (source, diagnostic) in new[] {
+            ("denote type A = B; denote type B = A; fnc main():int{return 42;}", "E_DENOTE_CYCLE"),
+            ("denote type A = B; denote type B = C; denote type C = B; fnc main():int{return 42;}", "E_DENOTE_CYCLE"),
+            ("denote type Count = int; fnc main():int{val Count a=true;return a;}", "Local initializer has wrong type"),
+            ("denote type Count = Count; fnc main():int{return 42;}", "E_DENOTE_CYCLE"),
+            ("denote type Count = Missing; fnc main():int{return 42;}", "E_DENOTE_UNKNOWN"),
+            ("denote type Count = 5 | 6 | 7; fnc main():int{return 42;}", "E_DENOTE_RHS_UNSUPPORTED"),
+            ("denote type Count = int; denote type Count = bool; fnc main():int{return 42;}", "E_DENOTE_NAME"),
+            ("denote pub type Count = int; fnc main():int{return 42;}", "E_DENOTE_VISIBILITY_UNSUPPORTED"),
+            ("denote type Count = int; fnc main():int{struct Count{int a;}return 42;}", "Duplicate local value type"),
+            ("denote type Count = int; fnc main():Count?{return 42;}", "E_DENOTE_RHS_UNSUPPORTED")
+        }) RejectWithDiagnostic(source, diagnostic, "denotation rejection");
         NegatedDoIfAotControlFlow();
         Check("""
             fnc main(): int {
@@ -547,8 +571,7 @@ internal static class StructuredCfgLoweringTests
             }
             """;
         Check(sum, 45, "two loop-carried SSA values sum 0..9");
-        // A type-first scalar is compile-time const. Runtime helper values
-        // remain legal as non-rebindable val, not as constant-folded calls.
+        // Type-first and explicit const can capture runtime scalar values.
         foreach (var (source, label) in new[] {
             ("fnc main():int{int x=7;return x;}", "type-first scalar literal"),
             ("fnc main():int{const x=7;return x;}", "inferred const literal"),
@@ -569,8 +592,23 @@ internal static class StructuredCfgLoweringTests
             "fnc inc(int p):int{return p+1;}fnc main():int{const int x=inc(6);return x;}",
             "fnc inc(int p):int{return p+1;}fnc main():int{const x:int=inc(6);return x;}"
         })
-            RejectWithDiagnostic(source, "E_NON_CONST_INITIALIZER",
-                "runtime helper cannot initialize implicit/explicit const");
+            Check(source, 7, "runtime helper initializes implicit/explicit const");
+        Check("fnc inc(int p):int{return p+1;}fnc main():int{const x as int=inc(41);return x;}",
+            42, "name-first runtime const through typed CFG/CIL");
+        Check("fnc main():int{let int x=40;const int y=x;x=0;return y+2;}",
+            42, "runtime const snapshots before later assignment");
+        Check("fnc main():int{const mut x as int=42;return x;}", 42,
+            "const mut normalizes to fixed val in CIL");
+        Check("fnc main():int{let int z=10;let z:int=z+10;let z as int=z+22;return z;}",
+            42, "root let shadow initializer resolves the previous lexical binding");
+        Check("fnc main():int{let bool z=false;let int z=42;return z;}",
+            42, "scalar let shadow may change type");
+        Check("fnc main():int{let int z=20;const int saved=z;let int z=22;return saved+z;}",
+            42, "old scalar snapshot survives fresh lexical storage");
+        Reject("fnc main():int{const int z=1;let int z=42;return z;}",
+            "fixed binding collision remains rejected");
+        Reject("fnc main():int{let int z=1;const int z=42;return z;}",
+            "mixed fixed binding collision remains rejected");
         RejectWithDiagnostic("fnc main():int{int x=7;x=8;return x;}",
             "E_IMMUTABLE_REBIND", "type-first constant cannot rebind");
         RejectWithDiagnostic("fnc main():int{const int x=7;x=8;return x;}",
@@ -842,8 +880,8 @@ internal static class StructuredCfgLoweringTests
             42, "type-first int with checked identity cast");
         Check("fnc plus(int n):int{return n+1;}fnc main():int{val int x=plus(41);return x;}",
             42, "val runtime helper result (type-first int is const)");
-        RejectWithDiagnostic("fnc plus(int n):int{return n+1;}fnc main():int{int x=plus(41);return x;}",
-            "E_NON_CONST_INITIALIZER", "type-first int cannot hold a runtime helper result");
+        Check("fnc plus(int n):int{return n+1;}fnc main():int{int x=plus(41);return x;}",
+            42, "type-first int eagerly evaluates runtime helper");
         Reject("fnc main():int{int x=7;x=8;return x;}",
             "type-first int binding is immutable by default");
         Reject("fnc main():int{int x=true;return 0;}",
@@ -1205,10 +1243,10 @@ internal static class StructuredCfgLoweringTests
             42, "val snapshots current mutable binding value");
         Check("fnc main():int{val int x=40;val int y=x;return y+2;}",
             42, "val accepts runtime single-assignment source value");
-        Reject("fnc main():int{let int x=40;const int y=x;return y+2;}",
-            "const must not snapshot runtime mutable local");
-        Reject("fnc main():int{val int x=40;int y=x;return y+2;}",
-            "implicit const must not copy runtime val as constexpr");
+        Check("fnc main():int{let int x=40;const int y=x;return y+2;}",
+            42, "const snapshots runtime mutable scalar local");
+        Check("fnc main():int{val int x=40;int y=x;return y+2;}",
+            42, "implicit const snapshots runtime val");
         Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
             "const overflow is rejected before CIL");
 

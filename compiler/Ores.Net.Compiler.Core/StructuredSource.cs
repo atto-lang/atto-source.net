@@ -1295,9 +1295,12 @@ public static partial class OresStructuredParser
         bool strictConditionals = false)
     {
         private sealed record LocalBinding(IrValueType Type, StructuredBindingKind Kind,
-            long? ConstantValue);
+            long? ConstantValue, string? StorageName = null);
         private readonly List<Dictionary<string, LocalBinding>> scopes = new();
         private readonly List<HashSet<string>> localTypeScopes = new();
+        // File-prefix scalar denotations use exactly the existing checked CIL
+        // type identities; no runtime type object or source-token rewrite.
+        private readonly Dictionary<string, IrValueType> scalarDenotations = new(StringComparer.Ordinal);
         // Constant scalar aggregates are compile-time values only; no hidden
         // managed object, dynamic descriptor or NativeAOT aggregate ABI.
         private sealed record StaticAggregate(ClosedAggregateShape Shape,
@@ -1661,8 +1664,74 @@ public static partial class OresStructuredParser
                 Array.AsReadOnly(functionOrder.ToArray()));
         }
 
+        private void ReadScalarDenotations(bool entry)
+        {
+            var targets = new Dictionary<string, string>(StringComparer.Ordinal);
+            while (Take("denote"))
+            {
+                if (!entry || linking is not null || frozenProvider || declaredModule is not null || namespaceHeader)
+                    throw Error("E_DENOTE_SCOPE_UNSUPPORTED: denotation requires standalone root source");
+                if (Current.Text is "pub" or "private")
+                    throw Error("E_DENOTE_VISIBILITY_UNSUPPORTED: explicit visibility requires linked type metadata");
+                Expect("type");
+                string name = Name();
+                if (name[0] is < 'A' or > 'Z' ||
+                    name.Any(c => !(c is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_')) ||
+                    CoreTypeRegistry.Lookup(name) is not null ||
+                    CoreTypeRegistry.IsProtectedIdentity(name) ||
+                    name is "Object" or "Actor" or "ActorRef" or "ActorMail" or "Error"
+                        or "String" or "Boolean" or "Float" or "Integer" or "Record" or "Tuple"
+                        or "Array" or "List" or "Vector" or "Slice" or "Map" or "Set" or "Pair"
+                        or "Entry" or "Pointer" or "Channel" or "Future" or "Task" or "Duration"
+                        or "UUID" or "Any" or "Never" or "Sendable" or "Serializable" or "Copyable"
+                        or "DeepCopyable" or "Newable" or "Atomic" or "Mutex" or "RwLock" ||
+                    targets.ContainsKey(name))
+                    throw Error("E_DENOTE_NAME: fresh non-core uppercase type name required");
+                if (targets.Count >= 512)
+                    throw Error("E_DENOTE_LIMIT: file denotation budget exceeded");
+                Expect("=");
+                string target = Current.Text;
+                if (target is not ("int" or "bool") &&
+                    (target.Length == 0 || target[0] is < 'A' or > 'Z' ||
+                     target.Any(c => !(c is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))))
+                    throw Error("E_DENOTE_RHS_UNSUPPORTED: expected int, bool or scalar denotation name");
+                index++;
+                Expect(";");
+                targets.Add(name, target);
+            }
+
+            // Validate all aliases, including unused declarations, before
+            // any type enters the checked scalar CIL lowering path.
+            foreach (string name in targets.Keys)
+            {
+                if (scalarDenotations.ContainsKey(name)) continue;
+                string current = name;
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                var path = new List<string>();
+                IrValueType resolved;
+                while (true)
+                {
+                    if (current is "int" or "bool")
+                    {
+                        CoreTypeRegistry.RequireExecutableStructuredNet(current, 0);
+                        resolved = current == "int" ? IrValueType.I64 : IrValueType.Bool;
+                        break;
+                    }
+                    if (scalarDenotations.TryGetValue(current, out resolved)) break;
+                    if (!seen.Add(current))
+                        throw Error("E_DENOTE_CYCLE: cyclic type denotation " + current);
+                    if (!targets.TryGetValue(current, out string? next) || next is null)
+                        throw Error("E_DENOTE_UNKNOWN: unresolved denotation target " + current);
+                    path.Add(current);
+                    current = next;
+                }
+                foreach (string alias in path) scalarDenotations.Add(alias, resolved);
+            }
+        }
+
         private StructuredProgram ReadDeclarations(bool entry)
         {
+            ReadScalarDenotations(entry);
             // Acyclic helper declarations must precede main. The declaration
             // registry only contains *fully typechecked* earlier functions:
             // recursion, mutual recursion and forward references fail closed.
@@ -1714,7 +1783,7 @@ public static partial class OresStructuredParser
                         scalarGenericParameters.Count >= 16 || functions.Count >= MaxHelpers)
                         throw Error("E_GENERIC_UNSUPPORTED: private root identity profile required");
                     string generic = Name();
-                    if (generic == name || generic == "_" || generic == "void")
+                    if (scalarDenotations.ContainsKey(generic) || generic == name || generic == "_" || generic == "void")
                         throw Error("E_GENERIC_BINDER: invalid type binder");
                     Expect(">");
                     Expect("(");
@@ -2106,7 +2175,7 @@ public static partial class OresStructuredParser
                     throw Error("E_TYPE_NAME: reserved aggregate alias");
                 Expect(">");
                 expected = FindNamedAggregateType(alias);
-                if (introduce && (expected is not null ||
+                if (introduce && (expected is not null || scalarDenotations.ContainsKey(alias) ||
                     localTypeScopes.Any(scope => scope.Contains(alias))))
                     throw Error("E_DUPLICATE_TYPE: inferred aggregate alias already declared");
                 if (!introduce && expected is not null && expected.Wrapper != wrapper)
@@ -2456,7 +2525,7 @@ public static partial class OresStructuredParser
                 index++;
                 int nameAt = Current.Offset;
                 string name = Name();
-                if (localTypeScopes.Any(scope => scope.Contains(name)))
+                if (scalarDenotations.ContainsKey(name) || localTypeScopes.Any(scope => scope.Contains(name)))
                     throw new FormatException(
                         $"Duplicate local value type '{name}' at offset {nameAt}");
                 Expect("{");
@@ -2857,9 +2926,8 @@ public static partial class OresStructuredParser
             }
             if ((Current.Text is "let" or "val" or "const") || StartsScalarTypeFirst())
             {
-                // In the v1 scalar subset, a type-first local is exactly const:
-                // both spellings need a statically evaluable initializer.
-                // val is the fixed runtime binding; let is rebindable.
+                // Type-first scalar locals are exactly const. All ordinary
+                // scalar const forms permit eager, once-only runtime initialization.
                 bool typeFirstImmutable = StartsScalarTypeFirst();
                 StructuredBindingKind kind = typeFirstImmutable
                     ? StructuredBindingKind.Const
@@ -2869,10 +2937,13 @@ public static partial class OresStructuredParser
                         "val" => StructuredBindingKind.Val,
                         _ => StructuredBindingKind.Const
                     };
+                // Local const mut and val share one fixed-binding representation.
                 if (!typeFirstImmutable && kind == StructuredBindingKind.Const &&
                     index + 1 < tokens.Count && tokens[index + 1].Text == "mut")
-                    throw new FormatException(
-                        $"E_CONST_MUT_UNSUPPORTED: mutable constant instances require owned object lowering at offset {at}");
+                {
+                    kind = StructuredBindingKind.Val;
+                    index++; // ordinary explicit-qualifier branch consumes mut
+                }
 
                 bool annotated;
                 IrValueType type = IrValueType.I64;
@@ -2901,14 +2972,22 @@ public static partial class OresStructuredParser
                     {
                         nameAt = Current.Offset;
                         name = Name();
-                        if (Take(":"))
+                        if (Take(":") || Take("as"))
                         {
                             type = Type();
                             annotated = true;
                         }
                     }
                 }
-                if (scopes.Any(scope => scope.ContainsKey(name)) ||
+                // Root scalar let-over-let only. Preserve parameter, capability,
+                // aggregate, task and nested-scope admission restrictions.
+                bool shadow = scopes[^1].TryGetValue(name, out var previous) &&
+                    previous.Kind == StructuredBindingKind.Let &&
+                    kind == StructuredBindingKind.Let && depth == 1 &&
+                    !commaBindingTerminator && inlineValueBindingFloor is null &&
+                    previous.Type is (IrValueType.I64 or IrValueType.Bool) &&
+                    !tokens.Any(token => token.Text is "task" or "sync" or "await");
+                if ((!shadow && scopes.Any(scope => scope.ContainsKey(name))) ||
                     aggregateScopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
                 Expect("=");
@@ -2927,15 +3006,9 @@ public static partial class OresStructuredParser
                 if (kind == StructuredBindingKind.Const && type is not (IrValueType.I64 or IrValueType.Bool))
                     throw new FormatException(
                         $"E_OPTION_CONST_UNSUPPORTED: non-scalar const folding needs a typed proof at offset {at}");
-                // Typed scalar const (type-first `int x=e`, `const int x=e`,
-                // `const x:int=e`) must be compile-time evaluable (spec #49,
-                // java #3066). Untyped `const x=e` keeps java's stage-one
-                // meaning: folded when constant, otherwise a fixed readonly
-                // runtime binding.
-                if (kind == StructuredBindingKind.Const && annotated &&
-                    !IsCompileTimeScalar(initializer))
-                    throw new FormatException(
-                        $"E_NON_CONST_INITIALIZER: typed const scalar initializer must be compile-time evaluable at offset {initializer.Offset}");
+                // Local const v2: fixed runtime binding regardless of type
+                // annotation position. Proven scalar literals may still fold;
+                // checked calls and runtime reads remain ordinary initializers.
                 if (kind == StructuredBindingKind.Const && IsCompileTimeScalar(initializer))
                 {
                     try { constantValue = ConstantValue(initializer); }
@@ -2954,8 +3027,15 @@ public static partial class OresStructuredParser
                 }
                 if (!commaBindingTerminator || Current.Text != ",") Expect(";");
                 // Bind only after checking initializer (no self-reference).
-                scopes[^1].Add(name, new LocalBinding(type, kind, constantValue));
-                return (new StructuredLet(at, name, type, initializer, kind), false);
+                if (shadow && type is not (IrValueType.I64 or IrValueType.Bool))
+                    throw new FormatException($"Unsupported scalar let shadow at offset {nameAt}");
+                // Source cannot spell '$'; offsets uniquely identify declarations
+                // within this source. Preserve the old SSA name for earlier reads.
+                string storage = shadow ? "$let_shadow_" + nameAt.ToString(CultureInfo.InvariantCulture) : name;
+                var local = new LocalBinding(type, kind, constantValue, storage);
+                if (shadow) scopes[^1][name] = local;
+                else scopes[^1].Add(name, local);
+                return (new StructuredLet(at, storage, type, initializer, kind), false);
             }
             bool explicitDo = Take("do");
             if (Current.Text is "if" or "ifnot" or "unless")
@@ -3192,19 +3272,26 @@ public static partial class OresStructuredParser
             Require(assigned, binding.Type, "Assignment has wrong type");
             if (compound is { } op)
                 assigned = CheckedBinary(variableAt, op,
-                    new StructuredRead(variableAt, variable, IrValueType.I64), assigned, IrValueType.I64);
+                    new StructuredRead(variableAt, binding.StorageName ?? variable, IrValueType.I64), assigned, IrValueType.I64);
             if (wrapped) Expect(")");
-            return new StructuredSet(at, variable, assigned);
+            return new StructuredSet(at, binding.StorageName ?? variable, assigned);
         }
         // The compatibility spelling remains a contextual type name. A value
         // named boolean followed by = or : retains its existing interpretation.
         private bool StartsScalarTypeFirst() => Current.Text is "int" or "bool" ||
-            (Current.Text == "boolean" && index + 1 < tokens.Count &&
+            ((Current.Text == "boolean" || scalarDenotations.ContainsKey(Current.Text)) && index + 1 < tokens.Count &&
              tokens[index + 1].Text is { Length: > 0 } next &&
              PortableUnicodeIdentifier.StartWidth(next, 0) != 0);
 
         private IrValueType Type()
         {
+            if (scalarDenotations.TryGetValue(Current.Text, out var denoted))
+            {
+                index++;
+                if (Current.Text is "?" or "<" or "|" or "[")
+                    throw Error("E_DENOTE_RHS_UNSUPPORTED: compound denotation use requires full type lowering");
+                return denoted;
+            }
             if (Current.Text == "Error" && linking is null)
             {
                 CoreTypeRegistry.Require("Error", 0);
@@ -4259,7 +4346,7 @@ public static partial class OresStructuredParser
                     ? new StructuredBool(offset, constant != 0)
                     : new StructuredInt(offset, constant);
             }
-            return new StructuredRead(offset, name, binding.Type);
+            return new StructuredRead(offset, binding.StorageName ?? name, binding.Type);
         }
         private static void Require(StructuredExpr expression,
             IrValueType expected, string reason)
