@@ -643,8 +643,15 @@ public static partial class OresStructuredParser
                 tokens[i + 2].Text == "of" &&
                 tokens[i].Text is "Tuple" or "Map" or "List" or
                     "Vector" or "Set" or "Entry" or "Pair" or "Record")
-                throw new FormatException(
+            {
+                bool localPair = tokens[i].Text == "Pair" && linking is null &&
+                    frozenNamespace is null && i >= 3 && i + 3 < tokens.Count &&
+                    tokens[i - 3].Text == "const" &&
+                    PortableUnicodeIdentifier.IsName(tokens[i - 2].Text) &&
+                    tokens[i - 1].Text == "=" && tokens[i + 3].Text == "(";
+                if (!localPair) throw new FormatException(
                     $"E_COLLECTION_FACTORY_UNSUPPORTED: {tokens[i].Text}.of requires typed product/collection CFG and NativeAOT CIL lowering at offset {tokens[i].Offset}");
+            }
             if (tokens[i].Text == "~" && i + 1 < tokens.Count &&
                 tokens[i + 1].Text is "tuple" or "map" or "array" or "list" or
                     "vector" or "set" or "entry" or "pair" or "record" or
@@ -1274,7 +1281,7 @@ public static partial class OresStructuredParser
         // Constant scalar aggregates are compile-time values only; no hidden
         // managed object, dynamic descriptor or NativeAOT aggregate ABI.
         private sealed record StaticAggregate(ClosedAggregateShape Shape,
-            IReadOnlyDictionary<string, StructuredExpr> Values, string? Wrapper = null);
+            IReadOnlyDictionary<string, StructuredExpr> Values, string? Wrapper = null, string? PairKey = null);
         private sealed record NamedAggregateType(string Wrapper, ClosedAggregateShape Shape);
         private readonly List<Dictionary<string, NamedAggregateType>> namedAggregateScopes = new();
 
@@ -2015,7 +2022,10 @@ public static partial class OresStructuredParser
                 if (tokens[index + 2].Text != "=") return false;
                 if (tokens[index + 3].Text == "{") return true;
                 if (index + 5 < tokens.Count && tokens[index + 4].Text == "with" && tokens[index + 5].Text == "{") return true;
-                // Do not reinterpret an ordinary grouped scalar expression.
+                // The zero-slot () literal has a Tuple default in untyped
+                // local bindings. Do not reinterpret grouped scalar expressions.
+                if (tokens[index + 3].Text == "(" && index + 4 < tokens.Count &&
+                    tokens[index + 4].Text == ")") return true;
                 return tokens[index + 3].Text == "(" && index + 5 < tokens.Count &&
                     tokens[index + 5].Text is (":" or "=" or ":=");
             }
@@ -2082,6 +2092,9 @@ public static partial class OresStructuredParser
                 aggregateScopes.Any(scope => scope.ContainsKey(rowName)))
                 throw Error("Duplicate aggregate binding");
             Expect("=");
+            if (!explicitWrapper && Current.Text == "(" &&
+                index + 1 < tokens.Count && tokens[index + 1].Text == ")")
+                wrapper = "Tuple";
             if (Take("infer"))
             {
                 if (wrapper != "Record" || alias is null || introduce)
@@ -2107,7 +2120,7 @@ public static partial class OresStructuredParser
                 Expect("with");
                 withBase = FindAggregate(originName);
                 if (withBase is null || withBase.Shape.Kind != ClosedAggregateKind.ReadonlyRecord ||
-                    withBase.Wrapper == "Tuple" || scopes.Any(scope => scope.ContainsKey(originName)) ||
+                    withBase.Wrapper is ("Tuple" or "Pair") || scopes.Any(scope => scope.ContainsKey(originName)) ||
                     withBase.Values.Values.Any(v => v is not StructuredInt and not StructuredBool))
                     throw Error("WITH_BACKEND_UNSUPPORTED: E_RECORD_WITH: requires earlier immutable scalar Record");
                 if (Current.Text != "{") throw Error("E_RECORD_WITH: expected braces");
@@ -2127,7 +2140,11 @@ public static partial class OresStructuredParser
                 foreach (var entry in withBase.Values) values.Add(entry.Key, entry.Value);
             }
             int entries = 0;
-            do
+            if (Current.Text == close &&
+                (wrapper == "struct" || withBase is not null ||
+                    (wrapper == "Record" && open == "{" && !explicitWrapper)))
+                throw Error("E_LITERAL_KIND: empty braces require explicit Record in this profile");
+            if (Current.Text != close) do
             {
                 if (++entries > 64) throw Error("AGGREGATE_FIELD_BUDGET");
                 if (wrapper == "Record" && open == "{" && Take("."))
@@ -2136,7 +2153,7 @@ public static partial class OresStructuredParser
                     string originName = NamedAggregateIdentifier();
                     var origin = FindAggregate(originName);
                     if (origin is null || scopes.Any(scope => scope.ContainsKey(originName)) || origin.Shape.Kind != ClosedAggregateKind.ReadonlyRecord ||
-                        origin.Wrapper == "Tuple" || origin.Values.Values.Any(v => v is not StructuredInt and not StructuredBool))
+                        origin.Wrapper is ("Tuple" or "Pair") || origin.Values.Values.Any(v => v is not StructuredInt and not StructuredBool))
                         throw Error("E_RECORD_SPREAD: requires an earlier constant Record");
                     foreach (var entry in origin.Values)
                     {
@@ -2177,7 +2194,8 @@ public static partial class OresStructuredParser
                 values[field] = expr.Type == IrValueType.Bool
                     ? new StructuredBool(offset, value != 0) : new StructuredInt(offset, value);
                 if (values.Count > 64) throw Error("AGGREGATE_FIELD_BUDGET");
-                if (!Take(","))
+                bool comma = Take(",");
+                if (!comma)
                 {
                     if (pairEntry && open == "{" && Current.NewlineBefore &&
                         PortableUnicodeIdentifier.IsName(Current.Text)) continue;
@@ -2187,7 +2205,7 @@ public static partial class OresStructuredParser
             } while (true);
             Expect(close);
             Expect(";");
-            if (wrapper == "Record" && open == "(" && !ordinaryField)
+            if (wrapper == "Record" && open == "(" && entries != 0 && !ordinaryField)
                 throw Error("E_LITERAL_KIND: Pair-only parentheses are not Record");
             if (overlap.Count > 0) throw Error("E_RECORD_SPREAD: unresolved overlapping spreads");
             var shape = plan.InferShape();
@@ -2206,10 +2224,105 @@ public static partial class OresStructuredParser
                 new StructuredInt(at, 0), StructuredBindingKind.Const), false);
         }
 
+        // Nonescaping compile-time integer Pair. Keep nominal kind and key
+        // metadata; only explicit int projections reach checked scalar CIL.
+        private bool StartsLocalPair()
+        {
+            if (Current.Text != "const" || index + 3 >= tokens.Count) return false;
+            if (tokens[index + 1].Text == "Pair" && tokens[index + 2].Text == "<") return true;
+            if (tokens[index + 2].Text == ":=") return true;
+            return tokens[index + 2].Text == "=" && index + 4 < tokens.Count &&
+                (tokens[index + 4].Text == ":=" ||
+                 (tokens[index + 3].Text == "Pair" && tokens[index + 4].Text == "."));
+        }
+
+        private string PairLiteralKey()
+        {
+            string text = Current.Text;
+            if (text.Length >= 2 && (text[0] is '"' or '\'') && text[^1] == text[0])
+            {
+                string key = text[1..^1];
+                if (key.Any(c => c < ' ' || c > '~' || c == '\\' || c == (char)36))
+                    throw Error("E_PAIR_KEY_UNSUPPORTED: plain static string required");
+                index++;
+                return key;
+            }
+            return NamedAggregateIdentifier();
+        }
+
+        private (StructuredStmt Statement, bool Returns) LocalPair(int depth, int at)
+        {
+            if (linking is not null || frozenProvider)
+                throw Error("E_PAIR_SCOPE_UNSUPPORTED: standalone scalar Pair only");
+            Expect("const");
+            bool typed = Take("Pair");
+            if (typed) { Expect("<"); Expect("int"); Expect(">"); }
+            string name = NamedAggregateIdentifier();
+            if (scopes.Any(scope => scope.ContainsKey(name)) ||
+                aggregateScopes.Any(scope => scope.ContainsKey(name)) ||
+                localTypeScopes.Any(scope => scope.Contains(name)))
+                throw Error("E_DUPLICATE: duplicate Pair binding");
+            string key;
+            StructuredExpr payload;
+            if (typed)
+            {
+                Expect("=");
+                string origin = NamedAggregateIdentifier();
+                var pair = FindAggregate(origin);
+                if (pair is null || pair.Wrapper != "Pair" || pair.PairKey is null ||
+                    !pair.Values.TryGetValue("value", out var prior) || prior is not StructuredInt)
+                    throw Error("E_PAIR_TYPE: expected initialized Pair<int>");
+                key = pair.PairKey;
+                payload = prior;
+            }
+            else if (Take(":="))
+            {
+                key = name;
+                payload = Expr(depth + 1);
+            }
+            else
+            {
+                Expect("=");
+                if (Take("Pair"))
+                {
+                    Expect("."); Expect("of"); Expect("(");
+                    if (Current.Text.Length < 2 || Current.Text[0] is not ('"' or '\''))
+                        throw Error("E_PAIR_KEY_TYPE: factory requires a string literal");
+                    key = PairLiteralKey();
+                    Expect(","); payload = Expr(depth + 1); Expect(")");
+                }
+                else
+                {
+                    key = PairLiteralKey();
+                    Expect(":="); payload = Expr(depth + 1);
+                }
+            }
+            Expect(";");
+            Require(payload, IrValueType.I64, "E_PAIR_TYPE: bounded Pair requires int payload");
+            if (!IsCompileTimeScalar(payload))
+                throw Error("E_PAIR_CONSTEXPR: const Pair requires proven compile-time value");
+            long value;
+            try { value = ConstantValue(payload); }
+            catch (OverflowException) { throw Error("E_CONST_OVERFLOW: Pair payload overflow"); }
+            catch (DivideByZeroException) { throw Error("E_PAIR_CONSTEXPR: division by zero"); }
+            var plan = new ClosedAggregateSpreadPlan(ClosedAggregateKind.ReadonlyRecord);
+            plan.AddNamed("value", "int");
+            var values = new Dictionary<string, StructuredExpr>(StringComparer.Ordinal)
+            {
+                ["value"] = new StructuredInt(at, value)
+            };
+            aggregateScopes[^1].Add(name, new StaticAggregate(plan.InferShape(),
+                new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredExpr>(values),
+                "Pair", key));
+            return (new StructuredLet(at, "$aggregate_" + aggregateSentinels++, IrValueType.I64,
+                new StructuredInt(at, 0), StructuredBindingKind.Const), false);
+        }
+
         private (StructuredStmt Statement, bool Returns) Statement(int depth, bool outerElse = false, bool keywordArm = false)
         {
             Budget(depth);
             int at = Current.Offset;
+            if (StartsLocalPair()) return LocalPair(depth, at);
             if (StartsNamedAggregate()) return NamedAggregate(depth, at);
             if (Current.Text is "class" or "actor" ||
                 (Current.Text == "define" && index + 1 < tokens.Count &&
@@ -2291,7 +2404,7 @@ public static partial class OresStructuredParser
                         if (source is null)
                             throw new FormatException(
                                 $"Aggregate spread requires an immutable earlier row at offset {sourceAt}");
-                        if (source.Wrapper == "Tuple") throw Error("Tuple cannot spread into a named row");
+                        if (source.Wrapper is "Tuple" or "Pair") throw Error("Product cannot spread into a named row");
                         plan.AddCheckedSpread(source.Shape);
                         // Iterate canonical checked source shape, never a dynamic dictionary.
                         foreach (var field in source.Shape.Fields)
@@ -2373,8 +2486,8 @@ public static partial class OresStructuredParser
                         if (origin is null)
                             throw new FormatException(
                                 $"Aggregate spread requires a previous immutable closed local at offset {offset}");
-                        if (origin.Wrapper == "Tuple")
-                            throw Error("Tuple cannot spread into a named row");
+                        if (origin.Wrapper is "Tuple" or "Pair")
+                            throw Error("Product cannot spread into a named row");
                         // A const value requires every spread field to be a
                         // compile-time scalar. A runtime val row may only be
                         // spread into another runtime val aggregate.

@@ -317,6 +317,66 @@ internal static class StructuredCfgLoweringTests
             42, "unselected explicit arm does not overflow");
     }
 
+    public static void RunEmptyLocalProducts()
+    {
+        foreach (string body in new[] {
+            "const t=();return 42;",
+            "const Tuple t=(42,);return t[0];",
+            "const Tuple t=(42);return t[0];",
+            "const Tuple<infer T> t=(1);const Tuple<T> u=(42,);return u[0];",
+            "const Tuple t=();const Record r=();const Record s={};return 42;",
+            "const Record<infer R> r=();const Record<R> s={};return 42;",
+            "const Tuple<infer T> t=();const Tuple<T> u=();return 42;",
+            "const Record r=();const s={...r,a:42};return s.a;",
+            "const Record r=();const s=r with {a:42};return s.a;"
+        }) Check("fnc main():int{" + body + "}",42,"empty product: " + body, executeClr: true);
+        foreach (string body in new[] {
+            "const Record<infer R> r=();const Tuple<R> t=();return 0;",
+            "const Tuple<infer T> t=();const Record<T> r=();return 0;",
+            "const Record<infer R> r={a:1};const Record<R> s=();return 0;",
+            "const Record<infer R> r=();const Record<R> s={a:1};return 0;",
+            "const Tuple<infer T> t=(1,2);const Tuple<T> u=();return 0;",
+            "const Tuple<infer T> t=(1,2);const Tuple<T> u=(42);return 0;",
+            "const t=();const r={...t,a:42};return r.a;",
+            "const t=();return t[0];",
+            "const Record r=();return r.a;",
+            "const Record r=();return r[0];",
+            "const t=();return t.a;",
+            "const r={};return 0;",
+            "const struct s={};return 0;",
+            "const t=();const Record r=t;return 0;"
+        }) Reject("fnc main():int{" + body + "}", "empty product boundary: " + body);
+        Console.WriteLine("EMPTY_LOCAL_PRODUCT_CORECLR_PASS positives=9 negatives=14");
+    }
+
+    public static void RunStoredPair()
+    {
+        foreach (string body in new[] {
+            "const x:=42;const Pair<int> p=x;return p.value;",
+            "const x=x:=42;const Pair<int> p=x;return p.value;",
+            "const x=Pair.of(\"x\",42);const Pair<int> p=x;return p.value;",
+            "const x=\"x\" :=42;return x.value;",
+            "const int y=7;const x=y:=42;return x.value+y-7;",
+            "const x:=40;const y:=x.value+2;return y.value;"
+        }) Check("fnc main():int{" + body + "}",42,"stored Pair: " + body, executeClr: true);
+        foreach (string body in new[] {
+            "const x:=1;const x:=2;return 0;",
+            "const x:=x;return 0;",
+            "const x=x:=x;return 0;",
+            "const x:=true;return 0;",
+            "val int y=42;const x:=y;return 0;",
+            "const int x=42;const Pair<int> p=x;return 0;",
+            "const x={value:42};const Pair<int> p=x;return 0;",
+            "const x:=42;return x;",
+            "const x:=42;x.value=7;return x.value;",
+            "const x:=42;const r={...x};return 0;",
+            "const x:=42;const r=x with {a:1};return 0;",
+            "const x=Pair.of(7,42);return 0;",
+            "const x:=42;const x=Pair.of(\"x\",42);return 0;"
+        }) Reject("fnc main():int{" + body + "}", "stored Pair boundary: " + body);
+        Console.WriteLine("STORED_PAIR_CORECLR_PASS positives=6 negatives=13");
+    }
+
     public static void Run()
     {
         NegatedDoIfAotControlFlow();
@@ -681,6 +741,8 @@ internal static class StructuredCfgLoweringTests
             "const r={foo:1};return r with {foo:2};"
         }) Reject("fnc main():int{" + body + "}", "Record with/newline boundary: " + body);
         Console.WriteLine("RECORD_WITH_NEWLINE_CORECLR_PASS positives=8 negatives=13");
+        RunStoredPair();
+        RunEmptyLocalProducts();
         // Runtime-valued immutable rows snapshot scalars into private verified
         // SSA places: later mutation of the original local cannot change them.
         Check("fnc main():int{let int source=20;val row=infer struct{x:source,y:28};source=99;return row.x+row.y;}",
