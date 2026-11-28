@@ -3,6 +3,23 @@ using System.Text;
 using System.Globalization;
 using Ores.Net.Runtime;
 
+if (args.Length > 0 && args[0] == "emit-readonly-reference-csharp")
+{
+    try
+    {
+        if (args.Length != 4 || args[2] != "--out" || Path.GetExtension(args[1]) != ".atto" || Path.GetExtension(args[3]) != ".cs")
+            throw new ArgumentException("usage: oresnet emit-readonly-reference-csharp guest.atto --out Guest.cs");
+        string code = ReadonlyReferenceV1.Emit(ReadBoundedSource(args[1], rejectBom: true));
+        WriteAtomicSource(args[3], code);
+        return 0;
+    }
+    catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException or ArgumentException)
+    {
+        Console.Error.WriteLine("oresnet: " + ex.Message);
+        return 1;
+    }
+}
+
 if(args.Length>0 && args[0] is "check-frozen" or "compile-frozen")
 {
     try { return FrozenPackageCommand.Run(args); }
