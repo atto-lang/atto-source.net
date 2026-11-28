@@ -3,6 +3,12 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+if (args.Length == 1 && args[0] == "--empty-local-products")
+{
+    StructuredCfgLoweringTests.RunEmptyLocalProducts();
+    return;
+}
+
 if (args.Length == 1 && args[0] == "--stored-pair")
 {
     StructuredCfgLoweringTests.RunStoredPair();
