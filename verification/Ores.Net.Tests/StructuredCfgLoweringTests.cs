@@ -317,6 +317,33 @@ internal static class StructuredCfgLoweringTests
             42, "unselected explicit arm does not overflow");
     }
 
+    public static void RunEmptyLocalProducts()
+    {
+        foreach (string body in new[] {
+            "const t=();return 42;",
+            "const Tuple t=();const Record r=();const Record s={};return 42;",
+            "const Record<infer R> r=();const Record<R> s={};return 42;",
+            "const Tuple<infer T> t=();const Tuple<T> u=();return 42;",
+            "const Record r=();const s={...r,a:42};return s.a;",
+            "const Record r=();const s=r with {a:42};return s.a;"
+        }) Check("fnc main():int{" + body + "}",42,"empty product: " + body, executeClr: true);
+        foreach (string body in new[] {
+            "const Record<infer R> r=();const Tuple<R> t=();return 0;",
+            "const Tuple<infer T> t=();const Record<T> r=();return 0;",
+            "const Record<infer R> r={a:1};const Record<R> s=();return 0;",
+            "const Record<infer R> r=();const Record<R> s={a:1};return 0;",
+            "const Tuple<infer T> t=(1,2);const Tuple<T> u=();return 0;",
+            "const t=();const r={...t,a:42};return r.a;",
+            "const t=();return t[0];",
+            "const Record r=();return r.a;",
+            "const Record r=();return r[0];",
+            "const t=();return t.a;",
+            "const r={};return 0;",
+            "const struct s={};return 0;",
+            "const t=();const Record r=t;return 0;"
+        }) Reject("fnc main():int{" + body + "}", "empty product boundary: " + body);
+    }
+
     public static void RunStoredPair()
     {
         foreach (string body in new[] {
@@ -710,6 +737,7 @@ internal static class StructuredCfgLoweringTests
         }) Reject("fnc main():int{" + body + "}", "Record with/newline boundary: " + body);
         Console.WriteLine("RECORD_WITH_NEWLINE_CORECLR_PASS positives=8 negatives=13");
         RunStoredPair();
+        RunEmptyLocalProducts();
         // Runtime-valued immutable rows snapshot scalars into private verified
         // SSA places: later mutation of the original local cannot change them.
         Check("fnc main():int{let int source=20;val row=infer struct{x:source,y:28};source=99;return row.x+row.y;}",
