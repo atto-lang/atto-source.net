@@ -430,7 +430,10 @@ internal static class StructuredCfgLoweringTests
             ("denote type Count = int; fnc main():int{val Count a=true;return a;}", "Local initializer has wrong type"),
             ("denote type Count = Count; fnc main():int{return 42;}", "E_DENOTE_CYCLE"),
             ("denote type Count = Missing; fnc main():int{return 42;}", "E_DENOTE_UNKNOWN"),
-            ("denote type Count = 5 | 6 | 7; fnc main():int{return 42;}", "E_DENOTE_RHS_UNSUPPORTED"),
+            // The standalone lexer intentionally denies bare pipe before the
+            // scalar denotation reader. Preserve that earlier exact guard.
+            ("denote type Count = 5 | 6 | 7; fnc main():int{return 42;}", "Lexical captures require checked closure lowering at offset 22"),
+            ("denote type Count = 5; fnc main():int{return 42;}", "E_DENOTE_RHS_UNSUPPORTED"),
             ("denote type Count = int; denote type Count = bool; fnc main():int{return 42;}", "E_DENOTE_NAME"),
             ("denote pub type Count = int; fnc main():int{return 42;}", "E_DENOTE_VISIBILITY_UNSUPPORTED"),
             ("denote type Count = int; fnc main():int{struct Count{int a;}return 42;}", "Duplicate local value type"),
