@@ -3,6 +3,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Ores.Net.Runtime.Net;
 
@@ -34,12 +35,10 @@ internal sealed class UdpLoopbackHost : IDisposable
     private readonly Socket _socket;
     private readonly Authorize _authorize;
     private readonly int _requestedPort;
-    private readonly object _gate = new();
-    private bool _closed;
-    // Monitor.TryEnter is reentrant on the SAME thread: a trusted policy
-    // callback must not recursively operate on its active UDP descriptor.
-    // This flag is protected by _gate and fences nested ingress explicitly.
-    private bool _inOperation;
+    // One logical operation owns the descriptor across suspension. This is
+    // not a monitor held across await, nor a queue of pending callers.
+    private const int Idle = 0, Active = 1, Retiring = 2, Closed = 3;
+    private int _lifecycle;
 
     private UdpLoopbackHost(Socket socket, int requestedPort, Authorize authorize)
     {
@@ -80,7 +79,6 @@ internal sealed class UdpLoopbackHost : IDisposable
             Enter();
             try
             {
-                RequireOpen();
                 _authorize(_requestedPort, Action.Local);
                 return ((IPEndPoint)_socket.LocalEndPoint!).Port;
             }
@@ -88,112 +86,99 @@ internal sealed class UdpLoopbackHost : IDisposable
         }
     }
 
-    private void RequireOpen()
-    {
-        if (_closed) throw new ObjectDisposedException(nameof(UdpLoopbackHost));
-    }
-
-    // Nonblocking operation: concurrent actor call attempts fail rather than
-    // park on a monitor held by a different thread.
+    // Never block a carrier waiting for another logical operation. The
+    // active lease survives thread migration until the socket await settles.
     private void Enter()
     {
-        if (!Monitor.TryEnter(_gate))
-            throw new InvalidOperationException("concurrent UDP operation");
-        if (_inOperation)
-        {
-            Monitor.Exit(_gate);
-            throw new InvalidOperationException("reentrant UDP operation");
-        }
-        _inOperation = true;
+        int previous = Interlocked.CompareExchange(ref _lifecycle, Active, Idle);
+        if (previous == Closed || previous == Retiring)
+            throw new ObjectDisposedException(nameof(UdpLoopbackHost));
+        if (previous != Idle)
+            throw new InvalidOperationException("concurrent or reentrant UDP operation");
     }
 
-    private void Exit()
-    {
-        _inOperation = false;
-        Monitor.Exit(_gate);
-    }
+    private void Exit() => Volatile.Write(ref _lifecycle, Idle);
 
-    internal bool TrySendTo(int destinationPort, ReadOnlySpan<byte> payload)
+    // Cancellation settles the local socket operation; it is not a guarantee
+    // that a datagram was never accepted by the operating system.
+    internal async ValueTask SendToAsync(int destinationPort, ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken)
     {
         if (destinationPort is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(destinationPort));
         Enter();
         try
         {
-            RequireOpen();
             _authorize(_requestedPort, Action.Local);
             _authorize(destinationPort, Action.Send);
-            // A denied destination takes precedence over observation or
-            // copying of guest-supplied bytes. The span is a borrowed view,
-            // so retain an owned snapshot only after peer authorization.
+            // Authorize before observing/copying guest-supplied bytes.
             if (payload.Length > MaxPayload)
                 throw new ArgumentOutOfRangeException(nameof(payload));
+            cancellationToken.ThrowIfCancellationRequested();
             byte[] owned = payload.ToArray();
-            try
-            {
-                int sent = _socket.SendTo(owned, SocketFlags.None,
-                    new IPEndPoint(IPAddress.Loopback, destinationPort));
-                if (sent != owned.Length) throw new IOException("partial UDP datagram send");
-                return true; // zero byte datagram is valid and returns zero
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock)
-            {
-                return false;
-            }
+            int sent = await _socket.SendToAsync(owned.AsMemory(), SocketFlags.None,
+                new IPEndPoint(IPAddress.Loopback, destinationPort), cancellationToken)
+                .ConfigureAwait(false);
+            if (sent != owned.Length) throw new IOException("partial UDP datagram send");
         }
         finally { Exit(); }
     }
 
     /// <summary>
-    /// Null means would-block, Packet with length 0 means a received empty
-    /// datagram. Over-cap datagrams are consumed and rejected, never truncated
-    /// into a successful packet or published into caller-managed memory.
+    /// Wait asynchronously for one datagram, or settle cancellation. Length
+    /// zero is a valid datagram. Over-cap datagrams are consumed and rejected,
+    /// never truncated into a successful packet. No caller-owned memory is
+    /// retained, and no pending operation releases its descriptor lease.
     /// </summary>
-    internal Packet? TryReceiveFrom(int capacity)
+    internal async ValueTask<Packet> ReceiveFromAsync(int capacity,
+        CancellationToken cancellationToken)
     {
         if (capacity is < 1 or > MaxPayload)
             throw new ArgumentOutOfRangeException(nameof(capacity));
         Enter();
         try
         {
-            RequireOpen();
             _authorize(_requestedPort, Action.Local);
+            cancellationToken.ThrowIfCancellationRequested();
             byte[] scratch = new byte[capacity + 1];
-            EndPoint endpoint = new IPEndPoint(IPAddress.Any, 0);
-            int size;
+            SocketReceiveFromResult received;
             try
             {
-                size = _socket.ReceiveFrom(scratch.AsSpan(), SocketFlags.None, ref endpoint);
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock)
-            {
-                return null;
+                received = await _socket.ReceiveFromAsync(scratch.AsMemory(),
+                    SocketFlags.None, new IPEndPoint(IPAddress.Any, 0), cancellationToken)
+                    .ConfigureAwait(false);
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.MessageSize)
             {
                 throw new InvalidDataException("UDP datagram truncated and discarded", ex);
             }
-            if (endpoint is not IPEndPoint peer ||
+            // Authorization is checked again after the await. A policy that
+            // was revoked while waiting must not publish an owned packet.
+            _authorize(_requestedPort, Action.Local);
+            if (received.RemoteEndPoint is not IPEndPoint peer ||
                 !peer.Address.Equals(IPAddress.Loopback) ||
                 peer.Port is < 1 or > 65535)
                 throw new UnauthorizedAccessException("UDP packet source outside loopback");
             _authorize(peer.Port, Action.Source);
-            if (size > capacity)
+            if (received.ReceivedBytes > capacity)
                 throw new InvalidDataException("UDP datagram truncated and discarded");
-            return new Packet(scratch.AsSpan(0, size).ToArray(), peer.Port);
+            return new Packet(scratch.AsSpan(0, received.ReceivedBytes).ToArray(), peer.Port);
         }
         finally { Exit(); }
     }
 
-    // Teardown worker, not a guest actor carrier, owns synchronous dispose.
-    // The caller must establish physical quiescence before retiring the handle.
+    // The trusted teardown worker must cancel and await pending operations
+    // before retiring the handle. Active retirement is rejected immediately;
+    // no blocking lock, early close, or reuse of an in-flight descriptor.
     public void Dispose()
     {
-        lock (_gate)
-        {
-            if (_closed) return;
-            _closed = true;
-            _socket.Dispose();
-        }
+        int previous = Interlocked.CompareExchange(ref _lifecycle, Retiring, Idle);
+        if (previous == Closed) return;
+        if (previous != Idle)
+            throw new InvalidOperationException("UDP descriptor is active or retiring");
+        // Do not acknowledge a concurrent Dispose before physical teardown.
+        // Even if disposal throws, the descriptor remains permanently sealed.
+        _socket.Dispose();
+        Volatile.Write(ref _lifecycle, Closed);
     }
 }
