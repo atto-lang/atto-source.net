@@ -137,21 +137,40 @@ public sealed unsafe class ControlPlaneArena32 : IDisposable
 
     public void Drop(ulong handle)
     {
+        lock (_gate) ReleaseSlot(Validate(handle));
+    }
+
+    /// <summary>Nonthrowing stale/foreign/closed denial without managed exception allocation.</summary>
+    public bool TryDrop(ulong handle)
+    {
         lock (_gate)
         {
-            int slot = Validate(handle);
-            new Span<byte>(_records + slot * RecordBytes, RecordBytes).Clear();
-            _slots[slot].Live = 0;
-            if (_slots[slot].Generation == MaxGeneration)
-                _slots[slot].Generation = 0; // retire instead of wrapping to an old identity
-            else
-            {
-                _slots[slot].Generation++;
-                _slots[slot].FreeNext = 0;
-                if (_freeTail == 0) _freeHead = (uint)slot + 1;
-                else _slots[(int)_freeTail - 1].FreeNext = (uint)slot + 1;
-                _freeTail = (uint)slot + 1;
-            }
+            if (_closed || (uint)(handle >> 32) != _issuer) return false;
+            uint word = (uint)handle;
+            uint low = word & SlotMask;
+            uint generation = word >> SlotBits;
+            if (low == 0 || generation == 0 || low > (uint)_capacity) return false;
+            int slot = (int)low - 1;
+            if (_slots[slot].Live == 0 || _slots[slot].Generation != generation) return false;
+            ReleaseSlot(slot);
+            return true;
+        }
+    }
+
+    // Both entrypoints hold the same gate and validate the live incarnation.
+    private void ReleaseSlot(int slot)
+    {
+        new Span<byte>(_records + slot * RecordBytes, RecordBytes).Clear();
+        _slots[slot].Live = 0;
+        if (_slots[slot].Generation == MaxGeneration)
+            _slots[slot].Generation = 0;
+        else
+        {
+            _slots[slot].Generation++;
+            _slots[slot].FreeNext = 0;
+            if (_freeTail == 0) _freeHead = (uint)slot + 1;
+            else _slots[(int)_freeTail - 1].FreeNext = (uint)slot + 1;
+            _freeTail = (uint)slot + 1;
         }
     }
 

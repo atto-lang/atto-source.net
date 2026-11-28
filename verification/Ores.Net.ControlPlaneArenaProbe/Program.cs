@@ -152,4 +152,33 @@ using (var reuse = new ControlPlaneArena32(16))
     Check(GC.GetAllocatedBytesForCurrentThread() == before, "allocation/drop managed-byte delta");
     Console.WriteLine("PASS dotnet control host reuse=16384 quota_denials=16384 managed_byte_delta=0");
 }
+using (var arena = new ControlPlaneArena32(256))
+using (var neighbor = new ControlPlaneArena32(1))
+{
+    ulong foreign=neighbor.Allocate();
+    ulong stale=arena.Allocate();
+    Check(arena.TryDrop(stale),"initial try drop");
+    static void Cycle(ControlPlaneArena32 a, ulong stale, ulong foreign, int count)
+    {
+        for(int i=0;i<count;i++)
+        {
+            if(!a.TryAllocate(out ulong h) || a.ReadI64(h,0)!=0)
+                throw new Exception("allocation or scrub failure");
+            a.WriteI64(h,0,i);
+            if(a.TryDrop(stale)||a.TryDrop(foreign)||a.TryDrop(0)||a.ReadI64(h,0)!=i)
+                throw new Exception("invalid drop mutated current allocation");
+            if(!a.TryDrop(h)||a.TryDrop(h))
+                throw new Exception("valid drop or duplicate denial failed");
+        }
+    }
+    Cycle(arena,stale,foreign,8192);
+    long before=GC.GetAllocatedBytesForCurrentThread();
+    Cycle(arena,stale,foreign,1_000_000);
+    long after=GC.GetAllocatedBytesForCurrentThread();
+    Check(after==before,"million-cycle successful and denied drop managed-byte delta");
+    Check(neighbor.ReadI64(foreign,0)==0,"neighbor survives");
+    arena.Dispose();
+    Check(!arena.TryDrop(stale),"closed denial");
+    Console.WriteLine("NET_CONTROL_TRY_DROP_PASS cycles=1000000 denied=4000000 managed_byte_delta=0");
+}
 Console.WriteLine("PASS control-plane-ref32 dotnet unmanaged host; NO compiled Atto guest or whole-process zero-GC proof");
