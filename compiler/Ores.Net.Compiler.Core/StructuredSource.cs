@@ -2022,7 +2022,10 @@ public static partial class OresStructuredParser
                 if (tokens[index + 2].Text != "=") return false;
                 if (tokens[index + 3].Text == "{") return true;
                 if (index + 5 < tokens.Count && tokens[index + 4].Text == "with" && tokens[index + 5].Text == "{") return true;
-                // Do not reinterpret an ordinary grouped scalar expression.
+                // The zero-slot () literal has a Tuple default in untyped
+                // local bindings. Do not reinterpret grouped scalar expressions.
+                if (tokens[index + 3].Text == "(" && index + 4 < tokens.Count &&
+                    tokens[index + 4].Text == ")") return true;
                 return tokens[index + 3].Text == "(" && index + 5 < tokens.Count &&
                     tokens[index + 5].Text is (":" or "=" or ":=");
             }
@@ -2089,6 +2092,9 @@ public static partial class OresStructuredParser
                 aggregateScopes.Any(scope => scope.ContainsKey(rowName)))
                 throw Error("Duplicate aggregate binding");
             Expect("=");
+            if (!explicitWrapper && Current.Text == "(" &&
+                index + 1 < tokens.Count && tokens[index + 1].Text == ")")
+                wrapper = "Tuple";
             if (Take("infer"))
             {
                 if (wrapper != "Record" || alias is null || introduce)
@@ -2134,7 +2140,11 @@ public static partial class OresStructuredParser
                 foreach (var entry in withBase.Values) values.Add(entry.Key, entry.Value);
             }
             int entries = 0;
-            do
+            if (Current.Text == close &&
+                (wrapper == "struct" || withBase is not null ||
+                    (wrapper == "Record" && open == "{" && !explicitWrapper)))
+                throw Error("E_LITERAL_KIND: empty braces require explicit Record in this profile");
+            if (Current.Text != close) do
             {
                 if (++entries > 64) throw Error("AGGREGATE_FIELD_BUDGET");
                 if (wrapper == "Record" && open == "{" && Take("."))
@@ -2194,7 +2204,7 @@ public static partial class OresStructuredParser
             } while (true);
             Expect(close);
             Expect(";");
-            if (wrapper == "Record" && open == "(" && !ordinaryField)
+            if (wrapper == "Record" && open == "(" && entries != 0 && !ordinaryField)
                 throw Error("E_LITERAL_KIND: Pair-only parentheses are not Record");
             if (overlap.Count > 0) throw Error("E_RECORD_SPREAD: unresolved overlapping spreads");
             var shape = plan.InferShape();
