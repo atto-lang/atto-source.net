@@ -76,6 +76,7 @@ bool validDeclaredReceiveSyntax = args.Length == 2 &&
 // authority; prove deterministic disposal at return, cancellation, restart,
 // FFI pins and hot swap, plus transitive native/PInvoke allocation closure.
 bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--out";
+bool validScalarClassCompile = args.Length == 4 && args[0] == "compile-class-scalar-v1" && args[2] == "--out";
 bool validTaskCheck = args.Length == 2 && args[0] == "check-task-i64";
 bool validTaskCompile = args.Length == 4 && args[0] == "compile-task-i64" && args[2] == "--out";
 // Nominal enums are a separate opt-in guest compiler slice. Normal
@@ -102,9 +103,10 @@ bool validStaticFacts = args.Length == 2 &&
 bool validActorPipePlan = args.Length == 2 && args[0] == "plan-actor-pipe";
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
 if ((mathI64Granted && !validCheck && !validCompile) ||
-    (!validOwnedUnwind && !validCheck && !validAsyncRun && !validEnumCheck && !validEnumCompile && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
+    (!validScalarClassCompile && !validOwnedUnwind && !validCheck && !validAsyncRun && !validEnumCheck && !validEnumCompile && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
      !validStaticFacts && !validTaskCheck && !validTaskCompile && !validActorPipePlan && !validDurableCounter && !validEmitActorSource && !validEmitHttpActors && !validExternalReceive && !validCounterMain && !validEmitSource && !moduleCommand))
 {
+    Console.Error.WriteLine("       oresnet compile-class-scalar-v1 input.atto --out path/OresGenerated.dll");
     Console.Error.WriteLine("       oresnet emit-http-actors-csharp input.atto --out path/HttpActors.g.cs");
     Console.Error.WriteLine("usage: oresnet check-enum-v1 FILE.atto | oresnet compile-enum-v1 FILE.atto --out path/OresGenerated.dll | oresnet check input.atto|input.ores | oresnet run-async input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-task-i64 input.ores | oresnet compile-task-i64 input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet plan-actor-pipe input.atto (typed plan only, not executable actors) | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet emit-external-counter-csharp ROOT --out path/DeclaredActor_Counter.g.cs | oresnet emit-counter-main-csharp ROOT --out path/GeneratedCounterMainV2.g.cs | oresnet check-declared-receive-syntax receive.atto (syntax only, NOT guest execution)");
     return 2;
@@ -333,6 +335,16 @@ try
         var generated = ActorIncrementSourceEmitter.EmitCSharp(actorMethod);
         WriteAtomicSource(args[3], generated);
         Console.WriteLine($"Emitted experimental static actor C# from verified increment IR: {Path.GetFullPath(args[3])}");
+        return 0;
+    }
+    if (validScalarClassCompile)
+    {
+        if (!string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Scalar class profile requires .atto input and OresGenerated.dll output");
+        var verifiedClass = OresStructuredCfgLowering.LowerScalarClassConstructor(source);
+        CilEmitter.EmitLibrary(verifiedClass, args[3]);
+        Console.WriteLine("Emitted verified scalar-class constructor CFG CIL (restricted profile)");
         return 0;
     }
     bool normalStructuredEntry = (validCheck || validCompile) && !mathI64Granted &&
