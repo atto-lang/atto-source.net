@@ -1251,8 +1251,17 @@ public static partial class OresStructuredParser
                       (ch == '<' && source[index + 1] == '|')))
                 index += 2;
             else if (ch == '|' && !moduleMode && !precededByString && !ownedUnwind)
+            {
+                // A direct file scalar denotation RHS is not a closure.
+                // Keep the lexical gate closed; only refine its diagnostic.
+                var prefix = recentTokens.ToArray();
+                if (prefix.Length == 5 && prefix[0] == "denote" && prefix[1] == "type" &&
+                    PortableUnicodeIdentifier.IsName(prefix[2]) && prefix[3] == "=")
+                    throw new FormatException(
+                        $"E_DENOTE_RHS_UNSUPPORTED: union denotation requires full type lowering at offset {offset}");
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
+            }
             // Prefix logical not already has typed boolean lowering in Unary.
             // Preserve the earlier != / !eq recognition and the separate
             // fail-closed macro and ownership admission gates.
