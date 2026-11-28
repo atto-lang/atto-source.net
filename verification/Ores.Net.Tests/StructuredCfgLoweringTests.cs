@@ -308,10 +308,16 @@ internal static class StructuredCfgLoweringTests
             42, "denoted helper ABI");
         CheckModule("denote type Flag = bool; fnc id(Flag b):Flag{return b;} pub fnc main():int{if id(true) then return 42; else return 0; fi}",
             42, "denoted bool helper ABI");
+        Check("denote type First = Second; denote type Second = Third; denote type Third = int; fnc main():First{val Second a=42;return a;}",
+            42, "forward scalar denotation identity");
+        CheckModule("denote type Flag = Later; denote type Later = bool; fnc id(Flag b):Flag{return b;} pub fnc main():int{if id(true) then return 42; else return 0; fi}",
+            42, "forward bool helper ABI");
         foreach (var (source, diagnostic) in new[] {
+            ("denote type A = B; denote type B = A; fnc main():int{return 42;}", "E_DENOTE_CYCLE"),
+            ("denote type A = B; denote type B = C; denote type C = B; fnc main():int{return 42;}", "E_DENOTE_CYCLE"),
             ("denote type Count = int; fnc main():int{val Count a=true;return a;}", "Local initializer has wrong type"),
-            ("denote type Count = Count; fnc main():int{return 42;}", "E_DENOTE_RHS_UNSUPPORTED"),
-            ("denote type Count = Missing; fnc main():int{return 42;}", "E_DENOTE_RHS_UNSUPPORTED"),
+            ("denote type Count = Count; fnc main():int{return 42;}", "E_DENOTE_CYCLE"),
+            ("denote type Count = Missing; fnc main():int{return 42;}", "E_DENOTE_UNKNOWN"),
             ("denote type Count = 5 | 6 | 7; fnc main():int{return 42;}", "E_DENOTE_RHS_UNSUPPORTED"),
             ("denote type Count = int; denote type Count = bool; fnc main():int{return 42;}", "E_DENOTE_NAME"),
             ("denote pub type Count = int; fnc main():int{return 42;}", "E_DENOTE_VISIBILITY_UNSUPPORTED"),
