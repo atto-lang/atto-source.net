@@ -13,6 +13,14 @@ public static partial class OresStructuredParser
         return new AttachedScalarReader(source).Parse();
     }
 
+    // Separate explicit class profile. No reference identity, aliasing,
+    // heap allocation, methods, inheritance, mutable fields or escape.
+    internal static StructuredProgram ParseScalarClassConstructor(string source)
+    {
+        ValidateSourceInput(source);
+        return new AttachedScalarReader(source, scalarClass: true).Parse();
+    }
+
     private sealed class AttachedScalarReader
     {
         private sealed record Field(string Name, string Type);
@@ -33,6 +41,7 @@ public static partial class OresStructuredParser
         private sealed record Value(Owner Owner, Dictionary<string, StructuredExpr> Slots, bool Mutable);
         private sealed record Argument(string Type, Dictionary<string, StructuredExpr> Slots);
         private readonly Lexer lexer;
+        private readonly bool scalarClass;
         private Token current;
         private Token? buffered;
         private int tokens, depth, nextSlot;
@@ -42,8 +51,9 @@ public static partial class OresStructuredParser
         private readonly Dictionary<string, Value> values = new(StringComparer.Ordinal);
         private readonly List<StructuredStmt> body = new();
 
-        public AttachedScalarReader(string source)
+        public AttachedScalarReader(string source, bool scalarClass = false)
         {
+            this.scalarClass = scalarClass;
             if (source.Length > 65536) throw new FormatException("E_SOURCE_LIMIT: attached scalar source exceeds 64 KiB");
             lexer = new Lexer(source, attachedStructTarget: true);
             current = lexer.Read();
@@ -61,6 +71,8 @@ public static partial class OresStructuredParser
         private string Word()
         {
             string s = current.Text;
+            if (scalarClass && s is ("class" or "actor" or "isoactor" or "as" or "end" or "final" or "extends" or "implements" or "rt" or "unsafe" or "suspends" or "await" or "spawn" or "if" or "else" or "while" or "for"))
+                throw Error("E_CLASS_PROFILE", "reserved class profile word");
             if (!IsSimpleNominalWord(s) || s is "self" or "true" or "false" or "int" or "bool" or "void" or "let" or "mut" or "return" or "with" or "constructor" or "mtd" or "define" or "type" or "struct" or "fnc" or "pub" or "private" or "const" or "val" or "new" or "copy" or "take" or "move" or "borrow" or "share")
                 throw Error("E_STRUCT_SYNTAX", "expected unreserved identifier");
             Next(); return s;
@@ -235,8 +247,44 @@ public static partial class OresStructuredParser
                 value.Slots[write.Path]=Snapshot(result);
             }
         }
+        private void ClassDeclaration()
+        {
+            Expect("define"); Expect("class"); string name = Word(); Expect("as");
+            Require(owners.Count == 0, "E_CLASS_PROFILE", "one closed scalar class only");
+            var owner = new Owner(name);
+            while (Eat("pub"))
+            {
+                Expect("final"); Expect("int"); string field = Word(); Expect(";");
+                Require(!owner.Fields.Any(f => f.Name == field), "E_DUPLICATE", "field name");
+                Require(owner.Fields.Count < 16, "E_SOURCE_LIMIT", "class field budget");
+                owner.Fields.Add(new(field, "int"));
+                owner.Leaves.Add(new(field, IrValueType.I64));
+            }
+            Require(owner.Fields.Count > 0, "E_CLASS_PROFILE", "public deferred final int fields required");
+            Expect("constructor");
+            var parameters = Formals();
+            Require(parameters.All(p => p.Type == "int"), "E_CLASS_PROFILE", "int constructor parameters required");
+            var assigned = new HashSet<string>(StringComparer.Ordinal);
+            var assignments = new List<(string Field, string Parameter)>();
+            Expect("{");
+            while (Eat("self"))
+            {
+                Expect("."); string field = Word(); Expect("="); string parameter = Word(); Expect(";");
+                Require(owner.Fields.Any(f => f.Name == field) && parameters.Any(p => p.Name == parameter),
+                    "E_CLASS_INIT", "direct parameter to deferred final field required");
+                Require(assigned.Add(field), "E_CLASS_INIT", "duplicate initialization");
+                assignments.Add((field, parameter));
+            }
+            if (Eat("return")) Expect(";");
+            Require(current.Text == "}", "E_CLASS_PROFILE", "constructor permits only direct field initialization and optional return");
+            Expect("}"); Expect("end");
+            Require(assigned.Count == owner.Fields.Count, "E_CLASS_INIT", "missing field initialization");
+            owner.Constructors.Add(new(parameters, assignments));
+            owners.Add(name, owner);
+        }
         private void Declaration()
         {
+            if (scalarClass) { ClassDeclaration(); return; }
             string name;
             if (Eat("define")) { Expect("struct"); name=Word(); }
             else { Expect("type"); name=Word(); Expect("="); Expect("struct"); }
@@ -275,6 +323,7 @@ public static partial class OresStructuredParser
                 while(Prec(current.Text)>=minimum) {
                     if(++chain>32)throw Error("E_SOURCE_LIMIT","scalar expression chain");
                     string op=current.Text; int at=current.Offset, precedence=Prec(op); Next();
+                    if (scalarClass && op is not ("+" or "-" or "*")) throw Error("E_CLASS_PROFILE", "only integer arithmetic in scalar class profile");
                     var b=Expression(self,precedence+1);
                     Require(a.Type==b.Type,"E_TYPE","mixed scalar operands");
                     bool ints=a.Type==IrValueType.I64;
@@ -307,9 +356,11 @@ public static partial class OresStructuredParser
             if(Eat("self")){root="self";Require(self is not null,"E_TYPE","self outside method");}
             else root=Word();
             if(self is not null && root!="self" && self.TryGetValue("$arg."+root,out var parameter))return parameter;
+            if (scalarClass && current.Text != ".") throw Error("E_CLASS_PROFILE", "class identity, whole value and escape unavailable");
             Expect("."); string name=Word();
             if(self is null && values.TryGetValue(root,out var value)){
                 if(Eat("(")){
+                    Require(!scalarClass, "E_CLASS_PROFILE", "class methods unavailable in scalar constructor profile");
                     Expect(")");
                     if(!value.Owner.Methods.TryGetValue(name,out var method))throw Error("E_TYPE","unknown nominal method");
                     return new StructuredCall(at,method.Internal,value.Owner.Leaves.Select(l=>value.Slots[l.Path]).ToArray(),method.Type);
@@ -325,12 +376,19 @@ public static partial class OresStructuredParser
         private void Binding()
         {
             Expect("let"); bool mutable=Eat("mut"); string first=Word(),name=first; Owner? annotated=null;
+            Require(!scalarClass || !mutable, "E_CLASS_PROFILE", "mutable class receiver unavailable");
             if(owners.TryGetValue(first,out annotated)) name=Word();
             Require(!values.ContainsKey(name)&&!owners.ContainsKey(name),"E_DUPLICATE","local shadow");
             Expect("="); bool explicitCopy=Eat("copy!");
+            if (scalarClass)
+            {
+                Require(annotated is not null && !explicitCopy, "E_CLASS_PROFILE", "explicit nominal local required");
+                if (!Eat("new")) throw Error("E_CLASS_PROFILE", "class alias/copy unavailable; direct new required");
+            }
             Owner owner; Dictionary<string,StructuredExpr> slots=new(StringComparer.Ordinal);
             // A nominal copy reads all source leaves before creating the new value.
             if(values.TryGetValue(current.Text,out var existing)){
+                Require(!scalarClass, "E_CLASS_PROFILE", "class alias/copy unavailable");
                 Next(); owner=existing.Owner;
                 foreach(var leaf in owner.Leaves)slots.Add(leaf.Path,Snapshot(existing.Slots[leaf.Path]));
             } else {
@@ -342,6 +400,7 @@ public static partial class OresStructuredParser
                 if(!Eat(")")){
                     do{
                         if(values.TryGetValue(current.Text,out var v) && Peek().Text != "."){
+                            Require(!scalarClass, "E_CLASS_PROFILE", "class-valued constructor arguments unavailable");
                             Next();
                             // Only whole nominal constructor arguments are admitted.
                             var leaves=new Dictionary<string,StructuredExpr>(StringComparer.Ordinal);
@@ -373,7 +432,11 @@ public static partial class OresStructuredParser
             Eat("pub"); Expect("fnc"); Expect("main"); Expect("("); Expect(")");
             if(!Eat(":")&&!Eat("->"))throw Error("E_STRUCT_SYNTAX","main return separator");
             Expect("int"); Expect("{");
-            while(current.Text!="return") { if(current.Text=="let")Binding(); else InvokeMutation(); }
+            while(current.Text!="return") {
+                if(current.Text=="let") Binding();
+                else if (scalarClass) throw Error("E_CLASS_PROFILE", "only immutable local construction and scalar return");
+                else InvokeMutation();
+            }
             Expect("return"); var result=Expression();
             Require(result.Type==IrValueType.I64,"E_TYPE","int main result required");
             Expect(";"); Expect("}"); Expect("");
@@ -389,4 +452,7 @@ public static partial class OresStructuredCfgLowering
     /// enable unimplemented attached structs in the ordinary production path.
     public static VerifiedCfgModule LowerAttachedStructScalar(string source)
         => LowerModule(OresStructuredParser.ParseAttachedStructScalar(source));
+
+    public static VerifiedCfgModule LowerScalarClassConstructor(string source)
+        => LowerModule(OresStructuredParser.ParseScalarClassConstructor(source));
 }
