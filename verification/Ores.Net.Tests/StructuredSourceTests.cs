@@ -156,6 +156,21 @@ internal static class StructuredSourceTests
         })
             RejectFeature("pub fnc main():int{" + registration + "return 42;}",
                 "Lexical captures require checked closure lowering");
+        // Name-first 'as' is a declaration annotation, not an initializer cast.
+        foreach (string qualifier in new[] { "const", "val", "let" })
+        {
+            var prefix = OresStructuredParser.Parse("fnc main():int{" + qualifier + " int x=42;return x;}");
+            var nameAs = OresStructuredParser.Parse("fnc main():int{" + qualifier + " x as int=42;return x;}");
+            Require(prefix.Body[0] is StructuredLet a && nameAs.Body[0] is StructuredLet b &&
+                a.Kind == b.Kind && a.Name == b.Name && a.ValueType == b.ValueType &&
+                a.Initializer is StructuredInt { Value: 42 } && b.Initializer is StructuredInt { Value: 42 },
+                "name-first as annotation matches typed prefix for " + qualifier);
+        }
+        Reject("fnc main():int{const x as int=true;return x;}", "wrong local annotation type");
+        Reject("fnc main():int{val x as =42;return x;}", "missing annotation type");
+        Reject("fnc main():int{let x as int;return x;}", "missing local initializer");
+        Reject("fnc main():int{const x as int:int=42;return x;}", "duplicate local annotation");
+
         NegatedDoIfSyntax();
         Require(OresStructuredParser.Parse(
             "pub fnc main():int{val bool f=false;guard !(f), !(!true){return 0;}return 42;}").Body.Count == 3,
@@ -426,8 +441,7 @@ pub async routine main(): void {
             "E_IMMUTABLE_REBIND");
         RejectFeature("fnc main():int{mut int x=10;return x;}",
             "E_MUT_QUALIFIER");
-        // Keep the newer helper/capture test coverage while migrating runtime
-        // binding semantics to val. No runtime call may bypass constexpr checks.
+        // Keep helper/capture coverage for fixed val independent of const folding.
         var runtimeVals = OresStructuredParser.Parse(
             "fnc inc(int p):int{return p+1;}" +
             "fnc main():int{val int typed=inc(40);val inferred=inc(41);" +
@@ -451,8 +465,7 @@ pub async routine main(): void {
         }, "val can capture a runtime value without rebinding");
         Require(runtimeVals.Body[5] is StructuredSet { Name: "mutable" },
             "explicit let remains the only rebindable local");
-        // Untyped const keeps java's stage-one readonly-binding meaning: a
-        // runtime initializer stays a call; only typed scalar const is constexpr.
+        // All ordinary scalar const declarations can retain runtime calls.
         var untypedRuntimeConst = OresStructuredParser.Parse(
             "fnc inc(int p):int{return p+1;}fnc main():int{const inferred=inc(41);return inferred;}");
         Require(untypedRuntimeConst.Body[0] is StructuredLet {
@@ -462,21 +475,27 @@ pub async routine main(): void {
         Reject("fnc inc(int p):int{return p+1;}" +
                "fnc main():int{const x=inc(41);x=0;return x;}",
             "runtime-initialized untyped const must still deny assignment");
-        foreach (var source in new[] {
-            "fnc inc(int p):int{return p+1;}fnc main():int{int x=inc(41);return x;}",
-            "fnc inc(int p):int{return p+1;}fnc main():int{const int x=inc(41);return x;}"
-        })
-            RejectFeature(source, "E_NON_CONST_INITIALIZER");
-
-        // Both spellings must be rejected for the same targeted semantic reason.
-        RejectFeature("fnc runtime_value():int{return 42;}fnc main():int{int x=runtime_value();return x;}",
-            "E_NON_CONST_INITIALIZER");
-        RejectFeature("fnc runtime_value():int{return 42;}fnc main():int{const int x=runtime_value();return x;}",
-            "E_NON_CONST_INITIALIZER");
-        RejectFeature("fnc runtime_value():int{return 42;}fnc main():int{const x:int=runtime_value();return x;}",
-            "E_NON_CONST_INITIALIZER");
-        RejectFeature("fnc main():int{const mut int x=42;return x;}",
-            "E_CONST_MUT_UNSUPPORTED");
+        foreach (string spelling in new[] { "int x=inc(41);", "const int x=inc(41);",
+            "const x:int=inc(41);", "const x as int=inc(41);" })
+        {
+            var runtime = OresStructuredParser.Parse(
+                "fnc inc(int p):int{return p+1;}fnc main():int{" + spelling + "return x;}");
+            Require(runtime.Body[0] is StructuredLet {
+                Kind: StructuredBindingKind.Const, Initializer: StructuredCall { Name: "inc" }
+            }, "typed const preserves runtime call: " + spelling);
+            Reject("fnc inc(int p):int{return p+1;}fnc main():int{" + spelling + "x=0;return x;}",
+                "runtime const remains immutable");
+        }
+        foreach (string spelling in new[] { "const mut int x=42;", "const mut x:int=42;",
+            "const mut x as int=42;", "const mut x=42;", "val int x=42;" })
+        {
+            var fixedLocal = OresStructuredParser.Parse("fnc main():int{" + spelling + "return x;}");
+            Require(fixedLocal.Body[0] is StructuredLet {
+                Name: "x", Kind: StructuredBindingKind.Val, ValueType: IrValueType.I64,
+                Initializer: StructuredInt { Value: 42 }
+            }, "const mut and val must share fixed binding: " + spelling);
+            Reject("fnc main():int{" + spelling + "x=7;return x;}", "fixed alias cannot rebind");
+        }
         var shorthandConstant = OresStructuredParser.Parse(
             "fnc main():int{int answer=6*7;return answer;}");
         Require(shorthandConstant.Body[0] is StructuredLet {
@@ -792,6 +811,8 @@ pub async routine main(): void {
             "let x=7 as int;x=42;return x;",
             "val x=42;const y=x as int;return y;",
             "val bool x=true;const y=x as bool;if y{return 42;}else{return 0;}",
+            "val x=42;const int y=x as int;return y;",
+            "val bool x=true;const bool y=x as bool;if y{return 42;}else{return 0;}",
             "const x=7;if true{const nested=x as int;return nested+35;}else{return 0;}",
             "const x=7;return (x+35) as int;"
         })
@@ -831,9 +852,7 @@ pub async routine main(): void {
             "const x=true;return x+1;",
             "let x=true;x=7;return 42;",
             "const x=missing;return 42;",
-            "const x=x;return 42;",
-            "val x=42;const int y=x as int;return y;",
-            "val bool x=true;const bool y=x as bool;return 42;"
+            "const x=x;return 42;"
         }) Reject("fnc main():int{" + invalid + "}", "scalar cast/inference fail-closed " + invalid);
 
         var runtimeBool = OresStructuredParser.Parse("""
@@ -852,14 +871,20 @@ pub async routine main(): void {
             "const is immutable");
         Reject("fnc main():int{val bool v=true;if v {v=false;}return 1;}",
             "nested blocks cannot mutate outer val");
-        // Runtime bindings use val, not const: every const scalar requires
-        // deterministic static evaluation before CFG/CIL emission.
+        // Runtime const snapshots the current scalar value without granting
+        // authority to replace the fixed root binding.
         foreach (var source in new[] {
             "fnc main():int{let int x=2;const int c=x;return c;}",
             "fnc main():int{val int x=2;const int c=x;return c;}",
             "fnc main():int{let int x=2;int c=x;return c;}"
         })
-            RejectFeature(source, "E_NON_CONST_INITIALIZER");
+        {
+            var runtimeConst = OresStructuredParser.Parse(source);
+            Require(runtimeConst.Body[1] is StructuredLet {
+                Name: "c", Kind: StructuredBindingKind.Const,
+                Initializer: StructuredRead { Type: IrValueType.I64 }
+            }, "runtime const keeps the eager typed read");
+        }
         foreach (var source in new[] {
             "fnc main():int{let int x=2;val int c=x;return c;}",
             "fnc main():int{val int x=2;val int c=x;return c;}"
@@ -1355,11 +1380,18 @@ pub async routine main(): void {
             "undefined read points to identifier", "missing");
         ExpectAt("fnc main():int{missing=2;return 1;}",
             "undefined assignment points to identifier", "missing");
-        ExpectAt("fnc main():int{let int x=1;let int x=2;return x;}",
-            "duplicate declaration points to second identifier", "x=2");
+        ExpectAt("fnc main():int{const int x=1;const int x=2;return x;}",
+            "duplicate fixed declaration points to second identifier", "x=2");
+        var shadowed = OresStructuredParser.Parse(
+            "fnc main():int{let int x=1;let int x=x+1;return x;}");
+        Require(shadowed.Body[0] is StructuredLet first &&
+            shadowed.Body[1] is StructuredLet second &&
+            first.Name != second.Name &&
+            shadowed.Body[2] is StructuredReturn { Value: StructuredRead read } &&
+            read.Name == second.Name,
+            "root let shadowing has a distinct compiler-owned storage identity");
 
-        // The AST stores names, not unique binding IDs; enforce the
-        // no-shadowing contract until SSA lowering has explicit symbol IDs.
+        // Nested shadowing remains outside this bounded root scalar profile.
         ExpectAt("fnc main():int{let int x=1;if true {let int x=2;}return x;}",
             "nested shadowing", "x=2");
         ExpectAt("fnc main():int{let bool ok=true;while ok {let int ok=1;}return 0;}",
@@ -1410,8 +1442,11 @@ pub async routine main(): void {
         Reject("fnc main():int{let int x=x; return x;}", "self-reference");
         Reject("fnc main():int{return missing;}", "undefined read");
         Reject("fnc main():int{missing=2;return 1;}", "undefined assignment");
-        Reject("fnc main():int{let int x=1;let int x=2;return x;}",
-            "same-scope duplicate binding");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{let int x=1;let int x=2;return x;}").Body.Count == 3,
+            "same-scope scalar let shadowing");
+        Reject("fnc main():int{let int x=1;const int x=2;return x;}",
+            "same-scope mixed binding collision remains gated");
         Reject("fnc main():int{let int x=true;return 0;}",
             "type mismatch on declaration");
         Reject("fnc main():int{let bool ok=false;ok=3;return 0;}",
@@ -1545,8 +1580,8 @@ pub async routine main(): void {
                 $"fnc main():int{{let int {captureName}=42;return {captureName};}}");
             Require(plainCaptureName.Body.Count == 2 &&
                     plainCaptureName.Body[1] is StructuredReturn {
-                        Value: StructuredRead { Type: IrValueType.I64 } read
-                    } && read.Name == captureName,
+                        Value: StructuredRead { Type: IrValueType.I64 } captureRead
+                    } && captureRead.Name == captureName,
                 captureName + " remains an ordinary scalar identifier");
         }
         // Ignored comment text cannot activate unsupported capture guards.

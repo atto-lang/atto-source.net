@@ -5,6 +5,7 @@ on:
       - 'compiler/Ores.Net.Compiler.Core/**'
       - 'stdlib/policy/**'
       - 'tests/fixtures/arena-quota-lifecycle-guest.atto'
+      - 'tests/arena-policy-differential-v1.mjs'
       - 'verification/Ores.Net.ArenaPolicyGuestProbe/**'
       - 'verification/Ores.Net.StructuredBitAndProbe/**'
       - 'Directory.Build.props'
@@ -16,6 +17,7 @@ on:
       - 'compiler/Ores.Net.Compiler.Core/**'
       - 'stdlib/policy/**'
       - 'tests/fixtures/arena-quota-lifecycle-guest.atto'
+      - 'tests/arena-policy-differential-v1.mjs'
       - 'verification/Ores.Net.ArenaPolicyGuestProbe/**'
       - 'verification/Ores.Net.StructuredBitAndProbe/**'
       - 'Directory.Build.props'
@@ -35,4 +37,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - run: bash verification/Ores.Net.ArenaPolicyGuestProbe/run-guest-probes.sh
