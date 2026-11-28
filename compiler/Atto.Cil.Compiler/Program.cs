@@ -18,6 +18,8 @@ internal sealed record Sequence(List<Expression> Items) : Expression;
 internal sealed record Arg(string Name) : Expression;
 internal sealed record Binary(string Op, Expression Left, Expression Right) : Expression;
 internal sealed record Call(string Name, List<Expression> Args) : Expression;
+// Only a direct call operand can carry this label; it is never a value expression.
+internal sealed record NamedActual(string Name, Expression Value) : Expression;
 internal sealed record RecurState(string Name, Expression Init);
 internal sealed record RecurExit(Expression Predicate, Expression Result);
 internal sealed record RecurLoop(List<RecurState> States, List<RecurExit> Exits, List<Expression> Updates) : Expression;
@@ -799,16 +801,36 @@ internal sealed class Parser
     private List<Expression> ArgumentsAfterOpen(int depth)
     {
         List<Expression> args = [];
+        var labels = new HashSet<string>(StringComparer.Ordinal);
+        bool named = false;
         if (Peek != ")") do
         {
             if (args.Count >= 8) throw new CompilerError("E_LIMIT", "8 call arguments");
+            string? label = null;
+            if (_position + 1 < _tokens.Count && Peek.Length > 0 &&
+                (Peek[0] is >= 'a' and <= 'z' or '_') &&
+                (_tokens[_position + 1] is ":" or "="))
+            {
+                label = Name();
+                bool colon = Eat(":");
+                if (!colon) Require("=");
+                if (colon && Peek == "=")
+                    throw new CompilerError("E_PAIR_UNSUPPORTED", "Pair is not a named argument");
+                if (!labels.Add(label))
+                    throw new CompilerError("E_NAMED_DUP", label);
+                named = true;
+            }
+            else if (named)
+                throw new CompilerError("E_NAMED_ORDER", "positional argument after named argument");
             if (StartsBareSequence())
             {
                 _position++;
-                args.Add(ParseSequenceItems(depth + 1));
+                var sequence = ParseSequenceItems(depth + 1);
+                args.Add(label is null ? sequence : new NamedActual(label, sequence));
                 return args; // ParseSequenceItems consumed the call's close.
             }
-            args.Add(ParseExpr(0, depth + 1));
+            var value = ParseExpr(0, depth + 1);
+            args.Add(label is null ? value : new NamedActual(label, value));
         } while (Eat(","));
         Require(")");
         return args;
@@ -1075,6 +1097,48 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
 {
     private readonly List<Function> _functions = functions;
     private readonly Dictionary<string, int> _symbols = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _reorderedOwners = new(StringComparer.Ordinal);
+    private const int CallScratchBase = 37, CallScratchWidth = 8, CallScratchLevels = 8;
+
+    private static (Expression[] Values, int[] Slots) BindCall(Call call, Function target)
+    {
+        if (target.Args.Count != call.Args.Count || call.Args.Count > CallScratchWidth)
+            throw new CompilerError("E_ARITY", call.Name);
+        var values = new Expression[call.Args.Count];
+        var slots = new int[call.Args.Count];
+        var occupied = new bool[call.Args.Count];
+        bool named = false;
+        int positional = 0;
+        for (int i = 0; i < call.Args.Count; i++)
+        {
+            int slot;
+            if (call.Args[i] is NamedActual n)
+            {
+                named = true;
+                slot = target.Args.IndexOf(n.Name);
+                if (slot < 0) throw new CompilerError("E_NAMED_UNKNOWN", n.Name);
+                values[i] = n.Value;
+            }
+            else
+            {
+                if (named) throw new CompilerError("E_NAMED_ORDER", "positional argument after named argument");
+                slot = positional++;
+                values[i] = call.Args[i];
+            }
+            if (slot >= occupied.Length || occupied[slot])
+                throw new CompilerError("E_NAMED_DUP", target.Args[slot]);
+            occupied[slot] = true;
+            slots[i] = slot;
+        }
+        if (occupied.Any(x => !x)) throw new CompilerError("E_ARITY", call.Name);
+        return (values, slots);
+    }
+
+    private static bool Reordered(int[] slots)
+    {
+        for (int i = 0; i < slots.Length; i++) if (slots[i] != i) return true;
+        return false;
+    }
 
     internal void Check()
     {
@@ -1194,9 +1258,11 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 case Call c:
                     if (!_symbols.TryGetValue(c.Name, out var target))
                         throw new CompilerError("E_SYMBOL", c.Name);
-                    if (_functions[target].Args.Count != c.Args.Count)
-                        throw new CompilerError("E_ARITY", c.Name);
-                    foreach (var arg in c.Args)
+                    if (c.Args.Any(a => a is NamedActual) && _functions[target].MutableWrite != null)
+                        throw new CompilerError("E_POINTER_AUTHORITY", "named scalar call cannot bind mutable pointer ABI");
+                    var callPlan = BindCall(c, _functions[target]);
+                    if (Reordered(callPlan.Slots)) _reorderedOwners.Add(owner.Name);
+                    foreach (var arg in callPlan.Values)
                         if (WalkExpr(arg, owner, bound, depth) != CheckedType.Int)
                             throw new CompilerError("E_TYPE", "function expects int arguments");
                     WalkFunction(target);
@@ -1353,11 +1419,19 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
         var loopLocals = new BlobEncoder(loopSig).LocalVariableSignature(37);
         for (int i = 0; i < 37; i++) loopLocals.AddVariable().Type().Int64();
         var loopSigHandle = metadata.AddStandaloneSignature(metadata.GetOrAddBlob(loopSig));
+        // Only methods with a reordered call receive additional i64 stack locals.
+        // Scratch never overlaps ordinary, match or loop locals.
+        var callSig = new BlobBuilder();
+        const int callLocalCount = CallScratchBase + CallScratchWidth * CallScratchLevels;
+        var callLocals = new BlobEncoder(callSig).LocalVariableSignature(callLocalCount);
+        for (int i = 0; i < callLocalCount; i++) callLocals.AddVariable().Type().Int64();
+        var callSigHandle = metadata.AddStandaloneSignature(metadata.GetOrAddBlob(callSig));
         static bool ContainsLoop(Expression e) => e switch
         {
             RecurLoop => true,
             Binary b => ContainsLoop(b.Left) || ContainsLoop(b.Right),
             Call c => c.Args.Any(ContainsLoop),
+            NamedActual n => ContainsLoop(n.Value),
             Sequence seq => seq.Items.Any(ContainsLoop),
             ValueMatch m => ContainsLoop(m.Subject) || m.Arms.Any(a =>
                 (a.Guard != null && ContainsLoop(a.Guard)) || ContainsLoop(a.Result)),
@@ -1413,7 +1487,8 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 }
             }
             bodyOffsets.Add(bodyStream.AddMethodBody(il, maxStack: 64,
-                localVariablesSignature: f.Body.Any(StatementLoop) ? loopSigHandle : localSigHandle));
+                localVariablesSignature: _reorderedOwners.Contains(f.Name) ? callSigHandle :
+                    f.Body.Any(StatementLoop) ? loopSigHandle : localSigHandle));
         }
         int nextParameter = 1;
         for (int i = 0; i < _functions.Count; i++)
@@ -1491,7 +1566,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
     }
 
     private void Generate(Expression e, Function f, InstructionEncoder il,
-        Dictionary<string, int> bindings, int matchDepth)
+        Dictionary<string, int> bindings, int matchDepth, int callDepth = 0)
     {
         switch (e)
         {
@@ -1502,8 +1577,8 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 return;
             case Binary b:
                 if (b.Op == "/") CheckIntegerDivision(b);
-                Generate(b.Left, f, il, bindings, matchDepth);
-                Generate(b.Right, f, il, bindings, matchDepth);
+                Generate(b.Left, f, il, bindings, matchDepth, callDepth);
+                Generate(b.Right, f, il, bindings, matchDepth, callDepth);
                 if (b.Op == ">=")
                 {
                     il.OpCode(ILOpCode.Clt);
@@ -1523,13 +1598,36 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 });
                 return;
             case Call c:
-                foreach (var arg in c.Args) Generate(arg, f, il, bindings, matchDepth);
-                il.Call(MetadataTokens.MethodDefinitionHandle(_symbols[c.Name] + 1));
+            {
+                int target = _symbols[c.Name];
+                var plan = BindCall(c, _functions[target]);
+                if (!Reordered(plan.Slots))
+                {
+                    foreach (var arg in plan.Values)
+                        Generate(arg, f, il, bindings, matchDepth, callDepth);
+                }
+                else
+                {
+                    if (callDepth >= CallScratchLevels)
+                        throw new CompilerError("E_NAMED_DEPTH", "nested reordered call limit");
+                    int scratch = CallScratchBase + CallScratchWidth * callDepth;
+                    // Evaluate exactly once, lexically, before loading ABI slots.
+                    // A nested reordered call uses the next disjoint scratch range.
+                    for (int i = 0; i < plan.Values.Length; i++)
+                    {
+                        Generate(plan.Values[i], f, il, bindings, matchDepth, callDepth + 1);
+                        il.StoreLocal(scratch + plan.Slots[i]);
+                    }
+                    for (int slot = 0; slot < plan.Values.Length; slot++)
+                        il.LoadLocal(scratch + slot);
+                }
+                il.Call(MetadataTokens.MethodDefinitionHandle(target + 1));
                 return;
+            }
             case Sequence seq:
                 for (int i = 0; i < seq.Items.Count; i++)
                 {
-                    Generate(seq.Items[i], f, il, bindings, matchDepth);
+                    Generate(seq.Items[i], f, il, bindings, matchDepth, callDepth);
                     if (i + 1 != seq.Items.Count) il.OpCode(ILOpCode.Pop);
                 }
                 return;
@@ -1542,7 +1640,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 for (int i = 0; i < loop.States.Count; i++)
                 {
                     var state = loop.States[i];
-                    Generate(state.Init, f, il, scope, matchDepth);
+                    Generate(state.Init, f, il, scope, matchDepth, callDepth);
                     il.StoreLocal(stateBase + i);
                     scope.Add(state.Name, stateBase + i);
                 }
@@ -1552,15 +1650,15 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 foreach (var exit in loop.Exits)
                 {
                     var next = il.DefineLabel();
-                    Generate(exit.Predicate, f, il, scope, matchDepth);
+                    Generate(exit.Predicate, f, il, scope, matchDepth, callDepth);
                     il.Branch(ILOpCode.Brfalse, next);
-                    Generate(exit.Result, f, il, scope, matchDepth);
+                    Generate(exit.Result, f, il, scope, matchDepth, callDepth);
                     il.Branch(ILOpCode.Br, result);
                     il.MarkLabel(next);
                 }
                 for (int i = 0; i < loop.Updates.Count; i++)
                 {
-                    Generate(loop.Updates[i], f, il, scope, matchDepth);
+                    Generate(loop.Updates[i], f, il, scope, matchDepth, callDepth);
                     il.StoreLocal(scratchBase + i);
                 }
                 for (int i = 0; i < loop.Updates.Count; i++)
@@ -1574,7 +1672,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             }
             case ValueMatch m:
                 if (matchDepth >= 16) throw new CompilerError("E_LIMIT", "match nesting limit");
-                Generate(m.Subject, f, il, bindings, matchDepth + 1);
+                Generate(m.Subject, f, il, bindings, matchDepth + 1, callDepth);
                 il.StoreLocal(4 + matchDepth);
                 var done = il.DefineLabel();
                 foreach (var arm in m.Arms)
@@ -1590,10 +1688,10 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                     if (arm.Binding != null) armBindings[arm.Binding] = 4 + matchDepth;
                     if (arm.Guard != null)
                     {
-                        Generate(arm.Guard, f, il, armBindings, matchDepth + 1);
+                        Generate(arm.Guard, f, il, armBindings, matchDepth + 1, callDepth);
                         il.Branch(ILOpCode.Brfalse, next);
                     }
-                    Generate(arm.Result, f, il, armBindings, matchDepth + 1);
+                    Generate(arm.Result, f, il, armBindings, matchDepth + 1, callDepth);
                     il.Branch(ILOpCode.Br, done);
                     il.MarkLabel(next);
                 }
