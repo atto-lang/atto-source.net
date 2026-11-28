@@ -138,12 +138,15 @@ static class Program
         // must be independently fenced, not mistaken for a new operation.
         UdpLoopbackHost? recursiveSocket = null;
         bool rejectedReentrancy = false;
+        bool rejectedRetirement = false;
         UdpLoopbackHost.Authorize reentrantGate = (port, action) =>
         {
             if (action == UdpLoopbackHost.Action.Send)
             {
                 try { _ = recursiveSocket!.LocalPort; }
                 catch (InvalidOperationException) { rejectedReentrancy = true; }
+                try { recursiveSocket!.Dispose(); }
+                catch (InvalidOperationException) { rejectedRetirement = true; }
             }
         };
         using (var reentrant = UdpLoopbackHost.Bind(0, reentrantGate))
@@ -153,6 +156,8 @@ static class Program
                 "reentrant guard send must remain usable");
             Require(rejectedReentrancy,
                 "nested UDP accessor must not pass the same-thread monitor");
+            Require(rejectedRetirement,
+                "same-thread authorization callback retired an active UDP descriptor");
             Require(AwaitPacket(second, 4).CopyBytes()[0] == 39,
                 "rejected reentrant call altered valid datagram");
         }
