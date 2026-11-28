@@ -44,11 +44,15 @@ public static class TaskI64Source
         if (bindingKind is not ("const" or "let" or "val"))
             throw new FormatException("Task-i64 root requires one explicit Future<int> binding");
         at++;
-        Expect("Future"); Expect("<"); Expect("int"); Expect(">");
+        bool taskFuture = Current() == "TaskFuture";
+        if (taskFuture && bindingKind == "const")
+            throw new FormatException("E_CONST: TaskFuture is a runtime-only affine handle");
+        if (taskFuture) Expect("TaskFuture"); else Expect("Future");
+        Expect("<"); Expect("int"); Expect(">");
         string name = Current();
         if (name.Length is < 1 or > 128 || !IdentifierStart(name[0]) ||
             !name.All(IdentifierPart) || name is "task" or "await" or "return" or "susp" or "suspends" or "val" or "sync" or
-                "Future" or "Task" or "self" or "main" or "int" or "let" or "const" or
+                "Future" or "TaskFuture" or "Task" or "self" or "main" or "int" or "let" or "const" or
                 "throw" or "raise" or "panic" or "async" or "suspend" or "spawn" or
                 "actor" or "class" or "if" or "else" or "while" or "for" or "end" or
                 "true" or "false" or "fnc" or "pub" or "define" or "rt")
@@ -58,6 +62,8 @@ public static class TaskI64Source
         bool canonical = Current() == "task";
         if (canonical && (!suspendingEntry || bindingKind == "const"))
             throw new FormatException("Task-i64 scheduled task requires a suspending root and a runtime Future binding");
+        if (taskFuture && !canonical)
+            throw new FormatException("E_UNSUPPORTED: TaskFuture requires a directly spawned child in the closed Task-i64 profile");
         if (!canonical)
         {
             Expect("Future"); Expect("."); Expect("from_task"); Expect("(");
@@ -87,7 +93,35 @@ public static class TaskI64Source
         Expect(";"); Expect("}");
         if (!canonical) Expect(")");
         Expect(";");
+        // The closed profile admits exactly one observation. Parse a local
+        // observation followed by a second observation as a diagnostic-only
+        // form; all other local-result shapes remain explicitly unsupported.
+        if (taskFuture && (Current() is "val" or "let"))
+        {
+            at++;
+            Expect("int");
+            string local = Current();
+            if (local.Length == 0 || !IdentifierStart(local[0]) ||
+                !local.All(IdentifierPart) || local == name)
+                throw new FormatException("Task-i64 result needs a distinct ordinary identifier");
+            at++;
+            Expect("="); Expect("await"); Expect(name); Expect(";");
+            Expect("return");
+            if (Current() == local)
+            {
+                at++;
+                Expect("+");
+            }
+            if (Current() != "await")
+                throw new FormatException("E_UNSUPPORTED: local TaskFuture result requires general lowering");
+            Expect("await"); Expect(name); Expect(";"); Expect("}");
+            if (at != tokens.Count)
+                throw new FormatException("Task-i64 root has trailing source");
+            throw new FormatException("E_TASK_RESULT_CONSUMED: TaskFuture result cannot be observed twice");
+        }
         Expect("return");
+        if (taskFuture && Current() != "await")
+            throw new FormatException("E_UNSUPPORTED: TaskFuture control/projection requires general lowering");
         if (Current() == "await")
         {
             // Existing direct await path: exactly one checked Future<int>.

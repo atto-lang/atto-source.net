@@ -51,7 +51,7 @@ public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64,
     EqualBool, NotEqualBool, LogicalAnd, LogicalOr, LogicalXor,
     // atto-spec bitwise-and-stream-operators-v1: <<<, >>> and infix ashr.
     ShiftLeft, ShiftRightLogical, ShiftRightArithmetic,
-    Divide, EqualGuestError, NotEqualGuestError, EqualGuestText, NotEqualGuestText, Remainder, Modulo, BitXor }
+    Divide, EqualGuestError, NotEqualGuestError, EqualGuestText, NotEqualGuestText, Remainder, Modulo, BitXor, BitAnd }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
@@ -90,7 +90,8 @@ public sealed record StructuredIf(int At, StructuredExpr Condition,
     IReadOnlyList<StructuredStmt> Then, IReadOnlyList<StructuredStmt>? Else)
     : StructuredStmt(At);
 public sealed record StructuredWhile(int At, StructuredExpr Condition,
-    IReadOnlyList<StructuredStmt> Body) : StructuredStmt(At);
+    IReadOnlyList<StructuredStmt> Body, StructuredStmt? Initializer = null,
+    StructuredSet? Update = null) : StructuredStmt(At);
 // Lexical loop transfers share the same typed CFG/SSA environment.
 public sealed record StructuredBreak(int At) : StructuredStmt(At);
 public sealed record StructuredContinue(int At) : StructuredStmt(At);
@@ -125,10 +126,29 @@ public static partial class OresStructuredParser
                 throw new FormatException(
                     $"NET_STRUCTURED_MACRO_EXPANDER_REQUIRED: macro declarations require typed AST expansion before OresIR/CIL at offset {tokens[i].Offset}; runtime fallback is forbidden");
             if (tokens[i].Text == "!" && i + 1 < tokens.Count &&
-                tokens[i + 1].Text == "(" && !IsPrefixBangPosition(tokens, i))
+                tokens[i + 1].Text == "(" && !IsPrefixBangPosition(tokens, i) &&
+                !IsExplicitWrappedAssignment(tokens, i))
                 throw new FormatException(
                     $"NET_STRUCTURED_MACRO_EXPANDER_REQUIRED: macro invocation requires typed AST expansion before OresIR/CIL at offset {tokens[i].Offset}; runtime fallback is forbidden");
         }
+    }
+
+    // Only the reserved explicit local assignment statement shape can bypass
+    // the generic macro denial. The typed Reader still checks the entire
+    // statement, target authority, expression, closing ')' and terminator.
+    // In particular a call, member, nested value or arbitrary macro remains denied.
+    private static bool IsExplicitWrappedAssignment(IReadOnlyList<Token> tokens, int bang)
+    {
+        if (bang < 2 || bang + 3 >= tokens.Count) return false;
+        var verb = tokens[bang - 1];
+        if (verb.Text != "set" || verb.Offset + verb.Text.Length != tokens[bang].Offset ||
+            tokens[bang - 2].Text is not ("{" or ";") ||
+            tokens[bang + 1].Text != "(" || tokens[bang + 3].Text != "=")
+            return false;
+        var name = tokens[bang + 2].Text;
+        return name.Length is >= 1 and <= MaxIdentifier &&
+            (Alpha(name[0]) || name[0] == '_') &&
+            name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_');
     }
 
     // A parenthesized boolean operand is not a macro splice. Permit only
@@ -164,8 +184,23 @@ public static partial class OresStructuredParser
             else if (t == "{")
             {
                 if (depth > 0) { depth--; continue; }
-                return j >= 2 && tokens[j - 1].Text is "struct" or "record" &&
-                       tokens[j - 2].Text is "infer" or "=";
+                if (j >= 2 && tokens[j - 1].Text is ("struct" or "record") &&
+                    tokens[j - 2].Text is ("infer" or "=")) return true;
+                // Only the exact local const Record initializer prefix may
+                // admit a spread through this lexical preflight. The Reader
+                // still checks the operand, shape, collisions and constness.
+                int eq = j - 1;
+                if (eq >= 0 && tokens[eq].Text == "infer") eq--;
+                if (eq < 2 || tokens[eq].Text != "=") return false;
+                int kind = eq - 2;
+                if (tokens[kind].Text == "const") return true;
+                if (tokens[kind].Text == "Record")
+                    return kind >= 1 && tokens[kind - 1].Text == "const";
+                if (tokens[kind].Text != ">") return false;
+                int open = kind - 2;
+                if (open >= 0 && tokens[open].Text == "infer") open--;
+                return open >= 2 && tokens[open].Text == "<" &&
+                    tokens[open - 1].Text == "Record" && tokens[open - 2].Text == "const";
             }
         }
         return false;
@@ -628,8 +663,15 @@ public static partial class OresStructuredParser
                 tokens[i + 2].Text == "of" &&
                 tokens[i].Text is "Tuple" or "Map" or "List" or
                     "Vector" or "Set" or "Entry" or "Pair" or "Record")
-                throw new FormatException(
+            {
+                bool localPair = tokens[i].Text == "Pair" && linking is null &&
+                    frozenNamespace is null && i >= 3 && i + 3 < tokens.Count &&
+                    tokens[i - 3].Text == "const" &&
+                    PortableUnicodeIdentifier.IsName(tokens[i - 2].Text) &&
+                    tokens[i - 1].Text == "=" && tokens[i + 3].Text == "(";
+                if (!localPair) throw new FormatException(
                     $"E_COLLECTION_FACTORY_UNSUPPORTED: {tokens[i].Text}.of requires typed product/collection CFG and NativeAOT CIL lowering at offset {tokens[i].Offset}");
+            }
             if (tokens[i].Text == "~" && i + 1 < tokens.Count &&
                 tokens[i + 1].Text is "tuple" or "map" or "array" or "list" or
                     "vector" or "set" or "entry" or "pair" or "record" or
@@ -932,7 +974,7 @@ public static partial class OresStructuredParser
         return false;
     }
 
-    private readonly record struct Token(string Text, int Offset);
+    private readonly record struct Token(string Text, int Offset, bool NewlineBefore = false);
     private sealed class Lexer(string source, bool moduleMode = false,
         bool allowStaticTupleProjection = false, bool attachedStructTarget = false, bool ownedUnwind = false)
     {
@@ -941,14 +983,25 @@ public static partial class OresStructuredParser
         private bool previousWasString;
         private bool previousWasSync;
         private string previousToken = "", beforePreviousToken = "";
+        private readonly Queue<string> recentTokens = new();
+        private void Remember(string word)
+        {
+            if (recentTokens.Count == 5) recentTokens.Dequeue();
+            recentTokens.Enqueue(word);
+        }
         private bool insideBooleanLiteralPack;
         private bool previousWasConst;
         private bool sawTupleDeclaration;
         public Token Read()
         {
+            bool newlineBefore = false;
             while (index < source.Length)
             {
-                if (char.IsWhiteSpace(source[index])) { index++; continue; }
+                if (char.IsWhiteSpace(source[index]))
+                {
+                    newlineBefore |= source[index] is '\n' or '\r';
+                    index++; continue;
+                }
                 if (source[index] == '/' && index + 1 < source.Length &&
                     source[index + 1] == '/')
                 {
@@ -995,7 +1048,14 @@ public static partial class OresStructuredParser
             bool precededByString = previousWasString;
             previousWasWith = false;
             previousWasString = false;
-            if (precededByWith && ch == '{' && !attachedStructTarget)
+            // The only newly admitted with prefix is a local scalar const
+            // binding. All other uses keep the existing lexer denial.
+            var withPrefix = precededByWith && ch == '{' ? recentTokens.ToArray() : Array.Empty<string>();
+            bool scalarWith = !moduleMode && withPrefix.Length == 5 &&
+                withPrefix[0] == "const" && withPrefix[2] == "=" &&
+                PortableUnicodeIdentifier.IsName(withPrefix[1]) &&
+                PortableUnicodeIdentifier.IsName(withPrefix[3]) && withPrefix[4] == "with";
+            if (precededByWith && ch == '{' && !attachedStructTarget && !scalarWith)
                 throw new FormatException(
                     $"WITH_BACKEND_UNSUPPORTED: immutable with requires checked rt copy/take, "
                     + $"owned field layout/drop and Native AOT reconstruction at offset {index}");
@@ -1040,7 +1100,8 @@ public static partial class OresStructuredParser
                 index = QuotedSourceSyntax.Scan(source, offset);
                 beforePreviousToken = previousToken;
                 previousToken = source[offset..index];
-                return new Token(previousToken, offset);
+                Remember(previousToken);
+                return new Token(previousToken, offset, newlineBefore);
             }
             if (Digit(ch))
             {
@@ -1181,7 +1242,7 @@ public static partial class OresStructuredParser
                      source[index + 1] == '=') index += 2;
             else if (index + 1 < source.Length &&
                 (((ch == '<' || ch == '>') && source[index + 1] == '=') ||
-                 source.Substring(index, 2) is "->" or "::" or "&&" or "||"))
+                 source.Substring(index, 2) is "->" or "::" or ":=" or "&&" or "||"))
                 index += 2;
             // Functional value application is a checked expression operator,
             // never an actor graph or a general closure capability.
@@ -1197,7 +1258,7 @@ public static partial class OresStructuredParser
             // fail-closed macro and ownership admission gates.
             else if (ch is '!' or '¬') index++;
             else if (ch is '⧖' or '∂') index++;
-            else if (booleanPackBracket || "()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
+            else if (booleanPackBracket || "()+-*/{}:;=<>.,?~&".IndexOf(ch) >= 0 ||
                 (ch == '|' && (precededByString || ownedUnwind)) ||
                 (allowStaticTupleProjection && sawTupleDeclaration && ch is ('[' or ']')) ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
@@ -1224,7 +1285,8 @@ public static partial class OresStructuredParser
             previousWasConst = tokenText == "const";
             beforePreviousToken = previousToken;
             previousToken = tokenText;
-            return new Token(tokenText, offset);
+            Remember(tokenText);
+            return new Token(tokenText, offset, newlineBefore);
         }
     }
 
@@ -1242,7 +1304,7 @@ public static partial class OresStructuredParser
         // Constant scalar aggregates are compile-time values only; no hidden
         // managed object, dynamic descriptor or NativeAOT aggregate ABI.
         private sealed record StaticAggregate(ClosedAggregateShape Shape,
-            IReadOnlyDictionary<string, StructuredExpr> Values, string? Wrapper = null);
+            IReadOnlyDictionary<string, StructuredExpr> Values, string? Wrapper = null, string? PairKey = null);
         private sealed record NamedAggregateType(string Wrapper, ClosedAggregateShape Shape);
         private readonly List<Dictionary<string, NamedAggregateType>> namedAggregateScopes = new();
 
@@ -1773,6 +1835,11 @@ public static partial class OresStructuredParser
                         // Both x: int and int x use the same static ABI slot.
                         // The name-level '?' in x?: int is a distinct,
                         // as-yet-unlowered omission contract, not Option<T>.
+                        bool rebind = Current.Text == "rebind" && index + 1 < tokens.Count && tokens[index + 1].Text != ":";
+                        if (rebind) index++;
+                        if (rebind && Current.Text == "mut") throw Error("PARAM_REBIND_UNSUPPORTED: mutable reference formal");
+                        if (rebind && Current.Text == "rebind" && index + 1 < tokens.Count && tokens[index + 1].Text != ":")
+                            throw Error("PARAM_REBIND_MODIFIER: duplicate rebind marker");
                         string? nameFirst = null;
                         if (index + 2 < tokens.Count &&
                             tokens[index + 1].Text == "?" &&
@@ -1789,8 +1856,10 @@ public static partial class OresStructuredParser
                         string parameter = nameFirst ?? Name();
                         if (Current.Text is "?" or "=")
                             throw Error("E_OPTIONAL_FORMAL_ABI_UNSUPPORTED: name-level '?' and parameter defaults require checked full-arity binding");
+                        if (rebind && type is not (IrValueType.I64 or IrValueType.Bool))
+                            throw Error("PARAM_REBIND_UNSUPPORTED: only copied scalar formals are admitted");
                         if (!parameterTypes.TryAdd(parameter,
-                            new LocalBinding(type, StructuredBindingKind.Val, null)))
+                            new LocalBinding(type, rebind ? StructuredBindingKind.Let : StructuredBindingKind.Val, null)))
                             throw Error("Duplicate typed helper parameter");
                         parameters.Add(new StructuredParameter(parameter, type));
                     }
@@ -2044,10 +2113,20 @@ public static partial class OresStructuredParser
         {
             if (Current.Text != "const" || index + 3 >= tokens.Count) return false;
             string kind = tokens[index + 1].Text;
-            if (kind is not ("Record" or "Tuple" or "struct")) return false;
+            if (kind is not ("Record" or "Tuple" or "struct"))
+            {
+                if (tokens[index + 2].Text != "=") return false;
+                if (tokens[index + 3].Text == "{") return true;
+                if (index + 5 < tokens.Count && tokens[index + 4].Text == "with" && tokens[index + 5].Text == "{") return true;
+                // Do not reinterpret an ordinary grouped scalar expression.
+                return tokens[index + 3].Text == "(" &&
+                    (tokens[index + 4].Text == ")" ||
+                     index + 5 < tokens.Count && tokens[index + 5].Text is (":" or "=" or ":="));
+            }
             if (tokens[index + 2].Text == "<") return true;
             return index + 4 < tokens.Count && tokens[index + 3].Text == "=" &&
-                tokens[index + 4].Text == (kind == "struct" ? "{" : "(");
+                (kind == "Record" ? tokens[index + 4].Text is ("{" or "(")
+                    : tokens[index + 4].Text == (kind == "struct" ? "{" : "("));
         }
 
         // Aggregate names are erased by static scalar lowering. Do not let
@@ -2080,8 +2159,9 @@ public static partial class OresStructuredParser
         private (StructuredStmt Statement, bool Returns) NamedAggregate(int depth, int at)
         {
             Expect("const");
-            string wrapper = Current.Text;
-            index++;
+            bool explicitWrapper = Current.Text is "Record" or "Tuple" or "struct";
+            string wrapper = explicitWrapper ? Current.Text : "Record";
+            if (explicitWrapper) index++;
             string? alias = null;
             bool introduce = false;
             NamedAggregateType? expected = null;
@@ -2098,9 +2178,7 @@ public static partial class OresStructuredParser
                 if (introduce && (expected is not null || scalarDenotations.ContainsKey(alias) ||
                     localTypeScopes.Any(scope => scope.Contains(alias))))
                     throw Error("E_DUPLICATE_TYPE: inferred aggregate alias already declared");
-                if (!introduce && expected is null)
-                    throw Error("E_UNKNOWN_TYPE: missing inferred aggregate alias");
-                if (!introduce && expected!.Wrapper != wrapper)
+                if (!introduce && expected is not null && expected.Wrapper != wrapper)
                     throw Error("E_AGGREGATE_KIND: incompatible named aggregate");
             }
             string rowName = NamedAggregateIdentifier();
@@ -2108,19 +2186,105 @@ public static partial class OresStructuredParser
                 aggregateScopes.Any(scope => scope.ContainsKey(rowName)))
                 throw Error("Duplicate aggregate binding");
             Expect("=");
-            string close = wrapper == "struct" ? "}" : ")";
-            Expect(wrapper == "struct" ? "{" : "(");
+            if (Take("infer"))
+            {
+                if (wrapper != "Record" || alias is null || introduce)
+                    throw Error("E_TYPE_INFER_AMBIGUOUS: infer requires Record<T>");
+                if (expected is null)
+                {
+                    if (scopes.Any(scope => scope.ContainsKey(alias)) ||
+                        aggregateScopes.Any(scope => scope.ContainsKey(alias)) ||
+                        localTypeScopes.Any(scope => scope.Contains(alias)) || alias == rowName)
+                        throw Error("E_DUPLICATE_TYPE: inferred aggregate alias collides");
+                    introduce = true;
+                }
+            }
+            if (alias is not null && !introduce && expected is null)
+                throw Error("E_UNKNOWN_TYPE: missing inferred aggregate alias");
+            if (introduce && (alias == rowName || scopes.Any(scope => scope.ContainsKey(alias!)) ||
+                aggregateScopes.Any(scope => scope.ContainsKey(alias!))))
+                throw Error("E_DUPLICATE_TYPE: inferred aggregate alias collides");
+            StaticAggregate? withBase = null;
+            if (wrapper == "Record" && index + 1 < tokens.Count && tokens[index + 1].Text == "with")
+            {
+                string originName = NamedAggregateIdentifier();
+                Expect("with");
+                withBase = FindAggregate(originName);
+                if (withBase is null || withBase.Shape.Kind != ClosedAggregateKind.ReadonlyRecord ||
+                    withBase.Wrapper is ("Tuple" or "Pair") || scopes.Any(scope => scope.ContainsKey(originName)) ||
+                    withBase.Values.Values.Any(v => v is not StructuredInt and not StructuredBool))
+                    throw Error("WITH_BACKEND_UNSUPPORTED: E_RECORD_WITH: requires earlier immutable scalar Record");
+                if (Current.Text != "{") throw Error("E_RECORD_WITH: expected braces");
+            }
+            if (!explicitWrapper && Current.Text == "(")
+            {
+                if (tokens[index + 1].Text == ")") wrapper = "Tuple";
+                else if (tokens[index + 2].Text == ":=")
+                    throw Error("E_PAIR_UNSUPPORTED: grouped Pair and Tuple of Pairs require nominal product lowering");
+                else if (tokens[index + 2].Text != ":")
+                    throw Error("E_RECORD_CONTEXT: inferred parenthesized Record fields require colon");
+            }
+            string open = wrapper == "struct" || (wrapper == "Record" && Current.Text == "{") ? "{" : "(";
+            string close = open == "{" ? "}" : ")";
+            Expect(open);
             var plan = new ClosedAggregateSpreadPlan(wrapper == "struct"
                 ? ClosedAggregateKind.ExactStruct : ClosedAggregateKind.ReadonlyRecord);
             var values = new Dictionary<string, StructuredExpr>(StringComparer.Ordinal);
-            do
+            var explicitFields = new HashSet<string>(StringComparer.Ordinal);
+            var overlap = new HashSet<string>(StringComparer.Ordinal);
+            if (withBase is not null)
             {
-                if (values.Count >= 64) throw Error("AGGREGATE_FIELD_BUDGET");
+                plan.AddCheckedSpread(withBase.Shape);
+                foreach (var entry in withBase.Values) values.Add(entry.Key, entry.Value);
+            }
+            int entries = 0;
+            if (Current.Text == close && !explicitWrapper && wrapper == "Record")
+                throw Error("E_EMPTY_AGGREGATE: untyped empty braces are ambiguous");
+            if (Current.Text == close && wrapper == "struct")
+                throw Error("E_EMPTY_AGGREGATE: empty Struct is not admitted in this scalar profile");
+            while (Current.Text != close)
+            {
+                if (++entries > 64) throw Error("AGGREGATE_FIELD_BUDGET");
+                if (wrapper == "Record" && open == "{" && Take("."))
+                {
+                    Expect("."); Expect(".");
+                    string originName = NamedAggregateIdentifier();
+                    var origin = FindAggregate(originName);
+                    if (origin is null || scopes.Any(scope => scope.ContainsKey(originName)) || origin.Shape.Kind != ClosedAggregateKind.ReadonlyRecord ||
+                        origin.Wrapper is ("Tuple" or "Pair") || origin.Values.Values.Any(v => v is not StructuredInt and not StructuredBool))
+                        throw Error("E_RECORD_SPREAD: requires an earlier constant Record");
+                    foreach (var entry in origin.Values)
+                    {
+                        if (explicitFields.Contains(entry.Key))
+                            throw Error("E_RECORD_SPREAD: spread overrides explicit field");
+                        if (values.ContainsKey(entry.Key)) overlap.Add(entry.Key);
+                        values[entry.Key] = entry.Value;
+                    }
+                    plan.AddCheckedSpread(origin.Shape);
+                    if (values.Count > 64) throw Error("AGGREGATE_FIELD_BUDGET");
+                    if (!Take(",") || Current.Text == close) break;
+                    continue;
+                }
                 int offset = Current.Offset;
                 string field = wrapper == "Tuple"
                     ? values.Count.ToString(CultureInfo.InvariantCulture) : NamedAggregateIdentifier();
-                if (wrapper != "Tuple") Expect(wrapper == "struct" ? ":" : "=");
-                if (values.ContainsKey(field)) throw Error("E_DUPLICATE_FIELD: duplicate aggregate field");
+                bool pairEntry = false;
+                if (wrapper == "Record")
+                {
+                    if (!explicitWrapper && open == "(")
+                    {
+                        if (!Take(":"))
+                            throw Error("E_LITERAL_KIND: inferred parenthesized Record fields require colon");
+                    }
+                    else
+                    {
+                        pairEntry = Take(":=");
+                        if (!pairEntry && !Take(":")) Expect("=");
+                    }
+                }
+                else if (wrapper == "struct") Expect(":");
+                if (!explicitFields.Add(field)) throw Error("E_DUPLICATE_FIELD: duplicate aggregate field");
+                overlap.Remove(field);
                 var expr = Expr(depth + 1);
                 if (expr.Type is not (IrValueType.Bool or IrValueType.I64))
                     throw Error("E_TYPE_INFER_AMBIGUOUS: only bool/int constant fields admitted");
@@ -2129,11 +2293,20 @@ public static partial class OresStructuredParser
                 catch (OverflowException) { throw Error("Aggregate const field overflow"); }
                 catch (DivideByZeroException) { throw Error("Aggregate const field division by zero"); }
                 plan.AddNamed(field, expr.Type == IrValueType.Bool ? "bool" : "int");
-                values.Add(field, expr.Type == IrValueType.Bool
-                    ? new StructuredBool(offset, value != 0) : new StructuredInt(offset, value));
-            } while (Take(","));
+                values[field] = expr.Type == IrValueType.Bool
+                    ? new StructuredBool(offset, value != 0) : new StructuredInt(offset, value);
+                if (values.Count > 64) throw Error("AGGREGATE_FIELD_BUDGET");
+                if (!Take(","))
+                {
+                    if (pairEntry && open == "{" && Current.NewlineBefore &&
+                        PortableUnicodeIdentifier.IsName(Current.Text)) continue;
+                    break;
+                }
+                if (Current.Text == close) break;
+            }
             Expect(close);
             Expect(";");
+            if (overlap.Count > 0) throw Error("E_RECORD_SPREAD: unresolved overlapping spreads");
             var shape = plan.InferShape();
             if (!introduce && expected is not null &&
                 !shape.Fields.SequenceEqual(expected.Shape.Fields))
@@ -2150,10 +2323,194 @@ public static partial class OresStructuredParser
                 new StructuredInt(at, 0), StructuredBindingKind.Const), false);
         }
 
+        // Nonescaping compile-time integer Pair. Keep nominal kind and key
+        // metadata; only explicit int projections reach checked scalar CIL.
+        private bool StartsLocalPair()
+        {
+            if (Current.Text != "const" || index + 3 >= tokens.Count) return false;
+            if (tokens[index + 1].Text == "Pair" && tokens[index + 2].Text == "<") return true;
+            if (tokens[index + 2].Text == ":=") return true;
+            return tokens[index + 2].Text == "=" && index + 4 < tokens.Count &&
+                (tokens[index + 4].Text == ":=" ||
+                 (tokens[index + 3].Text == "Pair" && tokens[index + 4].Text == "."));
+        }
+
+        private string PairLiteralKey()
+        {
+            string text = Current.Text;
+            if (text.Length >= 2 && (text[0] is '"' or '\'') && text[^1] == text[0])
+            {
+                string key = text[1..^1];
+                if (key.Any(c => c < ' ' || c > '~' || c == '\\' || c == (char)36))
+                    throw Error("E_PAIR_KEY_UNSUPPORTED: plain static string required");
+                index++;
+                return key;
+            }
+            return NamedAggregateIdentifier();
+        }
+
+        private (StructuredStmt Statement, bool Returns) LocalPair(int depth, int at)
+        {
+            if (linking is not null || frozenProvider)
+                throw Error("E_PAIR_SCOPE_UNSUPPORTED: standalone scalar Pair only");
+            Expect("const");
+            bool typed = Take("Pair");
+            if (typed) { Expect("<"); Expect("int"); Expect(">"); }
+            string name = NamedAggregateIdentifier();
+            if (scopes.Any(scope => scope.ContainsKey(name)) ||
+                aggregateScopes.Any(scope => scope.ContainsKey(name)) ||
+                localTypeScopes.Any(scope => scope.Contains(name)))
+                throw Error("E_DUPLICATE: duplicate Pair binding");
+            string key;
+            StructuredExpr payload;
+            if (typed)
+            {
+                Expect("=");
+                string origin = NamedAggregateIdentifier();
+                var pair = FindAggregate(origin);
+                if (pair is null || pair.Wrapper != "Pair" || pair.PairKey is null ||
+                    !pair.Values.TryGetValue("value", out var prior) || prior is not StructuredInt)
+                    throw Error("E_PAIR_TYPE: expected initialized Pair<int>");
+                key = pair.PairKey;
+                payload = prior;
+            }
+            else if (Take(":="))
+            {
+                key = name;
+                payload = Expr(depth + 1);
+            }
+            else
+            {
+                Expect("=");
+                if (Take("Pair"))
+                {
+                    Expect("."); Expect("of"); Expect("(");
+                    if (Current.Text.Length < 2 || Current.Text[0] is not ('"' or '\''))
+                        throw Error("E_PAIR_KEY_TYPE: factory requires a string literal");
+                    key = PairLiteralKey();
+                    Expect(","); payload = Expr(depth + 1); Expect(")");
+                }
+                else
+                {
+                    key = PairLiteralKey();
+                    Expect(":="); payload = Expr(depth + 1);
+                }
+            }
+            Expect(";");
+            Require(payload, IrValueType.I64, "E_PAIR_TYPE: bounded Pair requires int payload");
+            if (!IsCompileTimeScalar(payload))
+                throw Error("E_PAIR_CONSTEXPR: const Pair requires proven compile-time value");
+            long value;
+            try { value = ConstantValue(payload); }
+            catch (OverflowException) { throw Error("E_CONST_OVERFLOW: Pair payload overflow"); }
+            catch (DivideByZeroException) { throw Error("E_PAIR_CONSTEXPR: division by zero"); }
+            var plan = new ClosedAggregateSpreadPlan(ClosedAggregateKind.ReadonlyRecord);
+            plan.AddNamed("value", "int");
+            var values = new Dictionary<string, StructuredExpr>(StringComparer.Ordinal)
+            {
+                ["value"] = new StructuredInt(at, value)
+            };
+            aggregateScopes[^1].Add(name, new StaticAggregate(plan.InferShape(),
+                new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredExpr>(values),
+                "Pair", key));
+            return (new StructuredLet(at, "$aggregate_" + aggregateSentinels++, IrValueType.I64,
+                new StructuredInt(at, 0), StructuredBindingKind.Const), false);
+        }
+
+        // Scalar capture only: no arbitrary RHS, reference payload, runtime
+        // aggregate allocation, mutable loan or recursive projection.
+        private (StructuredStmt Statement, bool Returns) ScalarDestructureCapture(int at)
+        {
+            Expect("const");
+            string open = Current.Text;
+            string kind = open == "(" ? "Tuple" : "Record";
+            string close = open == "(" ? ")" : "}";
+            Expect(open);
+            var names = new List<string>();
+            var unique = new HashSet<string>(StringComparer.Ordinal);
+            while (Current.Text != close)
+            {
+                if (names.Count >= 64) throw Error("E_DESTRUCTURE_LIMIT");
+                if (Current.Text is "let" or "val" or "mut" or "take" or "borrow" or "copy" or "share")
+                    throw Error("E_DESTRUCTURE_POLICY_UNSUPPORTED: scalar readonly const leaves only");
+                Take("const");
+                string name = NamedAggregateIdentifier();
+                if (name == "_" || !unique.Add(name))
+                    throw Error("E_DESTRUCTURE_DUPLICATE_OR_DISCARD");
+                names.Add(name);
+                if (!Take(",")) break;
+            }
+            Expect(close);
+            Expect("as");
+            string target = kind;
+            if (Current.Text is "Tuple" or "Record" or "Array")
+            {
+                target = Current.Text;
+                index++;
+            }
+            string capture = NamedAggregateIdentifier();
+            if (!unique.Add(capture)) throw Error("E_DESTRUCTURE_DUPLICATE: capture collides with leaf");
+            Expect("=");
+            string sourceName = NamedAggregateIdentifier();
+            Expect(";");
+            var source = FindAggregate(sourceName);
+            if (source is null || source.Wrapper != kind || scopes.Any(scope => scope.ContainsKey(sourceName)))
+                throw Error("E_DESTRUCTURE_KIND: expected initialized " + kind);
+            if (target != kind && !(kind == "Tuple" && target == "Record"))
+                throw Error("E_DESTRUCTURE_CONVERSION_UNSUPPORTED");
+            if ((kind == "Tuple" && names.Count != source.Values.Count) ||
+                (names.Count == 0 && source.Values.Count != 0))
+                throw Error("E_DESTRUCTURE_ARITY");
+            if (source.Values.Values.Any(v => v is not StructuredInt and not StructuredBool))
+                throw Error("E_DESTRUCTURE_SOURCE_UNSUPPORTED: constant scalar fields only");
+            foreach (var name in unique)
+                if (scopes.Any(scope => scope.ContainsKey(name)) ||
+                    aggregateScopes.Any(scope => scope.ContainsKey(name)) ||
+                    localTypeScopes.Any(scope => scope.Contains(name)) ||
+                    namedAggregateScopes.Any(scope => scope.ContainsKey(name)))
+                    throw Error("E_DESTRUCTURE_DUPLICATE: " + name);
+            var values = new Dictionary<string, StructuredExpr>(StringComparer.Ordinal);
+            var writes = new List<StructuredAggregateScalarWrite>();
+            var pending = new Dictionary<string, LocalBinding>(StringComparer.Ordinal);
+            for (int i = 0; i < names.Count; ++i)
+            {
+                string name = names[i];
+                string key = kind == "Tuple" ? i.ToString(CultureInfo.InvariantCulture) : name;
+                if (!source.Values.TryGetValue(key, out var value))
+                    throw Error("E_DESTRUCTURE_FIELD: missing field " + key);
+                values.Add(name, value);
+                pending.Add(name, new LocalBinding(value.Type, StructuredBindingKind.Const, ConstantValue(value)));
+                writes.Add(new StructuredAggregateScalarWrite(name, value.Type, value));
+            }
+            var shape = source.Shape;
+            IReadOnlyDictionary<string, StructuredExpr> captured = source.Values;
+            if (target != kind)
+            {
+                var plan = new ClosedAggregateSpreadPlan(ClosedAggregateKind.ReadonlyRecord);
+                foreach (var name in names)
+                    plan.AddNamed(name, values[name].Type == IrValueType.Bool ? "bool" : "int");
+                shape = plan.InferShape();
+                captured = new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredExpr>(values);
+            }
+            // Commit all bindings only after checking every path and policy.
+            foreach (var entry in pending) scopes[^1].Add(entry.Key, entry.Value);
+            aggregateScopes[^1].Add(capture, new StaticAggregate(shape, captured, target));
+            if (writes.Count == 0)
+                return (new StructuredLet(at, "$aggregate_" + aggregateSentinels++, IrValueType.I64,
+                    new StructuredInt(at, 0), StructuredBindingKind.Const), false);
+            return (new StructuredAggregateRuntimeLet(at, Array.AsReadOnly(writes.ToArray())), false);
+        }
+
         private (StructuredStmt Statement, bool Returns) Statement(int depth, bool outerElse = false, bool keywordArm = false)
         {
             Budget(depth);
             int at = Current.Offset;
+            if (StartsLocalPair()) return LocalPair(depth, at);
+            if (Current.Text == "const" && index + 1 < tokens.Count &&
+                tokens[index + 1].Text is ("(" or "{"))
+                return ScalarDestructureCapture(at);
+            if (Current.Text == "const" && index + 1 < tokens.Count && tokens[index + 1].Text == "[")
+                throw Error("E_DESTRUCTURE_ARRAY_UNSUPPORTED: checked array capture layout required");
             if (StartsNamedAggregate()) return NamedAggregate(depth, at);
             if (Current.Text is "class" or "actor" ||
                 (Current.Text == "define" && index + 1 < tokens.Count &&
@@ -2235,7 +2592,7 @@ public static partial class OresStructuredParser
                         if (source is null)
                             throw new FormatException(
                                 $"Aggregate spread requires an immutable earlier row at offset {sourceAt}");
-                        if (source.Wrapper == "Tuple") throw Error("Tuple cannot spread into a named row");
+                        if (source.Wrapper is "Tuple" or "Pair") throw Error("Product cannot spread into a named row");
                         plan.AddCheckedSpread(source.Shape);
                         // Iterate canonical checked source shape, never a dynamic dictionary.
                         foreach (var field in source.Shape.Fields)
@@ -2317,8 +2674,8 @@ public static partial class OresStructuredParser
                         if (origin is null)
                             throw new FormatException(
                                 $"Aggregate spread requires a previous immutable closed local at offset {offset}");
-                        if (origin.Wrapper == "Tuple")
-                            throw Error("Tuple cannot spread into a named row");
+                        if (origin.Wrapper is "Tuple" or "Pair")
+                            throw Error("Product cannot spread into a named row");
                         // A const value requires every spread field to be a
                         // compile-time scalar. A runtime val row may only be
                         // spread into another runtime val aggregate.
@@ -2488,6 +2845,11 @@ public static partial class OresStructuredParser
             }
             if ((localReturn is not null || guardFailureDepth != 0) && Current.Text is ("defer" or "using"))
                 throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: resource cleanup requires a verified unwind continuation");
+            // The scalar/tagged CFG has no cleanup registration or recovery
+            // continuation ABI. Never treat a pipeline as a delayed call or
+            // accept a factory whose callback would be discarded.
+            if (Current.Text is ("defer" or "recover"))
+                throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: defer/recover requires checked registration, capture lifetime and unwind lowering");
             if (Take("try"))
             {
                 if (localReturn is not null)
@@ -2787,6 +3149,52 @@ public static partial class OresStructuredParser
                 Expect(";");
                 return (new StructuredContinue(at), true);
             }
+            if (Take("for"))
+            {
+                // First bounded slice: one scalar local or explicit existing-local
+                // initializer; mandatory bool predicate and explicit scalar update.
+                // The loop scope is independent of the body scope.
+                bool parenthesized = Take("(");
+                scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
+                localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+                aggregateScopes.Add(new Dictionary<string, StaticAggregate>(StringComparer.Ordinal));
+                namedAggregateScopes.Add(new Dictionary<string, NamedAggregateType>(StringComparer.Ordinal));
+                try
+                {
+                    StructuredStmt? initializer = null;
+                    if (Take(";")) { }
+                    else if (Current.Text == "let")
+                    {
+                        var (decl, _) = Statement(depth + 1);
+                        if (decl is not StructuredLet { ValueType: IrValueType.I64 or IrValueType.Bool })
+                            throw Error("E_FOR_SCALAR_ONLY: expected scalar let initializer");
+                        initializer = decl;
+                    }
+                    else
+                    {
+                        initializer = ReadLocalUpdate(depth + 1, Current.Offset, true);
+                        Expect(";");
+                    }
+                    var condition = Expr(depth + 1);
+                    Require(condition, IrValueType.Bool, "For condition must be bool");
+                    Expect(";");
+                    var update = ReadLocalUpdate(depth + 1, Current.Offset, true);
+                    if (parenthesized) Expect(")");
+                    if (loopDepth >= MaxDepth) throw Error("Loop nesting limit exceeded");
+                    loopDepth++;
+                    IReadOnlyList<StructuredStmt> body;
+                    try { (body, _) = Block(depth + 1); }
+                    finally { loopDepth--; }
+                    return (new StructuredWhile(at, condition, body, initializer, update), false);
+                }
+                finally
+                {
+                    scopes.RemoveAt(scopes.Count - 1);
+                    localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+                    aggregateScopes.RemoveAt(aggregateScopes.Count - 1);
+                    namedAggregateScopes.RemoveAt(namedAggregateScopes.Count - 1);
+                }
+            }
             if (Take("while") || Take("loop"))
             {
                 bool unconditional = tokens[index - 1].Text == "loop";
@@ -2804,6 +3212,36 @@ public static partial class OresStructuredParser
                 // Even a constant-true loop is not accepted as a return proof.
                 return (new StructuredWhile(at, condition, body), false);
             }
+            var assignment = ReadLocalUpdate(depth, at, false);
+            Expect(";");
+            return (assignment, false);
+        }
+
+        private StructuredSet ReadLocalUpdate(int depth, int at, bool forHeader)
+        {
+            // Contextual explicit update, using existing typed local authority.
+            // A local actually named set followed by '=' remains compatible.
+            bool Pair(string a, string b)
+            {
+                if (index + 1 >= tokens.Count || Current.Text != a ||
+                    tokens[index + 1].Text != b ||
+                    Current.Offset + a.Length != tokens[index + 1].Offset) return false;
+                index += 2;
+                return true;
+            }
+            bool explicitSet = Current.Text == "set" && index + 1 < tokens.Count &&
+                tokens[index + 1].Text is { Length: > 0 } following &&
+                (Alpha(following[0]) || following[0] == '_' || following is "!" or "+" or "-");
+            if (forHeader && !explicitSet) throw Error("E_EXPLICIT_REBIND: for clause requires set");
+            bool wrapped = false, increment = false;
+            StructuredOperator? compound = null;
+            if (explicitSet)
+            {
+                index++;
+                if (Take("!")) wrapped = Take("(");
+                if (Pair("+", "+")) { compound = StructuredOperator.Add; increment = true; }
+                else if (Pair("-", "-")) { compound = StructuredOperator.Subtract; increment = true; }
+            }
             int variableAt = Current.Offset;
             string variable = Name();
             var binding = Lookup(variable, variableAt);
@@ -2812,20 +3250,31 @@ public static partial class OresStructuredParser
                     $"E_IMMUTABLE_REBIND: Cannot reassign {binding.Kind.ToString().ToLowerInvariant()} binding '{variable}' at offset {variableAt}");
             if (inlineValueBindingFloor is int floor && scopes.Take(floor).Any(scope => scope.ContainsKey(variable)))
                 throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: value-context sync task cannot yet assign a surrounding local");
-            bool compoundXor = Take("^^=");
-            if (!compoundXor) Expect("=");
-            if (compoundXor && binding.Type != IrValueType.I64)
-                throw Error("Compound XOR requires a mutable int local");
-            // A compound RHS must not acquire the special complete-statement
-            // writeback permission of an ordinary assignment. Preserve the
-            // existing lexical task, suspension and ownership gates.
-            var assigned = ReadStatementValue(depth + 1, binding.Type, allowWriteback: !compoundXor);
+            if (!increment && explicitSet)
+            {
+                if (Pair("+", "+")) { compound = StructuredOperator.Add; increment = true; }
+                else if (Pair("-", "-")) { compound = StructuredOperator.Subtract; increment = true; }
+                else if (Pair("+", "=")) compound = StructuredOperator.Add;
+                else if (Pair("-", "=")) compound = StructuredOperator.Subtract;
+                else if (Pair("*", "=")) compound = StructuredOperator.Multiply;
+            }
+            if (!increment && compound is null && Take("^^=")) compound = StructuredOperator.BitXor;
+            if (compound is null) Expect("=");
+            if (compound is not null && binding.Type != IrValueType.I64)
+                throw Error(compound == StructuredOperator.BitXor
+                    ? "Compound XOR requires a mutable int local"
+                    : "Compound update requires a mutable int local");
+            // A compound RHS must not acquire complete-statement writeback permission.
+            if (forHeader && binding.Type is not (IrValueType.I64 or IrValueType.Bool))
+                throw Error("E_FOR_SCALAR_ONLY: expected scalar update");
+            StructuredExpr assigned = increment ? new StructuredInt(variableAt, 1) :
+                forHeader ? Expr(depth + 1) : ReadStatementValue(depth + 1, binding.Type, allowWriteback: compound is null);
             Require(assigned, binding.Type, "Assignment has wrong type");
-            if (compoundXor)
-                assigned = CheckedBinary(variableAt, StructuredOperator.BitXor,
+            if (compound is { } op)
+                assigned = CheckedBinary(variableAt, op,
                     new StructuredRead(variableAt, binding.StorageName ?? variable, IrValueType.I64), assigned, IrValueType.I64);
-            Expect(";");
-            return (new StructuredSet(at, binding.StorageName ?? variable, assigned), false);
+            if (wrapped) Expect(")");
+            return new StructuredSet(at, binding.StorageName ?? variable, assigned);
         }
         // The compatibility spelling remains a contextual type name. A value
         // named boolean followed by = or : retains its existing interpretation.
@@ -3016,6 +3465,7 @@ public static partial class OresStructuredParser
                         StructuredOperator.Remainder => Ores.Net.Runtime.StrictSigned64Arithmetic.Rem(left, right),
                         StructuredOperator.Modulo => Ores.Net.Runtime.StrictSigned64Arithmetic.Mod(left, right),
                         StructuredOperator.BitXor => left ^ right,
+                        StructuredOperator.BitAnd => left & right,
                         StructuredOperator.ShiftLeft => left << ConstantShiftDistance(right),
                         StructuredOperator.ShiftRightLogical => (long)((ulong)left >> ConstantShiftDistance(right)),
                         StructuredOperator.ShiftRightArithmetic => left >> ConstantShiftDistance(right),
@@ -3366,15 +3816,31 @@ public static partial class OresStructuredParser
         private StructuredExpr IntegerXor(int depth)
         {
             Budget(depth);
-            var left = Equal(depth + 1);
+            var left = IntegerAnd(depth);
             while (Current.Text == "^^")
             {
                 int at = Current.Offset;
                 index++;
-                var right = Equal(depth + 1);
+                var right = IntegerAnd(depth);
                 Require(left, IrValueType.I64, "Integer XOR requires int operands");
                 Require(right, IrValueType.I64, "Integer XOR requires int operands");
                 left = CheckedBinary(at, StructuredOperator.BitXor, left, right, IrValueType.I64);
+            }
+            return left;
+        }
+        // Integer & binds below equality and above integer ^^; && remains lazy Boolean conjunction.
+        private StructuredExpr IntegerAnd(int depth)
+        {
+            Budget(depth);
+            var left = Equal(depth + 1);
+            while (Current.Text == "&")
+            {
+                int at = Current.Offset;
+                index++;
+                var right = Equal(depth + 1);
+                Require(left, IrValueType.I64, "Integer AND requires int operands");
+                Require(right, IrValueType.I64, "Integer AND requires int operands");
+                left = CheckedBinary(at, StructuredOperator.BitAnd, left, right, IrValueType.I64);
             }
             return left;
         }

@@ -1,0 +1,309 @@
+# Source-repository-local CI ONLY. Manual and inert until separately reviewed,
+# merged to source main, and isolated ephemeral runners registered by an admin.
+# No cross-organization source copy, pull_request_target, or automatic PR execution.
+name: Atto .NET approved one-shot source-local exact SHA
+on:
+  workflow_dispatch:
+# Private checkout and private Pull Request metadata preflight require separate
+# read-only permission scopes; unspecified scopes remain disabled.
+permissions:
+  contents: read
+  pull-requests: read
+# Serialize manual attestations: never allow a new dispatch to interrupt a
+# currently running exact-SHA isolated one-shot source verification.
+concurrency:
+  group: atto-net-approved-source-local-exact-sha
+  cancel-in-progress: false
+
+jobs:
+  actor-managed-native:
+    # The default-branch workflow is manually dispatched by an approved operator.
+    if: ${{ github.repository == 'atto-lang/atto-source.net' && github.event.repository.private == true && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ${{ fromJSON(matrix.runner_labels) }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            rid: linux-x64
+            executable: Atto.Net.ActorRuntime.Tests
+            runner_labels: '[ "self-hosted", "linux", "x64", "atto-net-approved-one-shot" ]'
+          - os: windows
+            rid: win-x64
+            executable: Atto.Net.ActorRuntime.Tests.exe
+            runner_labels: '[ "self-hosted", "windows", "x64", "atto-net-approved-one-shot" ]'
+    env:
+      SOURCE_HEAD: 3f32ee7ec6e1e1f30520682cada6122b941ed476
+      SOURCE_TREE: 8cab5369d78b185130ef4f51f84f16c7da9b6ece
+    steps:
+      - name: Reject unprotected main or stale actor PR source before checkout
+        shell: pwsh
+        env:
+          GH_REPO_READ_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:GH_REPO_READ_TOKEN) { throw 'E_ADMISSION_NO_READ_TOKEN' }
+          $headers = @{
+            Authorization = "Bearer $env:GH_REPO_READ_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $branch = Invoke-RestMethod -Uri 'https://api.github.com/repos/atto-lang/atto-source.net/branches/main' -Headers $headers
+          # PowerShell's -ne is coercing and case-insensitive. GitHub API
+          # protection must be an actual JSON boolean, not the string "true".
+          if ($branch.name -cne 'main' -or -not ($branch.protected -is [bool]) -or
+              $branch.protected -ne $true) {
+            throw 'E_SOURCE_MAIN_NOT_PROTECTED'
+          }
+          $pr = Invoke-RestMethod -Uri 'https://api.github.com/repos/atto-lang/atto-source.net/pulls/33' -Headers $headers
+          # Do not accept stringified PR numbers or case-folded SHA aliases.
+          if (-not (($pr.number -is [int]) -or ($pr.number -is [long])) -or
+              $pr.number -ne 33 -or
+              $pr.head.sha -cne $env:SOURCE_HEAD -or
+              $pr.head.repo.full_name -cne 'atto-lang/atto-source.net') {
+            throw 'E_ACTOR_PR_SOURCE_DRIFT'
+          }
+          "ATTO_SOURCE_LOCAL_PROTECTED_MAIN_CONFIRMED actor_pr_head=$env:SOURCE_HEAD"
+      - name: Checkout immutable actor PR SHA without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: 3f32ee7ec6e1e1f30520682cada6122b941ed476
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check exact actor commit, root tree and clean checkout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ('${{ github.repository }}' -ne 'atto-lang/atto-source.net') { throw 'Wrong source repository' }
+          $head = (git rev-parse HEAD).Trim()
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($head -ne $env:SOURCE_HEAD -or $tree -ne $env:SOURCE_TREE) {
+            throw "Actor source mismatch head=$head tree=$tree"
+          }
+          if (@(git status --porcelain).Count -ne 0) { throw 'Dirty actor source checkout' }
+          "ATTO_SOURCE_LOCAL_ACTOR_HEAD=$head"
+          "ATTO_SOURCE_LOCAL_ACTOR_TREE=$tree"
+          "ATTO_SOURCE_LOCAL_RUN_ID=${{ github.run_id }} ATTEMPT=${{ github.run_attempt }} WORKFLOW_SHA=${{ github.workflow_sha }}"
+          if (-not $env:RUNNER_NAME -or $env:RUNNER_ENVIRONMENT -ne 'self-hosted') {
+            throw 'Source-local real tests require an assigned isolated self-hosted runner'
+          }
+      - name: Install .NET 10 SDK and .NET 8 runtime
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # pinned v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Check source-selected toolchain
+        shell: pwsh
+        run: |
+          $sdk = (dotnet --version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sdk -notmatch '^10\.') { throw "Expected .NET 10 SDK; got $sdk" }
+          $runtimes = @(dotnet --list-runtimes)
+          if ($LASTEXITCODE -ne 0 -or -not ($runtimes | Select-String -Pattern '^Microsoft\.NETCore\.App 8\.')) { throw 'Missing .NET 8 runtime' }
+          "ATTO_ACTOR_SELECTED_SDK=$sdk"
+      - name: Compile and run real actor host tests under CoreCLR
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $managed = @(dotnet run -c Release --project verification/Atto.Net.ActorRuntime.Tests)
+          if ($LASTEXITCODE -ne 0) { throw 'Actor CoreCLR tests failed' }
+          $managed | Out-Host
+          $receipts = @($managed | Where-Object { $_ -match '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+$' })
+          if ($receipts.Count -ne 1) { throw 'Missing/ambiguous actor CoreCLR receipt' }
+          $count = [int]([regex]::Match($receipts[0], 'cases=([0-9]+)$').Groups[1].Value)
+          if ($count -lt 40) { throw "Actor test count unexpectedly low: $count" }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ATTO_MANAGED_CASES=$count"
+      - name: Publish and run real actor host tests under NativeAOT
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXE: ${{ matrix.executable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'atto-actor-real-nativeaot'
+          dotnet publish verification/Atto.Net.ActorRuntime.Tests -c Release -r $env:RID -p:PublishAot=true --self-contained true -o $out
+          if ($LASTEXITCODE -ne 0) { throw 'Actor NativeAOT publish failed' }
+          $binary = Join-Path $out $env:EXE
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Actor NativeAOT binary missing' }
+          $native = @(& $binary)
+          if ($LASTEXITCODE -ne 0) { throw 'Actor NativeAOT tests failed' }
+          $native | Out-Host
+          $receipts = @($native | Where-Object { $_ -match '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+$' })
+          if ($receipts.Count -ne 1) { throw 'Missing/ambiguous actor NativeAOT receipt' }
+          $count = [int]([regex]::Match($receipts[0], 'cases=([0-9]+)$').Groups[1].Value)
+          if (-not $env:ATTO_MANAGED_CASES -or $count -ne [int]$env:ATTO_MANAGED_CASES) {
+            throw "Actor managed and native counts differ: native=$count managed=$env:ATTO_MANAGED_CASES"
+          }
+          $digest = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
+          "ATTO_ACTOR_SOURCE_LOCAL_NATIVEAOT_PASS rid=$env:RID count=$count sha256=$digest"
+      - name: Postflight verify actor PR head and protected main did not drift
+        shell: pwsh
+        env:
+          GH_REPO_READ_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:GH_REPO_READ_TOKEN) { throw 'E_POSTFLIGHT_NO_READ_TOKEN' }
+          $headers = @{
+            Authorization = "Bearer $env:GH_REPO_READ_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $branch = Invoke-RestMethod -Uri 'https://api.github.com/repos/atto-lang/atto-source.net/branches/main' -Headers $headers
+          if ($branch.name -cne 'main' -or -not ($branch.protected -is [bool]) -or $branch.protected -ne $true) {
+            throw 'E_POSTFLIGHT_SOURCE_MAIN_NOT_PROTECTED'
+          }
+          $pr = Invoke-RestMethod -Uri 'https://api.github.com/repos/atto-lang/atto-source.net/pulls/33' -Headers $headers
+          if (-not (($pr.number -is [int]) -or ($pr.number -is [long])) -or $pr.number -ne 33 -or
+              $pr.head.sha -cne $env:SOURCE_HEAD -or
+              $pr.head.repo.full_name -cne 'atto-lang/atto-source.net') {
+            throw 'E_POSTFLIGHT_ACTOR_PR_HEAD_CHANGED'
+          }
+          "ATTO_SOURCE_LOCAL_ACTOR_POSTFLIGHT_PASS sha=$env:SOURCE_HEAD"
+
+  cil-linux-native:
+    if: ${{ github.repository == 'atto-lang/atto-source.net' && github.event.repository.private == true && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: [self-hosted, linux, x64, atto-net-approved-one-shot]
+    timeout-minutes: 60
+    env:
+      SOURCE_HEAD: 850e46f2a02d3177c8b2f4a8b55a0be96893d09b
+      SOURCE_TREE: 1e81446618fa9f5801b62f8efe8532cff866a74b
+    steps:
+      - name: Reject unprotected main or stale compiler PR source before checkout
+        shell: bash
+        env:
+          GH_REPO_READ_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+          token = os.environ.get("GH_REPO_READ_TOKEN", "")
+          if not token:
+              raise SystemExit("E_ADMISSION_NO_READ_TOKEN")
+          headers = {
+              "Authorization": "Bearer " + token,
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          def read(path):
+              url = "https://api.github.com/repos/atto-lang/atto-source.net/" + path
+              req = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(req, timeout=15) as response:
+                  return json.load(response)
+          main = read("branches/main")
+          if main.get("name") != "main" or main.get("protected") is not True:
+              raise SystemExit("E_SOURCE_MAIN_NOT_PROTECTED")
+          pr = read("pulls/194")
+          head = pr.get("head") or {}
+          if not (
+              pr.get("number") == 194
+              and head.get("sha") == os.environ["SOURCE_HEAD"]
+              and (head.get("repo") or {}).get("full_name") == "atto-lang/atto-source.net"
+          ):
+              raise SystemExit("E_COMPILER_PR_SOURCE_DRIFT")
+          print("ATTO_SOURCE_LOCAL_PROTECTED_MAIN_CONFIRMED compiler_pr_head=" + os.environ["SOURCE_HEAD"])
+          PY
+      # The workflow and its offline test are in protected main, not in
+      # the unmerged compiler PR. Run the test from this exact workflow
+      # revision before switching to the separately pinned compiler SHA.
+      - name: Checkout reviewed source-local workflow and regression suite
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Execute committed admission regression before compiler source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+          test -z "$(git status --porcelain)"
+          test -f scripts/test-net-source-local-preflight.py
+          receipt="$(python3 scripts/test-net-source-local-preflight.py)"
+          expected='ATTO_NET_SOURCE_LOCAL_PREFLIGHT_MOCK_PASS cases=18 optimized=true trigger_mutants=6 header_mutants=5 network=NONE'
+          test "$receipt" = "$expected" || {
+            printf 'E_SOURCE_LOCAL_ADMISSION_REGRESSION: %s\n' "$receipt" >&2
+            exit 1
+          }
+          printf '%s\n' "$receipt"
+      - name: Checkout immutable direct-CIL PR SHA without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: 850e46f2a02d3177c8b2f4a8b55a0be96893d09b
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check exact direct-CIL commit, root tree and clean checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+          git diff --quiet HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "ATTO_SOURCE_LOCAL_CIL_HEAD=$SOURCE_HEAD TREE=$SOURCE_TREE"
+          echo "ATTO_SOURCE_LOCAL_RUN_ID=${{ github.run_id }} ATTEMPT=${{ github.run_attempt }} WORKFLOW_SHA=${{ github.workflow_sha }}"
+          test -n "${RUNNER_NAME:-}"
+          test "${RUNNER_ENVIRONMENT:-}" = "self-hosted"
+      - name: Run 12 source-free Git-integrity regression cases and verify actual Atto fixture blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/test-direct-cil-integrity-harness.sh
+          bash scripts/verify-direct-cil-integration.sh
+      - name: Install .NET 10 SDK and .NET 8 target runtime
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Check source toolchain and native dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet --version | grep -E '^10\.'
+          dotnet --list-runtimes | grep -F 'Microsoft.NETCore.App 8.'
+          command -v clang
+          command -v ld
+      - name: Build and run actual Atto generated CIL, CoreCLR, NativeAOT and fail-closed negatives
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/test-cil-guest.sh
+          bash scripts/test-match-cil-guest.sh
+          bash scripts/test-stdio-cil-guest.sh
+          test -s artifacts/AttoGuest.dll
+          sha256sum artifacts/AttoGuest.dll
+          echo 'ATTO_SOURCE_LOCAL_REAL_CIL_TESTS_EXECUTED=1'
+      - name: Postflight verify compiler PR head and protected main did not drift
+        shell: bash
+        env:
+          GH_REPO_READ_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+          token = os.environ.get("GH_REPO_READ_TOKEN")
+          if not token:
+              raise SystemExit("E_POSTFLIGHT_NO_READ_TOKEN")
+          headers = {"Authorization": "Bearer " + token,
+                     "Accept": "application/vnd.github+json",
+                     "X-GitHub-Api-Version": "2022-11-28"}
+          def fetch(path):
+              url = "https://api.github.com/repos/atto-lang/atto-source.net/" + path
+              req = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(req, timeout=15) as response:
+                  return json.load(response)
+          branch = fetch("branches/main")
+          if branch.get("name") != "main" or branch.get("protected") is not True:
+              raise SystemExit("E_POSTFLIGHT_SOURCE_MAIN_NOT_PROTECTED")
+          pr = fetch("pulls/194")
+          head = pr.get("head") or {}
+          if (pr.get("number") != 194 or head.get("sha") != os.environ["SOURCE_HEAD"]
+                  or (head.get("repo") or {}).get("full_name") != "atto-lang/atto-source.net"):
+              raise SystemExit("E_POSTFLIGHT_COMPILER_PR_HEAD_CHANGED")
+          print("ATTO_SOURCE_LOCAL_CIL_POSTFLIGHT_PASS sha=" + os.environ["SOURCE_HEAD"])
+          PY

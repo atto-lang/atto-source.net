@@ -1,0 +1,50 @@
+name: NativeAOT actor elastic admission v1 (host-only)
+on:
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/ActorElasticAdmissionV1.cs'
+      - 'tests/Atto.ActorElasticAdmission.Host/**'
+      - '.github/workflows/actor-elastic-admission-v1.yml'
+  push:
+    paths:
+      - 'runtime/Ores.Net.Runtime/ActorElasticAdmissionV1.cs'
+      - 'tests/Atto.ActorElasticAdmission.Host/**'
+      - '.github/workflows/actor-elastic-admission-v1.yml'
+permissions:
+  contents: read
+
+jobs:
+  managed-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run real .NET host physical lease tests
+        run: dotnet run --project tests/Atto.ActorElasticAdmission.Host/Atto.ActorElasticAdmission.Host.csproj --configuration Release
+      - name: Evidence classification
+        run: echo "HOST_ONLY; .atto guest emission not executed"
+
+  linux-nativeaot-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish actual NativeAOT executable
+        run: >
+          dotnet publish tests/Atto.ActorElasticAdmission.Host/Atto.ActorElasticAdmission.Host.csproj
+          --configuration Release -r linux-x64 -p:PublishAot=true
+          -p:SelfContained=true -o "${{ runner.temp }}/actor-elastic-native"
+      - name: Execute NativeAOT physical worker probe
+        run: '"${{ runner.temp }}/actor-elastic-native/Atto.ActorElasticAdmission.Host"'
+      - name: Evidence classification
+        run: echo "HOST_NATIVEAOT_ONLY; no compiled .atto guest"

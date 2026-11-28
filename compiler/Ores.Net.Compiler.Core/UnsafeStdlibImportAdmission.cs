@@ -7,13 +7,6 @@ namespace Ores.Net.Compiler;
 /// </summary>
 public static class UnsafeStdlibImportAdmission
 {
-    private static readonly string[] ReservedRoots =
-    {
-        "ores.std/unsafe", "std/unsafe",
-        "ores.std.unsafe", "std.unsafe",
-        "ores.std:unsafe", "std:unsafe"
-    };
-
     public static bool IsReserved(string? specifier)
     {
         if (specifier is null) return false;
@@ -21,45 +14,47 @@ public static class UnsafeStdlibImportAdmission
         // Canonicalize stdlib components before matching reserved names.
         // The typed source linker must not see std/./unsafe as an ordinary
         // local package that it then normalizes into a native stdlib import.
-        if (path.StartsWith("std/", StringComparison.Ordinal) ||
-            path.StartsWith("ores.std/", StringComparison.Ordinal))
+        if (HasUnsafeSegments(path)) return true;
+        // Canonicalize incrementally, preserving unsafe intermediate identity.
+        var prefix = new System.Collections.Generic.List<string>(3);
+        var stack = new System.Collections.Generic.List<int>();
+        int rootDepth = 0;
+        foreach (string component in path.Split('/'))
         {
-            var parts = new System.Collections.Generic.List<string>();
-            foreach (var part in path.Split('/'))
+            if (component.Length == 0 || component == ".") continue;
+            if (component == "..")
             {
-                if (part.Length == 0 || part == ".") continue;
-                if (part == "..")
+                if (rootDepth != 0 && stack.Count <= rootDepth) return true;
+                if (stack.Count != 0)
                 {
-                    if (parts.Count <= 1) return true; // Reject std root escape.
-                    parts.RemoveAt(parts.Count - 1);
+                    int previous = stack[stack.Count - 1];
+                    stack.RemoveAt(stack.Count - 1);
+                    prefix.RemoveRange(previous, prefix.Count - previous);
                 }
-                else parts.Add(part);
+                continue;
             }
-            path = string.Join("/", parts);
-        }
-        else if (path.Contains('/'))
-        {
-            // Relative source imports may be normalized by a linker after
-            // admission: ./std/unsafe and pkg/../std/unsafe are still reserved.
-            var parts = new System.Collections.Generic.List<string>();
-            foreach (var part in path.Split('/'))
+            stack.Add(prefix.Count);
+            foreach (string segment in component.Split(new[] { '.', ':' }, StringSplitOptions.RemoveEmptyEntries))
             {
-                if (part.Length == 0 || part == ".") continue;
-                if (part == "..")
-                {
-                    if (parts.Count != 0) parts.RemoveAt(parts.Count - 1);
-                }
-                else parts.Add(part);
+                if (prefix.Count == 3) break;
+                prefix.Add(segment);
             }
-            path = string.Join("/", parts);
-        }
-        foreach (string root in ReservedRoots)
-        {
-            if (path == root || path.StartsWith(root + "/", StringComparison.Ordinal)
-                             || path.StartsWith(root + ".", StringComparison.Ordinal))
-                return true;
+            int offset = prefix.Count > 0 && (prefix[0] == "atto" || prefix[0] == "ores") ? 1 : 0;
+            if (prefix.Count > offset && prefix[offset] == "std")
+            {
+                if (rootDepth == 0) rootDepth = stack.Count;
+                if (prefix.Count > offset + 1 && prefix[offset + 1] == "unsafe") return true;
+            }
         }
         return false;
+    }
+
+    private static bool HasUnsafeSegments(string path)
+    {
+        string[] segments = path.Split(new[] { '/', '.', ':' }, StringSplitOptions.RemoveEmptyEntries);
+        int offset = segments.Length > 0 && (segments[0] == "atto" || segments[0] == "ores") ? 1 : 0;
+        return segments.Length > offset + 1 &&
+               segments[offset] == "std" && segments[offset + 1] == "unsafe";
     }
 
     public static void RequireGuestSafe(string specifier)

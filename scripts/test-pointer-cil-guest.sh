@@ -29,7 +29,11 @@ dotnet build "$compiler" -c Release
 for fixture in \
   fixtures/cil/pointer-local-rt.atto \
   fixtures/cil/pointer-local-mixed-bang.atto \
-  fixtures/cil/pointer-local-all-bang.atto; do
+  fixtures/cil/pointer-local-all-bang.atto \
+  fixtures/cil/pointer-slot-rebind.atto \
+  fixtures/cil/pointer-slot-empty.atto \
+  fixtures/cil/pointer-slot-survivor.atto \
+  fixtures/cil/pointer-slot-budget-boundary.atto; do
   name="$(basename "$fixture" .atto)"
   rm -f "$guest"
   dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$guest"
@@ -42,7 +46,7 @@ for fixture in \
   test -x "$output/Atto.Cil.Guest.Host"
   expect_42 POINTER_NATIVEAOT_GUEST "$output/Atto.Cil.Guest.Host"
 done
-echo "ATTO_POINTER_LOCAL_CIL_NATIVEAOT_PASS guests=3"
+echo "ATTO_POINTER_LOCAL_CIL_NATIVEAOT_PASS guests=7"
 
 # All pointer-negative fixtures require a scoped E_POINTER_* failure and
 # an empty emitted-artifact directory. This is compiled-source rejection,
@@ -55,12 +59,12 @@ for fixture in fixtures/cil/negative/pointer-*.atto; do
   set +e
   dotnet run --no-build -c Release --project "$compiler" -- \
     "$fixture" artifacts/Rejected.dll \
-    >/tmp/atto-pointer-negative.stdout 2>/tmp/atto-pointer-negative.stderr
+    >"$work/negative.stdout" 2>"$work/negative.stderr"
   result=$?
   set -e
   test "$result" -eq 2 || { echo "POINTER_NEGATIVE_STATUS_FAILED $fixture rc=$result" >&2; exit 1; }
-  grep -Fq "$diagnostic:" /tmp/atto-pointer-negative.stderr || {
-    cat /tmp/atto-pointer-negative.stderr
+  grep -Fq "$diagnostic:" "$work/negative.stderr" || {
+    cat "$work/negative.stderr"
     echo "POINTER_NEGATIVE_DIAGNOSTIC_FAILED $fixture expected=$diagnostic" >&2
     exit 1
   }
@@ -70,7 +74,7 @@ for fixture in fixtures/cil/negative/pointer-*.atto; do
   }
   pointer_reject_count=$((pointer_reject_count + 1))
 done
-test "$pointer_reject_count" -eq 19
+test "$pointer_reject_count" -eq 34
 echo "ATTO_POINTER_LOCAL_CIL_NEGATIVE_PASS rejected=$pointer_reject_count"
 
 # Additional fail-closed lexical and authority cases; comments are not tokens.

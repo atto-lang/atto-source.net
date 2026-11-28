@@ -1,0 +1,1 @@
+fnc main():int{do match 42 over on _ as int z -> {z=0;} end return 0;}

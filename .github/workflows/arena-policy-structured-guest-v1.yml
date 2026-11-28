@@ -1,0 +1,38 @@
+name: Structured CIL arena policy guest
+on:
+  pull_request:
+    paths:
+      - 'compiler/Ores.Net.Compiler.Core/**'
+      - 'stdlib/policy/**'
+      - 'tests/fixtures/arena-quota-lifecycle-guest.atto'
+      - 'verification/Ores.Net.ArenaPolicyGuestProbe/**'
+      - 'verification/Ores.Net.StructuredBitAndProbe/**'
+      - 'Directory.Build.props'
+      - 'global.json'
+      - '.github/workflows/arena-policy-structured-guest-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'compiler/Ores.Net.Compiler.Core/**'
+      - 'stdlib/policy/**'
+      - 'tests/fixtures/arena-quota-lifecycle-guest.atto'
+      - 'verification/Ores.Net.ArenaPolicyGuestProbe/**'
+      - 'verification/Ores.Net.StructuredBitAndProbe/**'
+      - 'Directory.Build.props'
+      - 'global.json'
+      - '.github/workflows/arena-policy-structured-guest-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  guest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: bash verification/Ores.Net.ArenaPolicyGuestProbe/run-guest-probes.sh

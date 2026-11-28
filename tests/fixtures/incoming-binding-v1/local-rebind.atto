@@ -1,0 +1,1 @@
+fnc main():int{let n=20;let r=0;do match n over on _ as rebind int z -> {z=z+2;r=z;} end return n+r;}

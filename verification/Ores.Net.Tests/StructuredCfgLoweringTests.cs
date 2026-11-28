@@ -25,7 +25,7 @@ internal static class StructuredCfgLoweringTests
         }
     }
 
-    private static void Check(string source, long expected, string label)
+    private static void Check(string source, long expected, string label, bool executeClr = false)
     {
         var graph = OresStructuredCfgLowering.Lower(source);
         if (CfgReferenceEvaluator.Evaluate(graph) != expected)
@@ -44,6 +44,23 @@ internal static class StructuredCfgLoweringTests
                 .Methods.Single(m => m.Name == "Run");
             if (CfgCilTestInterpreter.Evaluate(entry) != expected)
                 throw new Exception("Structured CIL mismatch: " + label);
+            if (executeClr)
+            {
+                // This is a test-only bridge. Load the actual emitted DLL,
+                // not a host reconstruction of the guest calculation.
+                var context = new System.Runtime.Loader.AssemblyLoadContext("record-guest", isCollectible: true);
+                try
+                {
+                    using var bytes = new MemoryStream(File.ReadAllBytes(output));
+                    var guest = context.LoadFromStream(bytes);
+                    var method = guest.GetType("Oreslang.Generated.OresProgram", throwOnError: true)!
+                        .GetMethod("Run", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+                        ?? throw new Exception("Generated CLR guest entry not found");
+                    if (Convert.ToInt64(method.Invoke(null, null), System.Globalization.CultureInfo.InvariantCulture) != expected)
+                        throw new Exception("Structured CoreCLR guest mismatch: " + label);
+                }
+                finally { context.Unload(); }
+            }
             string second = Path.Combine(folder, "OresGenerated.second.dll");
             CilEmitter.EmitLibrary(graph, second);
             if (!File.ReadAllBytes(output).AsSpan().SequenceEqual(
@@ -300,8 +317,103 @@ internal static class StructuredCfgLoweringTests
             42, "unselected explicit arm does not overflow");
     }
 
+    public static void RunStoredPair()
+    {
+        foreach (string body in new[] {
+            "const x:=42;const Pair<int> p=x;return p.value;",
+            "const x=x:=42;const Pair<int> p=x;return p.value;",
+            "const x=Pair.of(\"x\",42);const Pair<int> p=x;return p.value;",
+            "const x=\"x\" :=42;return x.value;",
+            "const int y=7;const x=y:=42;return x.value+y-7;",
+            "const x:=40;const y:=x.value+2;return y.value;"
+        }) Check("fnc main():int{" + body + "}",42,"stored Pair: " + body, executeClr: true);
+        foreach (string body in new[] {
+            "const x:=1;const x:=2;return 0;",
+            "const x:=x;return 0;",
+            "const x=x:=x;return 0;",
+            "const x:=true;return 0;",
+            "val int y=42;const x:=y;return 0;",
+            "const int x=42;const Pair<int> p=x;return 0;",
+            "const x={value:42};const Pair<int> p=x;return 0;",
+            "const x:=42;return x;",
+            "const x:=42;x.value=7;return x.value;",
+            "const x:=42;const r={...x};return 0;",
+            "const x:=42;const r=x with {a:1};return 0;",
+            "const x=Pair.of(7,42);return 0;",
+            "const x:=42;const x=Pair.of(\"x\",42);return 0;"
+        }) Reject("fnc main():int{" + body + "}", "stored Pair boundary: " + body);
+        Console.WriteLine("STORED_PAIR_CORECLR_PASS positives=6 negatives=13");
+    }
+
     public static void Run()
     {
+        foreach (var body in new[]{
+            "let int x=40; set x++; set ++x; return x;",
+            "let int x=44; set x--; set --x; return x;",
+            "let int x=20; set x+=2; set x-=1; set x*=2; return x;",
+            "let int x=40; set x=x+2; return x;",
+            "let int x=0; while x<42 { set x++; } return x;"})
+            Check("fnc main():int{"+body+"}",42,"explicit update "+body);
+        foreach (var body in new[]{
+            "val int x=40; set x++; return x;",
+            "set missing++; return 42;",
+            "let bool x=true; set x++; return 42;",
+            "let int x=40; set x+ =2; return x;",
+            "let int x=40; set ++x++; return x;"})
+            Reject("fnc main():int{"+body+"}","explicit update "+body);
+        CheckOverflow("fnc main():int{let int x=9223372036854775807;set x++;return x;}",
+            "explicit counter overflow");
+        Check("fnc main():int{let int x=40;set! (x=x+2);return x;}",42,"wrapped local explicit update");
+        Check("fnc main():int{let int x=40;set! (x=x+1);set! x=x+1;return x;}",42,"wrapped and unwrapped update");
+        RejectWithDiagnostic("fnc main():int{val int x=40;set! (x=x+2);return x;}",
+            "E_IMMUTABLE_REBIND","wrapped fixed binding");
+        foreach (var body in new[]{
+            "let int x=40; return set!(x=42);",
+            "let int x=40; set!(42); return x;",
+            "let int x=40; set!(x==42); return x;",
+            "let int x=40; other!(x=42); return x;",
+            "let int x=40; set !(x=42); return x;",
+            "let int x=40; set! (x.field=42); return x;"})
+            RejectWithDiagnostic("fnc main():int{"+body+"}","NET_STRUCTURED_MACRO_EXPANDER_REQUIRED","macro boundary "+body);
+        Reject("fnc main():int{let int x=40;set!(x=42,43);return x;}","wrapped update cannot expand arguments");
+        Console.WriteLine("EXPLICIT_SCALAR_UPDATE_CFG_CIL_PASS positives=7 negatives=13 overflow=1");
+        foreach (var body in new[]{
+            "let x=32;for let i=0;i<10;set i++{set x++;}return x;",
+            "let x=32;for (let i=10;i>0;set --i){set x++;}return x;",
+            "let x=32;for let i=0;i<10;set i+=2{set x+=2;}return x;",
+            "let x=0;for (set x=40;x<42;set x++){}return x;",
+            "let n=0;for let i=0;i<10;set i++{if i==2{continue;}if i==5{break;}set n+=10;}return n+2;",
+            "let x=42;for let i=9223372036854775807;i<0;set i++{set x=0;}return x;",
+            "let x=42;for let i=9223372036854775807;i>0;set i++{break;}return x;",
+            "let x=30;for let i=0;i<3;set i++{for let j=0;j<4;set j++{set x++;}}return x;",
+            "let x=40;for let i=0;i<2;set i++{set x++;continue;}return x;"})
+            Check("fnc main():int{"+body+"}",42,"regular for "+body);
+        foreach (var body in new[]{
+            "for let i=0;i<10;i++{}return 42;",
+            "for let i=0;i<10;let i++{}return 42;",
+            "for let i=0;true;set missing++{}return 42;",
+            "for let i=0;i;set i++{}return 42;",
+            "for let i=0;i<1;set i++{}return i;",
+            "val int i=0;for (;i<1;set i++){}return 42;",
+            "for let i=0;i<1;set i+ =1{}return 42;"})
+            Reject("fnc main():int{"+body+"}","regular for "+body);
+        CheckOverflow("fnc main():int{for let i=9223372036854775807;i>0;set i++{}return 42;}",
+            "regular for checked update overflow");
+        Console.WriteLine("EXPLICIT_REGULAR_FOR_CFG_CIL_PASS positives=9 negatives=7 overflow=1");
+
+
+        Check("fnc main():int{return match 42 over on _ as int z -> z end;}", 42, "typed scalar alias");
+        Check("fnc main():int{return match 42 over on 41 as z when z==42 -> 0, on _ as const z -> z end;}", 42, "guard fallback scalar alias");
+        Check("fnc main():int{let n=20;let r=0;do match n over on _ as rebind int z -> {z=z+2;r=z;} end return n+r;}", 42, "rebind alias does not write back subject");
+        CheckModule("fnc bump(rebind int n):int{n=n+2;return n;} fnc main():int{let n=20;return bump(n)+n;}", 42, "rebind formal does not write back caller");
+        CheckModule("fnc bump(rebind n:int):int{n=n+2;return n;} fnc main():int{let n=20;return bump(n)+n;}", 42, "name-first rebind formal");
+        RejectWithDiagnostic("fnc main():int{do match 42 over on _ as int z -> {z=0;} end return 0;}", "E_IMMUTABLE_REBIND", "fixed alias");
+        RejectWithDiagnostic("fnc main():int{return match 42 over on _ as bool z -> 0 end;}", "MATCH_ALIAS_TYPE", "wrong alias type");
+        RejectWithDiagnostic("fnc main():int{return match 42 over on _ as rebind rebind int z -> z end;}", "MATCH_ALIAS_MODIFIER", "duplicate marker");
+        RejectWithDiagnostic("fnc main():int{return match 42 over on _ as mut z -> 0 end;}", "MATCH_ALIAS_MUT_UNSUPPORTED", "scalar referent mutation");
+        RejectWithDiagnostic("fnc bump(int n):int{n=n+2;return n;} fnc main():int{return bump(40);}", "E_IMMUTABLE_REBIND", "fixed formal");
+        Check("denote type Count = int; fnc main():int{let Count x=20;let Count x=40;set x+=2;return x;}",
+            42, "denoted shadow storage identity with explicit update");
         Check("denote type Count = int; denote type Total = Count; fnc main():Total{val Count a=42;return a;}",
             42, "denoted scalar CIL identity");
         CheckModule("denote type Count = int; denote type Total = Count; fnc id(Count n):Total{return n;} pub fnc main():Total{val Count a=42;return id(a);}",
@@ -647,6 +759,83 @@ internal static class StructuredCfgLoweringTests
         Reject("fnc main():int{const struct<infer S> s={a:1};const Record<S> r=(a=1);return 0;}", "aggregate kind mismatch");
         Reject("fnc main():int{const Tuple<infer T> t=(1,true);const r=infer record{...t,x:1};return r.x;}", "tuple cannot spread as record");
         Reject("fnc main():int{const Record r=(a=1);const Record<R> r2=(a=2);return 0;}", "anonymous record does not bind type");
+        // Mixed Record construction uses the real checked CFG and emitted CIL.
+        foreach (string literal in new[] {"{foo:=40,bar:2}", "(foo:=40,bar=2)", "(foo:40,bar:=2)", "{foo=40,bar:=2,}"})
+        {
+            Check("fnc main():int{const Record r=" + literal + ";return r.foo+r.bar;}", 42, "mixed explicit Record " + literal, executeClr: true);
+            if (literal.StartsWith("{", StringComparison.Ordinal))
+                Check("fnc main():int{const r=" + literal + ";return r.foo+r.bar;}", 42, "mixed inferred Record " + literal, executeClr: true);
+        }
+        Check("fnc main():int{const r=(foo:40,bar:2);return r.foo+r.bar;}",42,"inferred colon Record",executeClr:true);
+        Check("fnc main():int{const Record r=(foo:=40,bar:=2);return r.foo+r.bar;}",42,"typed Pair fields Record",executeClr:true);
+        Check("fnc main():int{const x=();const Record r=();const Record s={};return 42;}",42,"typed empty Records and empty Tuple",executeClr:true);
+        Check("fnc main():int{const r={foo:40};const Record<T> v=infer {...r,bar:2};const Record<T> w=(bar:2,foo=40);return w.foo+v.bar;}",42,"inferred extended lexical Record shape", executeClr: true);
+        Check("fnc main():int{const r={foo:true};const v={...r,foo:=42};return v.foo;}",42,"explicit spread override changes type", executeClr: true);
+        Check("fnc main():int{const r={foo:40};const s={foo:1};const v={...r,...s,foo:42};return v.foo;}",42,"explicitly resolved spread overlap", executeClr: true);
+        Check("fnc main():int{const r={foo:40};const v={...r,foo:42};return v.foo+r.foo-40;}",42,"spread leaves original unchanged", executeClr: true);
+        foreach (string body in new[] {
+            "const r={foo:=1,foo:2};return 0;",
+            "const r={};return 0;",
+            "const r=(foo=1);return 0;",
+            "const r=(foo:1,bar:=2);return 0;",
+            "const r=(foo:1,bar=2);return 0;",
+            "const r=(foo:=1,bar:=2);return 0;",
+            "const r=(foo:=1);return 0;",
+            "const r={foo : = 1};return 0;",
+            "const r={foo:=1 bar:=2};return 0;",
+            "const r={foo:1};const s={foo:2};const v={...r,...s};return 0;",
+            "const r={foo:1};const v={foo:2,...r};return 0;",
+            "const Record<T> v=infer {...v,foo:1};return 0;",
+            "const int T=1;const Record<T> v=infer {foo:1};return 0;",
+            "const Record<T> v={foo:1};return 0;",
+            "const Record<infer T> r={foo:1};const Record<T> v=infer {foo:true};return 0;",
+            "const struct s={foo:=1};return 0;",
+            "const r={foo:1};return r;",
+            "val int x=1;val r=record{foo:x};const v={...r};return 0;"
+        }) Reject("fnc main():int{" + body + "}", "mixed Record safety: " + body);
+        Console.WriteLine("MIXED_RECORD_CORECLR_PASS positives=13 negatives=18");
+        Check("fnc main():int{const Tuple t=(20,22);const (a,b) as r=t;return a+r[1];}",42,"scalar tuple capture",executeClr:true);
+        Check("fnc main():int{const s={a:20,b:22,c:9};const {a,b} as r=s;return a+r.b+r.c-9;}",42,"Record capture retains unselected fields",executeClr:true);
+        Check("fnc main():int{const Tuple t=(20,22);const (a,b) as Record r=t;return r.a+b;}",42,"explicit Tuple to Record capture",executeClr:true);
+        Check("fnc main():int{const x=();const () as r=x;const Record e={};const {} as s=e;return 42;}",42,"empty aggregate capture",executeClr:true);
+        foreach (string body in new[] {
+            "const Tuple t=(1,2);const (a) as r=t;return 0;",
+            "const Tuple t=(1,2);const (a,a) as r=t;return 0;",
+            "const Tuple t=(1,2);const (a,b) as a=t;return 0;",
+            "const Tuple t=(1,2);const {a,b} as r=t;return 0;",
+            "const s={a:1};const {b} as r=s;return 0;",
+            "const Tuple t=(1,2);const (a,b) as Array r=t;return 0;",
+            "const Tuple t=(1,2);const (a,let b) as r=t;return 0;",
+            "const Tuple t=(1,2);const [a,b] as r=t;return 0;",
+            "const Tuple t=(1,2);const (a,b) as r=t;a=3;return a;"
+        }) Reject("fnc main():int{"+body+"}", "scalar destructure safety: "+body);
+        foreach (string body in new[] {
+            "const r={foo:=40\nbar:=2};return r.foo+r.bar;",
+            "const r={foo:=40\nbar=2};return r.foo+r.bar;",
+            "const r={foo:=40\r\nbar:2};return r.foo+r.bar;",
+            "const r={foo:=40 // comment\nbar:=2};return r.foo+r.bar;",
+            "const r={foo:40};const v=r with {bar:2};return v.foo+v.bar;",
+            "const r={foo:true};const v=r with {foo:=42};return v.foo;",
+            "const r={foo:40};const v=r with {foo:42};return v.foo+r.foo-40;",
+            "const r={foo:40};const v=r with {bar:=1\nbaz:=1};return v.foo+v.bar+v.baz;"
+        }) Check("fnc main():int{" + body + "}",42,"Record with/newline: " + body, executeClr: true);
+        foreach (string body in new[] {
+            "const r={foo:=1 bar:=2};return 0;",
+            "const r={foo:=1 /* comment\n */ bar:=2};return 0;",
+            "const r={foo:1\nbar:=2};return 0;",
+            "const r={foo=1\nbar:=2};return 0;",
+            "const r=(foo:=1\nbar=2);return 0;",
+            "const r={foo:=1\nfoo:2};return 0;",
+            "const r={foo:1};const v=r with {foo:2,foo:=3};return 0;",
+            "const v=missing with {foo:1};return 0;",
+            "const int r=1;const v=r with {foo:1};return 0;",
+            "const Tuple r=(1,2);const v=r with {foo:1};return 0;",
+            "const struct r={foo:1};const v=r with {foo:2};return 0;",
+            "val int x=1;val r=record{foo:x};const v=r with {foo:2};return 0;",
+            "const r={foo:1};return r with {foo:2};"
+        }) Reject("fnc main():int{" + body + "}", "Record with/newline boundary: " + body);
+        Console.WriteLine("RECORD_WITH_NEWLINE_CORECLR_PASS positives=8 negatives=13");
+        RunStoredPair();
         // Runtime-valued immutable rows snapshot scalars into private verified
         // SSA places: later mutation of the original local cannot change them.
         Check("fnc main():int{let int source=20;val row=infer struct{x:source,y:28};source=99;return row.x+row.y;}",

@@ -17,6 +17,20 @@ internal static class TaskI64SourceTests
         // Future. This is not general coroutine/async source admission.
         var piped = TaskI64Source.Check(StdAwaitSource);
         var typed = TaskI64Source.Check(CanonicalSource);
+        var principal = CanonicalSource.Replace("val Future", "val TaskFuture", StringComparison.Ordinal);
+        var principalProgram = TaskI64Source.Check(principal);
+        if (!principalProgram.Producer.Instructions.SequenceEqual(typed.Producer.Instructions))
+            throw new Exception("Direct TaskFuture await changed verified producer IR");
+        foreach (var (bad, diagnostic) in new[] {
+            (principal.Replace("val TaskFuture", "const TaskFuture", StringComparison.Ordinal), "E_CONST"),
+            (principal.Replace("return await f;", "val int first = await f; return first + await f;", StringComparison.Ordinal), "E_TASK_RESULT_CONSUMED"),
+            (principal.Replace("return await f;", "return f |> std.await;", StringComparison.Ordinal), "E_UNSUPPORTED")
+        })
+        {
+            try { _ = TaskI64Source.Check(bad); }
+            catch (FormatException ex) when (ex.Message.Contains(diagnostic, StringComparison.Ordinal)) { continue; }
+            throw new Exception("Missing TaskFuture diagnostic: " + diagnostic);
+        }
         var longSpelling = TaskI64Source.Check(CanonicalSource.Replace("susp ", "suspends ", StringComparison.Ordinal));
         if (!longSpelling.Producer.Instructions.SequenceEqual(typed.Producer.Instructions))
             throw new Exception("suspends changed the checked producer IR");

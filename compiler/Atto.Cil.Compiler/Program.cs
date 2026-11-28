@@ -18,6 +18,9 @@ internal sealed record Sequence(List<Expression> Items) : Expression;
 internal sealed record Arg(string Name) : Expression;
 internal sealed record Binary(string Op, Expression Left, Expression Right) : Expression;
 internal sealed record Call(string Name, List<Expression> Args) : Expression;
+internal sealed record RecurState(string Name, Expression Init);
+internal sealed record RecurExit(Expression Predicate, Expression Result);
+internal sealed record RecurLoop(List<RecurState> States, List<RecurExit> Exits, List<Expression> Updates) : Expression;
 // A bounded, integer-only return-position match. Binders are scoped to each arm.
 // The match subject is evaluated exactly once into a CIL local.
 internal sealed record ValueArm(long? Literal, string? Binding, Expression? Guard, Expression Result);
@@ -32,7 +35,7 @@ internal sealed record ReturnStmt(Expression Value) : Statement;
 // Signed i64 guest results; bool is internal to guards.
 internal enum CheckedType { Int, Bool, Void }
 internal sealed record Function(string Name, List<string> Args,
-    CheckedType ReturnType, List<Statement> Body, long? MutableWrite = null, bool MutableScalar = false);
+    CheckedType ReturnType, List<Statement> Body, long? MutableWrite = null, bool MutableScalar = false, bool CompilerGenerated = false);
 
 // Typed, local-only read lease. Source pointer authority is verified and
 // erased before ordinary CIL lowering; it is never represented as a raw
@@ -60,7 +63,9 @@ internal sealed class Parser
 {
     private readonly List<string> _tokens = [];
     private readonly List<int> _offsets = [];
+    private readonly string _source;
     private int _position;
+    internal List<int> RedundantReturnOffsets { get; } = [];
     private string Peek => _tokens[_position];
     private bool Eat(string s) { if (Peek != s) return false; _position++; return true; }
     private void Require(string s)
@@ -72,7 +77,7 @@ internal sealed class Parser
         var name = Peek;
         if (name.Length == 0 || !(name[0] is >= 'a' and <= 'z' or '_') ||
             name.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_')) ||
-            name is "fnc" or "pub" or "return" or "int" or "float" or "bool" or "val" or "let" or "seq"
+            name is "fnc" or "pub" or "return" or "int" or "float" or "bool" or "val" or "let"
                 or "true" or "false" or "actor" or "unsafe" or "await" or "async"
                 or "susp" or "suspends" or "critical" or "trap" or "panic"
                 or "raise" or "throw" or "borrow" or "take" or "share"
@@ -87,6 +92,7 @@ internal sealed class Parser
     internal IReadOnlyList<string> CountedTokens => _tokens;
     internal Parser(string source, bool countedReady = false)
     {
+        _source = source;
         if (Encoding.UTF8.GetByteCount(source) > 65536)
             throw new CompilerError("E_LIMIT", "64 KiB source limit");
         foreach (char c in source)
@@ -109,7 +115,7 @@ internal sealed class Parser
             else if (c is >= '0' and <= '9')
                 while (i < source.Length && source[i] is >= '0' and <= '9') i++;
             else if (c == '-' && i < source.Length && source[i] == '>') i++;
-            else if (c == '=' && i < source.Length && source[i] == '=') i++;
+            else if (c is '=' or '>' && i < source.Length && source[i] == '=') i++;
             else if (countedReady && i < source.Length && ((c == '&' && source[i] == '&') || (c == '|' && source[i] == '|') || (c is '<' or '>' or '!' && source[i] == '='))) i++;
             else if (countedReady && c is '[' or ']') { }
             else if (c == '|' && i < source.Length && source[i] == '>') i++;
@@ -118,6 +124,12 @@ internal sealed class Parser
             // typed E_UNSUPPORTED_TYPE gate; it is not a scalar operator.
             else if (!"(){}:;,+-*/^<>=.!".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
+            // Only the contiguous seq! spelling is a sequence marker.
+            // Do not absorb the start of != or turn separated bangs into keywords.
+            if (source.AsSpan(start, i - start).SequenceEqual("seq".AsSpan())
+                && i < source.Length && source[i] == '!'
+                && (i + 1 == source.Length || source[i + 1] != '='))
+                i++;
             _tokens.Add(source[start..i]);
             _offsets.Add(start);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
@@ -127,6 +139,13 @@ internal sealed class Parser
     }
     internal List<Function> Parse()
     {
+        // Authenticate the unmodified lexical stream before other lowering can alter token offsets.
+        if (_tokens.Contains("RawPointer", StringComparer.Ordinal))
+            return ParseReusableSlot();
+        var records = NominalRecordSource.Lower(_tokens);
+        if (records is not null) { _tokens.Clear(); _tokens.AddRange(records); }
+        var contextual = ContextualIntSource.Lower(_tokens);
+        if (contextual is not null) { _tokens.Clear(); _tokens.AddRange(contextual); }
         // A lexed Pointer token is admitted only by the closed local read-lease profile.
         if (_tokens.Contains("Pointer", StringComparer.Ordinal))
         {
@@ -207,7 +226,7 @@ internal sealed class Parser
             {
                 if (statements.Count >= 64)
                     throw new CompilerError("E_LIMIT", "64 function statement limit");
-                if (Eat("return") || Eat("^"))
+                if (EatReturnMarker())
                 {
                     var expression = ParseReturnExpr();
                     if (!Eat(";") && expression is not ValueMatch)
@@ -253,6 +272,10 @@ internal sealed class Parser
             result.Add(new Function(name, args, returnType, statements));
             if (result.Count > 64) throw new CompilerError("E_LIMIT", "64 function limit");
         }
+        // Only the closed nominal Record adapter may introduce these helper
+        // definitions; ordinary user functions retain their existing metadata.
+        if (records is not null)
+            result = result.Select(f => f.Name == "main" ? f : f with { CompilerGenerated = true }).ToList();
         return result;
     }
     private void PointerNeed(string spelling, string code = "E_POINTER_PROFILE")
@@ -575,6 +598,120 @@ internal sealed class Parser
         }
     }
 
+    private List<Function> ParseReusableSlot()
+    {
+        static CompilerError Invalid() => new("E_POINTER_SLOT_PROFILE", "invalid reusable local scalar slot");
+        string Id()
+        {
+            string n;
+            try { n = PointerName(); }
+            catch (CompilerError) { throw Invalid(); }
+            if (n is "mut" or "null" or "to" or "empty" or "if" or "else" or "end" or
+                "while" or "for" or "class" or "struct" or "new" or "defer" or "recover" or
+                "freeze" or "weak" or "move" or "const" or "set" or "do" or "fi" or
+                "match" or "on" or "default" or "with" or "using" or "constructor" or "destructor")
+                throw Invalid();
+            return n;
+        }
+        void Need(string token)
+        {
+            if (!Eat(token)) throw Invalid();
+        }
+        void Op(string op)
+        {
+            if (Peek != op) throw Invalid();
+            int offset = _offsets[_position];
+            Need(op);
+            if (Peek != "!" || _offsets[_position] != offset + op.Length) throw Invalid();
+            int afterBang = _offsets[_position] + 1;
+            if (afterBang >= _source.Length || _source[afterBang] is not (' ' or '\t' or '\r' or '\n'))
+                throw Invalid();
+            Need("!");
+        }
+        long Number()
+        {
+            if (!long.TryParse(Peek, NumberStyles.None, CultureInfo.InvariantCulture, out long n))
+                throw Invalid();
+            _position++;
+            return n;
+        }
+        foreach (var t in new[] { "pub", "fnc", "main", "(", ")", ":", "int", "{", "let" })
+            Need(t);
+        var owners = new Dictionary<string, long>(StringComparer.Ordinal);
+        var values = new Dictionary<string, long>(StringComparer.Ordinal);
+        while (!Eat("mut"))
+        {
+            if (owners.Count >= 16) throw Invalid();
+            string owner = Id();
+            Need(":"); Need("int"); Need("=");
+            long value = Number();
+            Need(";");
+            if (!owners.TryAdd(owner, value) || !values.TryAdd(owner, value)) throw Invalid();
+            Need("let");
+        }
+        Need("RawPointer"); Need("<"); Need("int"); Need(">");
+        string slot = Id();
+        if (values.ContainsKey(slot)) throw Invalid();
+        foreach (var t in new[] { "=", "RawPointer", ".", "empty", "<", "int", ">", "(", ")", ";" })
+            Need(t);
+        string? bound = null;
+        int operations = 0;
+        while (Peek != "return")
+        {
+            if (++operations > 32) throw Invalid();
+            if (Peek == "ref")
+            {
+                Op("ref"); Need(slot); Need("to");
+                string owner = Id();
+                if (bound is not null || !owners.ContainsKey(owner)) throw Invalid();
+                bound = owner;
+            }
+            else if (Eat("val"))
+            {
+                string copy = Id();
+                Need("="); Op("deref"); Need(slot);
+                if (bound is null || copy == slot || !values.TryAdd(copy, owners[bound]))
+                    throw Invalid();
+            }
+            else if (Peek == "unref")
+            {
+                Op("unref"); Need(slot);
+                if (bound is null) throw Invalid();
+                bound = null;
+            }
+            else throw Invalid();
+            Need(";");
+        }
+        if (bound is not null) throw Invalid();
+        Need("return");
+        long Term()
+        {
+            if (Peek.Length > 0 && char.IsAsciiDigit(Peek[0])) return Number();
+            if (!values.TryGetValue(Id(), out long v)) throw Invalid();
+            return v;
+        }
+        long answer = Term();
+        int terms = 1;
+        try
+        {
+            while (Peek is "+" or "-")
+            {
+                if (++terms > 32) throw Invalid();
+                bool add = Eat("+");
+                if (!add) Need("-");
+                long rhs = Term();
+                answer = add ? checked(answer + rhs) : checked(answer - rhs);
+            }
+        }
+        catch (OverflowException) { throw Invalid(); }
+        Need(";"); Need("}");
+        if (Peek != "<eof>") throw Invalid();
+        // All referents are immutable literal i64 places, all copied values
+        // and transitions were authenticated. No source address survives;
+        // normal direct CIL emission can promote this closed scalar result.
+        return [new Function("main", [], CheckedType.Int, [new ReturnStmt(new Literal(answer))])];
+    }
+
     private List<Function> ParseBorrowedLocalPointer()
     {
         // Intentionally closed-world: no branches, loops, calls, await,
@@ -639,7 +776,23 @@ internal sealed class Parser
         return ArgumentsAfterOpen(depth);
     }
 
-    private bool StartsBareSequence() => Peek == "seq" && _tokens[_position + 1] != "(";
+    private bool StartsBareSequence() => (Peek is "seq" or "seq!") && _tokens[_position + 1] != "(";
+
+    private bool EatReturnMarker()
+    {
+        if (Eat("return"))
+        {
+            if (Peek == "^")
+            {
+                RedundantReturnOffsets.Add(_offsets[_position]);
+                _position++;
+            }
+        }
+        else if (!Eat("^")) return false;
+        if (Peek is "^" or "return")
+            throw new CompilerError("E_RETURN_MARKER_ORDER", "only one redundant caret after return is permitted");
+        return true;
+    }
 
     // A bare sequence consumes the remaining comma list as one final argument.
     // Grouped seq remains an ordinary expression at any argument position.
@@ -698,11 +851,61 @@ internal sealed class Parser
             _ => false
         });
 
+    // First stateful value-loop slice: closed i64 state and checked scalar
+    // operands only. The type checker separately validates lexical scope,
+    // guard/result types, and replacement arity before CIL emission.
+    private Expression ParseRecurLoop(int depth)
+    {
+        Require("loop"); Require("(");
+        List<RecurState> states = [];
+        HashSet<string> names = new(StringComparer.Ordinal);
+        do
+        {
+            if (states.Count >= 8) throw new CompilerError("E_LIMIT", "8 recur state bindings");
+            Require("val");
+            var name = Name();
+            if (name is "loop" or "recur" or "break" or "if" or "else" or "fi" || !names.Add(name))
+                throw new CompilerError("E_RECUR_BINDING", "duplicate or reserved loop state");
+            if (Eat(":")) Require("int");
+            Require("=");
+            states.Add(new RecurState(name, ParseExpr(0, depth + 1)));
+        } while (Eat(","));
+        Require(")"); Require("{");
+        List<RecurExit> exits = [];
+        bool terminalElse = false;
+        while (Eat("if"))
+        {
+            if (exits.Count >= 32) throw new CompilerError("E_LIMIT", "32 recur exit guards");
+            var predicate = ParseExpr(0, depth + 1);
+            Require("{"); Require("break");
+            var result = ParseExpr(0, depth + 1);
+            Require(";"); Require("}");
+            exits.Add(new RecurExit(predicate, result));
+            if (Eat("else")) { Require("{"); terminalElse = true; break; }
+        }
+        if (exits.Count == 0) throw new CompilerError("E_RECUR_TAIL", "state loop requires valued exit");
+        Require("recur"); Require("(");
+        List<Expression> updates = [];
+        do
+        {
+            if (updates.Count >= 8) throw new CompilerError("E_RECUR_ARITY", "too many recur operands");
+            updates.Add(ParseExpr(0, depth + 1));
+        } while (Eat(","));
+        Require(")"); Require(";");
+        if (terminalElse) { Require("}"); Eat("fi"); }
+        Require("}");
+        if (updates.Count != states.Count) throw new CompilerError("E_RECUR_ARITY", "state replacement arity");
+        if (Peek == "(") throw new CompilerError("E_VALUE_LOOP_PROFILE", "computed value is not callable");
+        return new RecurLoop(states, exits, updates);
+    }
+
     private Expression ParseExpr(int min, int depth, string pipeDirection = "")
     {
         if (depth > 32) throw new CompilerError("E_LIMIT", "expression nesting limit");
         Expression left;
-        if (Peek == "loop" && _position + 1 < _tokens.Count && _tokens[_position + 1] == "{")
+        if (Peek == "loop" && _position + 1 < _tokens.Count && _tokens[_position + 1] == "(")
+            left = ParseRecurLoop(depth);
+        else if (Peek == "loop" && _position + 1 < _tokens.Count && _tokens[_position + 1] == "{")
         {
             Require("loop"); Require("{"); Require("break");
             if (Peek is ";" or "}") throw new CompilerError("E_BREAK_VALUE", "value loop requires an operand");
@@ -714,7 +917,7 @@ internal sealed class Parser
             Require(";"); Require("}");
             if (Peek == "(") throw new CompilerError("E_VALUE_LOOP_PROFILE", "computed value is not callable");
         }
-        else if (Eat("seq")) { Require("("); left = ParseSequenceItems(depth); }
+        else if (Eat("seq!")) { Require("("); left = ParseSequenceItems(depth); }
         else if (Eat("("))
         {
             if (Eat(">")) left = ParseSequenceItems(depth);
@@ -753,7 +956,7 @@ internal sealed class Parser
         while (true)
         {
             int precedence = Peek is "*" or "/" ? 20 : Peek is "+" or "-" ? 10
-                : Peek is ">" or "eq" or "==" ? 5 : Peek is "|>" or "<|" ? 1 : -1;
+                : Peek is ">" or ">=" or "eq" or "==" ? 5 : Peek is "|>" or "<|" ? 1 : -1;
             if (precedence < min) break;
             var op = Peek; _position++;
             if (op is "|>" or "<|")
@@ -842,9 +1045,14 @@ internal sealed class Parser
             {
                 // Scope is deliberately narrow: only an explicit return is
                 // accepted; silently falling through is never a value arm.
-                if (!Eat("return") && !Eat("^"))
+                if (!EatReturnMarker())
                     throw new CompilerError("E_RETURN", "match block arm must explicitly return");
-                result = ParseExpr(0, depth + 1);
+                if (StartsBareSequence())
+                {
+                    _position++;
+                    result = ParseSequenceItems(depth + 1, bareReturn: true);
+                }
+                else result = ParseExpr(0, depth + 1);
                 Require(";");
                 Require("}");
                 Eat(",");
@@ -981,7 +1189,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                         throw new CompilerError("E_TYPE",
                             "integer operator requires two signed int64 operands");
                     if (b.Op == "/") CheckIntegerDivision(b);
-                    return b.Op is ">" or "eq" or "==" ? CheckedType.Bool : CheckedType.Int;
+                    return b.Op is ">" or ">=" or "eq" or "==" ? CheckedType.Bool : CheckedType.Int;
                 }
                 case Call c:
                     if (!_symbols.TryGetValue(c.Name, out var target))
@@ -998,6 +1206,41 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                         if (WalkExpr(item, owner, bound, depth) != CheckedType.Int)
                             throw new CompilerError("E_TYPE", "sequence members must be int");
                     return CheckedType.Int;
+                case RecurLoop loop:
+                {
+                    if (loop.States.Count is < 1 or > 8 || loop.Exits.Count is < 1 or > 32 ||
+                        loop.Updates.Count != loop.States.Count)
+                        throw new CompilerError("E_RECUR_ARITY", "invalid bounded loop shape");
+                    var loopState = new HashSet<string>(StringComparer.Ordinal);
+                    CheckedType Closed(Expression operand)
+                    {
+                        bool Scoped(Expression x, int d) => d <= 32 && (x switch
+                        {
+                            Literal => true,
+                            Arg a => loopState.Contains(a.Name),
+                            Binary b when b.Op is "+" or "-" or "*" or "/" or ">" or ">=" or "eq" or "==" =>
+                                Scoped(b.Left, d + 1) && Scoped(b.Right, d + 1),
+                            _ => false
+                        });
+                        if (!Scoped(operand, 0))
+                            throw new CompilerError("E_VALUE_LOOP_PROFILE", "operand must be closed scalar state");
+                        return WalkExpr(operand, owner, loopState, depth + 1);
+                    }
+                    foreach (var binding in loop.States)
+                    {
+                        if (Closed(binding.Init) != CheckedType.Int)
+                            throw new CompilerError("E_TYPE", "state initializer must be int");
+                        if (!loopState.Add(binding.Name))
+                            throw new CompilerError("E_RECUR_BINDING", "duplicate state");
+                    }
+                    foreach (var exit in loop.Exits)
+                        if (Closed(exit.Predicate) != CheckedType.Bool || Closed(exit.Result) != CheckedType.Int)
+                            throw new CompilerError("E_TYPE", "recur exit requires bool guard and int value");
+                    foreach (var next in loop.Updates)
+                        if (Closed(next) != CheckedType.Int)
+                            throw new CompilerError("E_TYPE", "recur replacement must be int");
+                    return CheckedType.Int;
+                }
                 case ValueMatch m:
                     if (WalkExpr(m.Subject, owner, bound, depth + 1) != CheckedType.Int)
                         throw new CompilerError("E_TYPE", "match subject must be int");
@@ -1104,6 +1347,30 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
         var locals = new BlobEncoder(localSig).LocalVariableSignature(21);
         for (int i = 0; i < 21; i++) locals.AddVariable().Type().Int64();
         var localSigHandle = metadata.AddStandaloneSignature(metadata.GetOrAddBlob(localSig));
+        // Separate signature for methods containing a state loop. State and
+        // replacement scratch slots are disjoint from ordinary/match locals.
+        var loopSig = new BlobBuilder();
+        var loopLocals = new BlobEncoder(loopSig).LocalVariableSignature(37);
+        for (int i = 0; i < 37; i++) loopLocals.AddVariable().Type().Int64();
+        var loopSigHandle = metadata.AddStandaloneSignature(metadata.GetOrAddBlob(loopSig));
+        static bool ContainsLoop(Expression e) => e switch
+        {
+            RecurLoop => true,
+            Binary b => ContainsLoop(b.Left) || ContainsLoop(b.Right),
+            Call c => c.Args.Any(ContainsLoop),
+            Sequence seq => seq.Items.Any(ContainsLoop),
+            ValueMatch m => ContainsLoop(m.Subject) || m.Arms.Any(a =>
+                (a.Guard != null && ContainsLoop(a.Guard)) || ContainsLoop(a.Result)),
+            _ => false
+        };
+        static bool StatementLoop(Statement stmt) => stmt switch
+        {
+            LocalBinding l => ContainsLoop(l.Initializer),
+            PrintLine p => ContainsLoop(p.Value),
+            ReturnStmt r => ContainsLoop(r.Value),
+            MutablePointerCall m => m.Scalar != null && ContainsLoop(m.Scalar),
+            _ => false
+        };
 
         List<int> bodyOffsets = [];
         foreach (var f in _functions)
@@ -1146,7 +1413,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 }
             }
             bodyOffsets.Add(bodyStream.AddMethodBody(il, maxStack: 64,
-                localVariablesSignature: localSigHandle));
+                localVariablesSignature: f.Body.Any(StatementLoop) ? loopSigHandle : localSigHandle));
         }
         int nextParameter = 1;
         for (int i = 0; i < _functions.Count; i++)
@@ -1157,7 +1424,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 f.Args.Count,
                 r => { if (f.MutableWrite != null) r.Void(); else r.Type().Int64(); },
                 p => { foreach (var arg in f.Args) p.AddParameter().Type(isByRef: f.MutableWrite != null && arg == "$exclusive_slot").Int64(); });
-            metadata.AddMethodDefinition((f.MutableWrite != null ? MethodAttributes.Private : MethodAttributes.Public) |
+            metadata.AddMethodDefinition((f.MutableWrite != null || f.CompilerGenerated ? MethodAttributes.Private : MethodAttributes.Public) |
                 MethodAttributes.Static | MethodAttributes.HideBySig,
                 MethodImplAttributes.IL, metadata.GetOrAddString(f.Name),
                 metadata.GetOrAddBlob(signature), bodyOffsets[i],
@@ -1237,6 +1504,13 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 if (b.Op == "/") CheckIntegerDivision(b);
                 Generate(b.Left, f, il, bindings, matchDepth);
                 Generate(b.Right, f, il, bindings, matchDepth);
+                if (b.Op == ">=")
+                {
+                    il.OpCode(ILOpCode.Clt);
+                    il.LoadConstantI4(0);
+                    il.OpCode(ILOpCode.Ceq);
+                    return;
+                }
                 il.OpCode(b.Op switch
                 {
                     "+" => ILOpCode.Add_ovf,
@@ -1259,6 +1533,45 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                     if (i + 1 != seq.Items.Count) il.OpCode(ILOpCode.Pop);
                 }
                 return;
+            case RecurLoop loop:
+            {
+                const int stateBase = 21, scratchBase = 29;
+                // Closed operands exclude nested loops, external bindings and
+                // calls. Every slot is initialized before it is read.
+                var scope = new Dictionary<string, int>(StringComparer.Ordinal);
+                for (int i = 0; i < loop.States.Count; i++)
+                {
+                    var state = loop.States[i];
+                    Generate(state.Init, f, il, scope, matchDepth);
+                    il.StoreLocal(stateBase + i);
+                    scope.Add(state.Name, stateBase + i);
+                }
+                var header = il.DefineLabel();
+                var result = il.DefineLabel();
+                il.MarkLabel(header);
+                foreach (var exit in loop.Exits)
+                {
+                    var next = il.DefineLabel();
+                    Generate(exit.Predicate, f, il, scope, matchDepth);
+                    il.Branch(ILOpCode.Brfalse, next);
+                    Generate(exit.Result, f, il, scope, matchDepth);
+                    il.Branch(ILOpCode.Br, result);
+                    il.MarkLabel(next);
+                }
+                for (int i = 0; i < loop.Updates.Count; i++)
+                {
+                    Generate(loop.Updates[i], f, il, scope, matchDepth);
+                    il.StoreLocal(scratchBase + i);
+                }
+                for (int i = 0; i < loop.Updates.Count; i++)
+                {
+                    il.LoadLocal(scratchBase + i);
+                    il.StoreLocal(stateBase + i);
+                }
+                il.Branch(ILOpCode.Br, header);
+                il.MarkLabel(result);
+                return;
+            }
             case ValueMatch m:
                 if (matchDepth >= 16) throw new CompilerError("E_LIMIT", "match nesting limit");
                 Generate(m.Subject, f, il, bindings, matchDepth + 1);
@@ -1319,8 +1632,11 @@ internal static class Program
             if (ActorStateAdmission.Inspect(source) is not null)
                 throw new CompilerError("E_UNSUPPORTED_ACTOR_STATE",
                     "attached actor state parsed, but guarded CIL lowering and actor lifecycle are unavailable");
-            var fns = new Parser(source).Parse();
+            var parser = new Parser(source);
+            var fns = parser.Parse();
             new CIL(fns, allowStdio: args.Length == 3).Emit(args[1], source);
+            foreach (int offset in parser.RedundantReturnOffsets)
+                Console.Error.WriteLine($"W_REDUNDANT_RETURN: redundant caret after return at source offset {offset}");
             Console.WriteLine($"ATTO_DIRECT_CIL_PASS functions={fns.Count}");
             return 0;
         }
