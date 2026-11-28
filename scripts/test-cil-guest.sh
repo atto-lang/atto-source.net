@@ -390,3 +390,57 @@ rc=$?
 set -e
 test "$rc" -eq 121 && cmp /tmp/atto-comparator-expected.out /tmp/atto-comparator-native.out && test ! -s /tmp/atto-comparator-native.err
 echo ATTO_COMPARATOR_PIPELINE_CORECLR_NATIVEAOT_PASS
+
+
+# Direct CIL named arguments: observe actual parameter slots and source effects.
+named_work="$(mktemp -d)"
+trap 'rm -rf "$named_work"' EXIT
+for spec in 'f(b:2,a:4):42' 'f(b=2,a=4):42' 'f(b:2,a=4):42' 'f(b=2,a:4):42' 'f(4,b=2):42' 'f(b=4,a=2):24'; do
+  expr="$(printf '%s' "$spec" | sed 's/:[^:]*$//')"
+  expected="$(printf '%s' "$spec" | sed 's/.*://')"
+  printf 'fnc f(int a,int b): int { return a*10+b; }\npub fnc main(): int { return %s; }\n' "$expr" > "$named_work/positive.atto"
+  rm -f "$guest"
+  dotnet run --no-build -c Release --project "$compiler" -- "$named_work/positive.atto" "$guest"
+  test -s "$guest"
+  dotnet build "$host" -c Release -t:Rebuild
+  expect_pipeline_exit "named-$expr-CORECLR" "$expected" dotnet run --no-build -c Release --project "$host"
+done
+
+# Inner reordered call must not overwrite outer saved b; check both effects and result.
+cat > "$named_work/nested.atto" <<'ATTO_NAMED'
+fnc f(int a, int b): int { return a*10+b; }
+fnc tick(int v): int { stdio.println(v); return v; }
+pub fnc main(): int {
+    return f(b=tick(2), a:f(b=tick(3), a=tick(1))-9);
+}
+ATTO_NAMED
+printf '2\n3\n1\n' > "$named_work/expected"
+rm -f "$guest"
+dotnet run --no-build -c Release --project "$compiler" -- "$named_work/nested.atto" "$guest" --allow-stdio
+dotnet build "$host" -c Release -t:Rebuild
+check_named_effects() {
+  local label="$1"; shift
+  local status=0
+  "$@" >"$named_work/stdout" 2>"$named_work/stderr" || status=$?
+  test "$status" -eq 42
+  cmp "$named_work/expected" "$named_work/stdout"
+  test ! -s "$named_work/stderr"
+  echo "ATTO_NAMED_NESTED_EFFECTS_EXECUTED $label"
+}
+check_named_effects CORECLR dotnet run --no-build -c Release --project "$host"
+dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true --self-contained true -o "$named_work/aot"
+check_named_effects NATIVEAOT "$named_work/aot/Atto.Cil.Guest.Host"
+
+for spec in 'f(a=4,a:2):E_NAMED_DUP' 'f(4,a=2):E_NAMED_DUP' 'f(z=4,b:2):E_NAMED_UNKNOWN' 'f(a=4,2):E_NAMED_ORDER' 'f(a:=4,b=2):E_PAIR_UNSUPPORTED'; do
+  expr="$(printf '%s' "$spec" | sed 's/:[^:]*$//')"
+  code="$(printf '%s' "$spec" | sed 's/.*://')"
+  printf 'fnc f(int a,int b): int { return a*10+b; }\npub fnc main(): int { return %s; }\n' "$expr" > "$named_work/negative.atto"
+  rejected="$named_work/rejected.dll"
+  rm -f "$rejected"
+  status=0
+  dotnet run --no-build -c Release --project "$compiler" -- "$named_work/negative.atto" "$rejected" >"$named_work/reject.out" 2>"$named_work/reject.err" || status=$?
+  test "$status" -eq 2
+  grep -Fq "$code:" "$named_work/reject.err"
+  test ! -e "$rejected"
+done
+echo ATTO_DIRECT_CIL_NAMED_CALL_GUEST_PASS
