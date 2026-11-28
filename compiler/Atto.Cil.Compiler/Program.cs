@@ -1618,8 +1618,8 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                         Generate(plan.Values[i], f, il, bindings, matchDepth, callDepth + 1);
                         il.StoreLocal(scratch + plan.Slots[i]);
                     }
-                    for (int slot = 0; slot < plan.Values.Length; slot++)
-                        il.LoadLocal(scratch + slot);
+                    for (int formalSlot = 0; formalSlot < plan.Values.Length; formalSlot++)
+                        il.LoadLocal(scratch + formalSlot);
                 }
                 il.Call(MetadataTokens.MethodDefinitionHandle(target + 1));
                 return;
