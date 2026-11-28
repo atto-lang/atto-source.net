@@ -192,6 +192,10 @@ internal sealed class UdpLoopbackHost : IDisposable
         lock (_gate)
         {
             if (_closed) return;
+            // The monitor is reentrant. A trusted authorization callback
+            // must not retire its own active descriptor before Exit().
+            if (_inOperation)
+                throw new InvalidOperationException("reentrant UDP retirement");
             _closed = true;
             _socket.Dispose();
         }
