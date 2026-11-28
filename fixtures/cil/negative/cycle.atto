@@ -1,2 +1,2 @@
-fnc loop(int x): int { return loop(x); }
-fnc main(): int { return loop(42); }
+fnc recursive_helper(int x): int { return recursive_helper(x); }
+fnc main(): int { return recursive_helper(42); }
