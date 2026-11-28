@@ -6,6 +6,7 @@ using Ores.Net.Runtime;
 if (args.Length == 1 && args[0] == "--empty-local-products")
 {
     StructuredCfgLoweringTests.RunEmptyLocalProducts();
+    Console.WriteLine("EMPTY_LOCAL_PRODUCTS_CORECLR_PASS");
     return;
 }
 
