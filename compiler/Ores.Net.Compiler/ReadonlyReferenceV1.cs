@@ -99,19 +99,37 @@ internal static class ReadonlyReferenceV1
             Need(";"); Need("}"); if (at != tokens.Count) throw Bad("trailing source");
         }
     }
+    // The admitted closed helper graph contains only immutable scalar
+    // field reads and forwards to earlier helpers. Resolve once at compile time.
+    private static int[] ResolveFields(Parser p)
+    {
+        var fields = new int[p.Helpers.Count];
+        for (int i = 0; i < fields.Length; i++)
+        {
+            var h = p.Helpers[i];
+            if (h.Forward)
+            {
+                if (h.Index < 0 || h.Index >= i) throw Bad("unproved forwarding edge");
+                fields[i] = fields[h.Index];
+            }
+            else
+            {
+                if (h.Index < 0 || h.Index >= p.Fields.Count) throw Bad("unproved field");
+                fields[i] = h.Index;
+            }
+        }
+        return fields;
+    }
+
     internal static string Emit(string source)
     {
         var p = new Parser(source); p.Parse();
+        var fields = ResolveFields(p);
         var b = new StringBuilder("public static class AttoReadonlyGuest {\nprivate sealed class Obj {\n");
         for (int i = 0; i < p.Fields.Count; i++) b.Append("public readonly long f").Append(i).Append('=').Append(p.Fields[i].Value.ToString(CultureInfo.InvariantCulture)).Append("L;\n");
         b.Append("}\n");
-        for (int i = 0; i < p.Helpers.Count; i++)
-        {
-            var h = p.Helpers[i];
-            b.Append("private static long f").Append(i).Append("(Obj p){return ").Append(h.Forward ? $"f{h.Index}(p)" : $"p.f{h.Index}").Append(";}\n");
-        }
-        b.Append("public static long Run(){Obj p=new Obj();long r=f").Append(p.Calls[0]).Append("(p);\n");
-        for (int i = 1; i < p.Calls.Count; i++) b.Append("r=checked(r").Append(p.Ops[i-1]).Append('f').Append(p.Calls[i]).Append("(p));\n");
+        b.Append("public static long Run(){Obj p=new Obj();long r=p.f").Append(fields[p.Calls[0]]).Append(";\n");
+        for (int i = 1; i < p.Calls.Count; i++) b.Append("r=checked(r").Append(p.Ops[i-1]).Append("p.f").Append(fields[p.Calls[i]]).Append(");\n");
         return b.Append("return r;}\npublic static void Main(){System.Console.WriteLine(Run());}\n}\n").ToString();
     }
 }
