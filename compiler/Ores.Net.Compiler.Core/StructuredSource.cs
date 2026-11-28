@@ -1251,8 +1251,17 @@ public static partial class OresStructuredParser
                       (ch == '<' && source[index + 1] == '|')))
                 index += 2;
             else if (ch == '|' && !moduleMode && !precededByString && !ownedUnwind)
+            {
+                // A direct file scalar denotation RHS is not a closure.
+                // Keep the lexical gate closed; only refine its diagnostic.
+                var prefix = recentTokens.ToArray();
+                if (prefix.Length == 5 && prefix[0] == "denote" && prefix[1] == "type" &&
+                    PortableUnicodeIdentifier.IsName(prefix[2]) && prefix[3] == "=")
+                    throw new FormatException(
+                        $"E_DENOTE_RHS_UNSUPPORTED: union denotation requires full type lowering at offset {offset}");
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
+            }
             // Prefix logical not already has typed boolean lowering in Unary.
             // Preserve the earlier != / !eq recognition and the separate
             // fail-closed macro and ownership admission gates.
@@ -2990,11 +2999,15 @@ public static partial class OresStructuredParser
                 if ((!shadow && scopes.Any(scope => scope.ContainsKey(name))) ||
                     aggregateScopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
-                Expect("=");
+                bool transfer = TakeBindingArrow();
+                if (transfer && kind != StructuredBindingKind.Let)
+                    throw Error("E_OWNERSHIP: transfer arrow requires explicit let");
+                if (!transfer) Expect("=");
                 // Only complete unconditional statement values publish
                 // writes. Conditional expression joins remain fail-closed.
                 var initializer = ReadStatementValue(depth + 1, annotated ? type : null,
-                    allowWriteback: kind != StructuredBindingKind.Const && !commaBindingTerminator);
+                    allowWriteback: !transfer && kind != StructuredBindingKind.Const && !commaBindingTerminator);
+                if (transfer) RequireBindingTransferScalar(initializer);
                 if (annotated)
                     Require(initializer, type, "Local initializer has wrong type");
                 else
@@ -3217,6 +3230,23 @@ public static partial class OresStructuredParser
             return (assignment, false);
         }
 
+        // Contextual contiguous ownership arrow; no changes to comparison lexing.
+        private bool TakeBindingArrow()
+        {
+            if (Take("<-")) return true;
+            if (Current.Text != "<" || index + 1 >= tokens.Count ||
+                tokens[index + 1].Text != "-" ||
+                Current.Offset + 1 != tokens[index + 1].Offset) return false;
+            index += 2;
+            return true;
+        }
+
+        private void RequireBindingTransferScalar(StructuredExpr value)
+        {
+            if (value.Type is not (IrValueType.I64 or IrValueType.Bool))
+                throw Error("E_OWNERSHIP: transfer of non-scalar storage requires lifecycle qualification");
+        }
+
         private StructuredSet ReadLocalUpdate(int depth, int at, bool forHeader)
         {
             // Contextual explicit update, using existing typed local authority.
@@ -3233,12 +3263,13 @@ public static partial class OresStructuredParser
                 tokens[index + 1].Text is { Length: > 0 } following &&
                 (Alpha(following[0]) || following[0] == '_' || following is "!" or "+" or "-");
             if (forHeader && !explicitSet) throw Error("E_EXPLICIT_REBIND: for clause requires set");
-            bool wrapped = false, increment = false;
+            bool wrapped = false, increment = false, bang = false;
             StructuredOperator? compound = null;
             if (explicitSet)
             {
                 index++;
-                if (Take("!")) wrapped = Take("(");
+                bang = Take("!");
+                if (bang) wrapped = Take("(");
                 if (Pair("+", "+")) { compound = StructuredOperator.Add; increment = true; }
                 else if (Pair("-", "-")) { compound = StructuredOperator.Subtract; increment = true; }
             }
@@ -3259,7 +3290,10 @@ public static partial class OresStructuredParser
                 else if (Pair("*", "=")) compound = StructuredOperator.Multiply;
             }
             if (!increment && compound is null && Take("^^=")) compound = StructuredOperator.BitXor;
-            if (compound is null) Expect("=");
+            bool transfer = !increment && compound is null && TakeBindingArrow();
+            if (transfer && (!explicitSet || bang || forHeader))
+                throw Error("E_OWNERSHIP: transfer arrow requires plain set statement");
+            if (compound is null && !transfer) Expect("=");
             if (compound is not null && binding.Type != IrValueType.I64)
                 throw Error(compound == StructuredOperator.BitXor
                     ? "Compound XOR requires a mutable int local"
@@ -3268,7 +3302,13 @@ public static partial class OresStructuredParser
             if (forHeader && binding.Type is not (IrValueType.I64 or IrValueType.Bool))
                 throw Error("E_FOR_SCALAR_ONLY: expected scalar update");
             StructuredExpr assigned = increment ? new StructuredInt(variableAt, 1) :
-                forHeader ? Expr(depth + 1) : ReadStatementValue(depth + 1, binding.Type, allowWriteback: compound is null);
+                forHeader ? Expr(depth + 1) : ReadStatementValue(depth + 1, binding.Type, allowWriteback: !transfer && compound is null);
+            if (transfer)
+            {
+                RequireBindingTransferScalar(assigned);
+                if (assigned is StructuredRead read && read.Name == variable)
+                    throw Error("E_OWNERSHIP: cannot transfer a binding into itself");
+            }
             Require(assigned, binding.Type, "Assignment has wrong type");
             if (compound is { } op)
                 assigned = CheckedBinary(variableAt, op,

@@ -381,6 +381,35 @@ internal static class StructuredCfgLoweringTests
 
     public static void Run()
     {
+        // The checked scalar path evaluates and emits real CIL; no non-Copy
+        // ownership or NativeAOT claim is implied by these CoreCLR targets.
+        foreach (var body in new[]{
+            "let b=21; let a <- b; return a+b;",
+            "let b=21; let int a <- b; return a+b;",
+            "let a=0; let b=21; set a <- b; return a+b;",
+            "let a=0; set a <- 42; return a;",
+            "let a=0; set a <- 21+21; return a;",
+            "let flag <- true; if flag {return 42;} else {return 0;}"})
+            Check("fnc main():int{"+body+"}",42,"scalar binding transfer "+body,executeClr:true);
+        foreach (var body in new[]{
+            "const a <- 42; return a;",
+            "int a <- 42; return a;",
+            "val a <- 42; return a;",
+            "let a=0; set! a <- 42; return a;",
+            "let a=0; a <- 42; return a;",
+            "let a=42; set a <- a; return a;",
+            "set missing <- 42; return 0;",
+            "const a=0; set a <- 42; return a;",
+            "let a=0; set a <- true; return a;",
+            "let a < - 42; return a;",
+            "let a • 42; return a;",
+            "let Option<int> a <- Some(42); return 0;"})
+        {
+            try { _ = OresStructuredCfgLowering.Lower("fnc main():int{"+body+"}"); }
+            catch (FormatException) { continue; }
+            throw new Exception("Expected scalar binding transfer rejection: "+body);
+        }
+
         foreach (var body in new[]{
             "let int x=40; set x++; set ++x; return x;",
             "let int x=44; set x--; set --x; return x;",
@@ -465,6 +494,7 @@ internal static class StructuredCfgLoweringTests
             ("denote type Count = Count; fnc main():int{return 42;}", "E_DENOTE_CYCLE"),
             ("denote type Count = Missing; fnc main():int{return 42;}", "E_DENOTE_UNKNOWN"),
             ("denote type Count = 5 | 6 | 7; fnc main():int{return 42;}", "E_DENOTE_RHS_UNSUPPORTED"),
+            ("denote type Count = int /* union */ | bool; fnc main():int{return 42;}", "E_DENOTE_RHS_UNSUPPORTED"),
             ("denote type Count = int; denote type Count = bool; fnc main():int{return 42;}", "E_DENOTE_NAME"),
             ("denote pub type Count = int; fnc main():int{return 42;}", "E_DENOTE_VISIBILITY_UNSUPPORTED"),
             ("denote type Count = int; fnc main():int{struct Count{int a;}return 42;}", "Duplicate local value type"),
