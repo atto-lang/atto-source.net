@@ -1604,6 +1604,7 @@ public static partial class OresStructuredParser
 
         private void ReadScalarDenotations(bool entry)
         {
+            var targets = new Dictionary<string, string>(StringComparer.Ordinal);
             while (Take("denote"))
             {
                 if (!entry || linking is not null || frozenProvider || declaredModule is not null || namespaceHeader)
@@ -1622,22 +1623,47 @@ public static partial class OresStructuredParser
                         or "Entry" or "Pointer" or "Channel" or "Future" or "Task" or "Duration"
                         or "UUID" or "Any" or "Never" or "Sendable" or "Serializable" or "Copyable"
                         or "DeepCopyable" or "Newable" or "Atomic" or "Mutex" or "RwLock" ||
-                    scalarDenotations.ContainsKey(name))
+                    targets.ContainsKey(name))
                     throw Error("E_DENOTE_NAME: fresh non-core uppercase type name required");
-                if (scalarDenotations.Count >= 512)
+                if (targets.Count >= 512)
                     throw Error("E_DENOTE_LIMIT: file denotation budget exceeded");
                 Expect("=");
-                IrValueType target;
-                if (Current.Text is "int" or "bool")
-                {
-                    CoreTypeRegistry.RequireExecutableStructuredNet(Current.Text, 0);
-                    target = Current.Text == "int" ? IrValueType.I64 : IrValueType.Bool;
-                }
-                else if (!scalarDenotations.TryGetValue(Current.Text, out target))
-                    throw Error("E_DENOTE_RHS_UNSUPPORTED: expected int, bool or earlier scalar denotation");
+                string target = Current.Text;
+                if (target is not ("int" or "bool") &&
+                    (target.Length == 0 || target[0] is < 'A' or > 'Z' ||
+                     target.Any(c => !(c is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))))
+                    throw Error("E_DENOTE_RHS_UNSUPPORTED: expected int, bool or scalar denotation name");
                 index++;
                 Expect(";");
-                scalarDenotations.Add(name, target);
+                targets.Add(name, target);
+            }
+
+            // Validate all aliases, including unused declarations, before
+            // any type enters the checked scalar CIL lowering path.
+            foreach (string name in targets.Keys)
+            {
+                if (scalarDenotations.ContainsKey(name)) continue;
+                string current = name;
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                var path = new List<string>();
+                IrValueType resolved;
+                while (true)
+                {
+                    if (current is "int" or "bool")
+                    {
+                        CoreTypeRegistry.RequireExecutableStructuredNet(current, 0);
+                        resolved = current == "int" ? IrValueType.I64 : IrValueType.Bool;
+                        break;
+                    }
+                    if (scalarDenotations.TryGetValue(current, out resolved)) break;
+                    if (!seen.Add(current))
+                        throw Error("E_DENOTE_CYCLE: cyclic type denotation " + current);
+                    if (!targets.TryGetValue(current, out string? next) || next is null)
+                        throw Error("E_DENOTE_UNKNOWN: unresolved denotation target " + current);
+                    path.Add(current);
+                    current = next;
+                }
+                foreach (string alias in path) scalarDenotations.Add(alias, resolved);
             }
         }
 
