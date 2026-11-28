@@ -1,0 +1,10 @@
+define class Pair as
+  pub final int a;
+  constructor(int x, int y) {
+    self.a = z;
+  }
+end
+pub fnc main(): int {
+  let Pair p = new Pair(19, 23);
+  return p.a;
+}

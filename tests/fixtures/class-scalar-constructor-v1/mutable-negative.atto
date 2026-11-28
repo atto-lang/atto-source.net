@@ -1,0 +1,9 @@
+define class Pair as
+  pub final int a;
+  constructor(int x) { self.a = x; }
+end
+pub fnc main(): int {
+  let Pair p = new Pair(42);
+  let mut Pair q = new Pair(42);
+  return q.a;
+}
