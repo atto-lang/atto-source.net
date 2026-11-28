@@ -1,0 +1,33 @@
+name: NativeAOT arena policy guest
+on:
+  pull_request:
+    paths:
+      - 'compiler/**'
+      - 'runtime/**'
+      - 'host/**'
+      - 'build/**'
+      - 'stdlib/policy/**'
+      - 'tests/arena-policy-differential-v1.mjs'
+      - 'tests/fixtures/arena-quota-lifecycle-guest.atto'
+      - 'verification/Ores.Net.ArenaPolicyGuestProbe/**'
+      - 'Directory.Build.props'
+      - 'global.json'
+      - '.github/workflows/arena-policy-nativeaot-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: bash verification/Ores.Net.ArenaPolicyGuestProbe/run-nativeaot-policy.sh
