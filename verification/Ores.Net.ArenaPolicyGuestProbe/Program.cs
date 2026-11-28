@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Security.Cryptography;
@@ -17,11 +18,12 @@ static string ReadPinned(string path, string expected)
     Require(blob==expected,"source drift "+path);
     return Encoding.UTF8.GetString(bytes);
 }
-string source=string.Join("\n",new[]{
+string[] bodies=new[]{
     ReadPinned("stdlib/policy/core/arena_limits.atto","5928e893a2ce1baadb0376a4ccb14f63249f77d4"),
     ReadPinned("stdlib/policy/alloc/arena_lifecycle.atto","e4795c6d4bd561be3d913cdc617d103d0e2828c8"),
     ReadPinned("tests/fixtures/arena-quota-lifecycle-guest.atto","2b1eb28f07b792f2727abe9a5691849f024e304a")
-});
+};
+string source=string.Join("\n",bodies);
 string root=Path.Combine(Path.GetTempPath(),"atto-arena-policy-"+Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
 try
@@ -31,6 +33,22 @@ try
     Execute("good",source,100);
     Execute("wrong-oracle",source.Replace(marker,"arena_end_offset(0, 0, 1, 0) != 1",StringComparison.Ordinal),1);
     Console.WriteLine("NET_ARENA_POLICY_CIL_PASS assertions=56 wrong_oracle=1");
+    if(args.Length!=0)
+    {
+        Require(args.Length==1,"expected one generated corpus path");
+        using var corpus=JsonDocument.Parse(File.ReadAllBytes(args[0]));
+        Require(corpus.RootElement.ValueKind==JsonValueKind.Array&&corpus.RootElement.GetArrayLength()==22,"corpus batch count");
+        int tested=0;
+        foreach(var batch in corpus.RootElement.EnumerateArray())
+        {
+            Require(batch.GetProperty("start").GetInt32()==tested&&batch.GetProperty("count").GetInt32()==16,"corpus batch order/count");
+            string guest=batch.GetProperty("source").GetString()??throw new InvalidOperationException("missing guest");
+            Execute("differential-"+tested,string.Join("\n",bodies.Take(2))+"\n"+guest,100);
+            tested+=16;
+        }
+        Require(tested==352,"incomplete generated corpus");
+        Console.WriteLine("NET_ARENA_POLICY_DIFFERENTIAL_CIL_PASS cases="+tested);
+    }
 }
 finally { Directory.Delete(root,true); }
 
