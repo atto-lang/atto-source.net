@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using Ores.Net.Runtime.Net;
 
 static class Program
@@ -10,44 +11,33 @@ static class Program
         if (!condition) throw new InvalidOperationException(message);
     }
 
-    private static UdpLoopbackHost.Packet AwaitPacket(UdpLoopbackHost receiver, int capacity)
+    private static async Task<UdpLoopbackHost.Packet> AwaitPacket(UdpLoopbackHost receiver, int capacity)
     {
-        for (int i = 0; i < 1000; i++)
-        {
-            var packet = receiver.TryReceiveFrom(capacity);
-            if (packet is not null) return packet;
-            Thread.Sleep(1); // Test process only, never an Atto actor.
-        }
-        throw new TimeoutException("UDP host loopback receive did not complete");
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        return await receiver.ReceiveFromAsync(capacity, deadline.Token);
     }
 
-    private static void AssertTruncated(UdpLoopbackHost receiver)
+    private static async Task AssertTruncated(UdpLoopbackHost receiver)
     {
-        for (int i = 0; i < 1000; i++)
-        {
-            try { if (receiver.TryReceiveFrom(2) is not null) throw new Exception("truncation accepted"); }
-            catch (InvalidDataException) { return; }
-            Thread.Sleep(1);
-        }
-        throw new TimeoutException("oversize datagram not observed");
+        try { _ = await AwaitPacket(receiver, 2); }
+        catch (InvalidDataException) { return; }
+        throw new Exception("truncation accepted");
     }
 
-    private static void AssertDeniedSource(UdpLoopbackHost receiver)
+    private static async Task AssertDeniedSource(UdpLoopbackHost receiver)
     {
-        for (int i = 0; i < 1000; i++)
-        {
-            try
-            {
-                if (receiver.TryReceiveFrom(4) is not null)
-                    throw new Exception("denied source packet escaped authorization");
-            }
-            catch (UnauthorizedAccessException) { return; }
-            Thread.Sleep(1); // Host test harness only.
-        }
-        throw new TimeoutException("denied source packet was not received");
+        try { _ = await AwaitPacket(receiver, 4); }
+        catch (UnauthorizedAccessException) { return; }
+        throw new Exception("denied source packet escaped authorization");
     }
 
-    private static int Main()
+    private static async Task Send(UdpLoopbackHost sender, int port, byte[] bytes)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await sender.SendToAsync(port, bytes, deadline.Token);
+    }
+
+    private static async Task<int> Main()
     {
         bool enabled = true;
         int deniedPort = -1;
@@ -73,24 +63,24 @@ static class Program
 
         deniedPort = second.LocalPort;
         rejected = false;
-        try { first.TrySendTo(second.LocalPort, new byte[] { 1 }); }
+        try { await Send(first, second.LocalPort, new byte[] { 1 }); }
         catch (UnauthorizedAccessException) { rejected = true; }
         Require(rejected, "peer port deny bypass");
         byte[] oversizedDenied = new byte[UdpLoopbackHost.MaxPayload + 1];
         rejected = false;
-        try { first.TrySendTo(second.LocalPort, oversizedDenied); }
+        try { await Send(first, second.LocalPort, oversizedDenied); }
         catch (UnauthorizedAccessException) { rejected = true; }
         Require(rejected, "denied destination must win before oversized payload inspection");
         deniedPort = -1;
         rejected = false;
-        try { first.TrySendTo(second.LocalPort, oversizedDenied); }
+        try { await Send(first, second.LocalPort, oversizedDenied); }
         catch (ArgumentOutOfRangeException) { rejected = true; }
         Require(rejected, "authorized oversized datagram must be rejected");
 
         byte[] data = { 1, 0, 255, 42 };
-        Require(first.TrySendTo(second.LocalPort, data), "UDP host send would-block");
+        await Send(first, second.LocalPort, data);
         data[0] = 99;
-        var received = AwaitPacket(second, 4);
+        var received = await AwaitPacket(second, 4);
         Require(received.Length == 4 && received.SourcePort == first.LocalPort, "UDP peer/payload lost");
         byte[] copy = received.CopyBytes();
         Require(copy[0] == 1 && copy[2] == 255, "UDP bytes modified");
@@ -109,58 +99,111 @@ static class Program
         // Receive permission is scoped to the actual sender, not just the
         // bound local socket. A rejected source must not publish packet bytes.
         deniedSourcePort = first.LocalPort;
-        Require(first.TrySendTo(second.LocalPort, new byte[]{ 17 }), "denied-source send failed");
-        AssertDeniedSource(second);
+        await Send(first, second.LocalPort, new byte[]{ 17 });
+        await AssertDeniedSource(second);
         deniedSourcePort = -1;
-        Require(first.TrySendTo(second.LocalPort, new byte[]{ 18 }), "post-revocation recovery send failed");
-        Require(AwaitPacket(second, 4).CopyBytes()[0] == 18,
+        await Send(first, second.LocalPort, new byte[]{ 18 });
+        Require((await AwaitPacket(second, 4)).CopyBytes()[0] == 18,
             "denied source poisoned future datagrams");
 
-        Require(first.TrySendTo(second.LocalPort, Array.Empty<byte>()), "empty UDP send would-block");
-        Require(AwaitPacket(second, 4).Length == 0, "empty datagram lost");
-        Require(first.TrySendTo(second.LocalPort, new byte[] {1,2,3,4}), "oversize test send failed");
-        AssertTruncated(second);
-        Require(first.TrySendTo(second.LocalPort, new byte[]{ 6 }), "recovery send failed");
-        Require(AwaitPacket(second, 4).CopyBytes()[0] == 6, "truncation poisoned receiver");
+        await Send(first, second.LocalPort, Array.Empty<byte>());
+        Require((await AwaitPacket(second, 4)).Length == 0, "empty datagram lost");
+        await Send(first, second.LocalPort, new byte[] {1,2,3,4});
+        await AssertTruncated(second);
+        await Send(first, second.LocalPort, new byte[]{ 6 });
+        Require((await AwaitPacket(second, 4)).CopyBytes()[0] == 6, "truncation poisoned receiver");
 
         enabled = false;
         rejected = false;
-        try { first.TrySendTo(second.LocalPort, new byte[]{ 1 }); }
+        try { await Send(first, second.LocalPort, new byte[]{ 1 }); }
         catch (UnauthorizedAccessException) { rejected = true; }
         Require(rejected, "revoked send permitted");
         rejected = false;
-        try { second.TryReceiveFrom(1); }
+        try { _ = await AwaitPacket(second, 1); }
         catch (UnauthorizedAccessException) { rejected = true; }
         Require(rejected, "revoked receive permitted");
         enabled = true;
 
-        // C# Monitor.TryEnter is reentrant, so policy callback recursion
-        // must be independently fenced, not mistaken for a new operation.
+        // Recursive trusted policy callbacks must not reenter or retire the
+        // active logical descriptor lease.
         UdpLoopbackHost? recursiveSocket = null;
         bool rejectedReentrancy = false;
+        bool rejectedRetirement = false;
         UdpLoopbackHost.Authorize reentrantGate = (port, action) =>
         {
             if (action == UdpLoopbackHost.Action.Send)
             {
                 try { _ = recursiveSocket!.LocalPort; }
                 catch (InvalidOperationException) { rejectedReentrancy = true; }
+                try { recursiveSocket!.Dispose(); }
+                catch (InvalidOperationException) { rejectedRetirement = true; }
             }
         };
         using (var reentrant = UdpLoopbackHost.Bind(0, reentrantGate))
         {
             recursiveSocket = reentrant;
-            Require(reentrant.TrySendTo(second.LocalPort, new byte[]{ 39 }),
-                "reentrant guard send must remain usable");
+            await Send(reentrant, second.LocalPort, new byte[]{ 39 });
             Require(rejectedReentrancy,
-                "nested UDP accessor must not pass the same-thread monitor");
-            Require(AwaitPacket(second, 4).CopyBytes()[0] == 39,
+                "nested UDP accessor must not acquire an active lease");
+            Require(rejectedRetirement,
+                "same-thread authorization callback retired an active UDP descriptor");
+            Require((await AwaitPacket(second, 4)).CopyBytes()[0] == 39,
                 "rejected reentrant call altered valid datagram");
+        }
+
+        // The empty receive must remain pending without holding a carrier
+        // thread or a monitor. Retirement and other ingress must fail until
+        // cancellation physically settles the operation.
+        using (var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        {
+            var pending = second.ReceiveFromAsync(4, cancel.Token);
+            Require(!pending.IsCompleted, "empty receive did not suspend");
+            rejected = false;
+            try { second.Dispose(); }
+            catch (InvalidOperationException) { rejected = true; }
+            Require(rejected, "retirement during suspended receive was permitted");
+            rejected = false;
+            try { _ = second.LocalPort; }
+            catch (InvalidOperationException) { rejected = true; }
+            Require(rejected, "concurrent ingress during suspended receive was permitted");
+            cancel.Cancel();
+            rejected = false;
+            try { _ = await pending; }
+            catch (OperationCanceledException) { rejected = true; }
+            Require(rejected, "pending receive did not settle cancellation");
+        }
+        await Send(first, second.LocalPort, new byte[]{ 41 });
+        Require((await AwaitPacket(second, 4)).CopyBytes()[0] == 41,
+            "cancelled receive poisoned descriptor or consumed later datagram");
+
+        // Revoke a receiver-local permission after the socket await starts.
+        bool localEnabled = true;
+        using (var receiver = UdpLoopbackHost.Bind(0, (_, action) =>
+        {
+            if (!Volatile.Read(ref localEnabled) && action == UdpLoopbackHost.Action.Local)
+                throw new UnauthorizedAccessException("revoked receiver");
+        }))
+        {
+            int port = receiver.LocalPort;
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var pending = receiver.ReceiveFromAsync(4, deadline.Token);
+            Require(!pending.IsCompleted, "revocation test receive did not suspend");
+            Volatile.Write(ref localEnabled, false);
+            await Send(first, port, new byte[]{ 42 });
+            rejected = false;
+            try { _ = await pending; }
+            catch (UnauthorizedAccessException) { rejected = true; }
+            Require(rejected, "revoked receiver published a completed packet");
+            Volatile.Write(ref localEnabled, true);
+            await Send(first, port, new byte[]{ 43 });
+            Require((await AwaitPacket(receiver, 4)).CopyBytes()[0] == 43,
+                "revoked receive poisoned future datagrams");
         }
 
         first.Dispose();
         first.Dispose();
         rejected = false;
-        try { first.TryReceiveFrom(1); }
+        try { _ = await AwaitPacket(first, 1); }
         catch (ObjectDisposedException) { rejected = true; }
         Require(rejected, "closed UDP socket accepted I/O");
         Console.WriteLine("Atto .NET UDP host loopback checks passed (not guest/AOT execution)");
