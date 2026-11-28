@@ -2194,7 +2194,10 @@ public static partial class OresStructuredParser
                 values[field] = expr.Type == IrValueType.Bool
                     ? new StructuredBool(offset, value != 0) : new StructuredInt(offset, value);
                 if (values.Count > 64) throw Error("AGGREGATE_FIELD_BUDGET");
-                if (!Take(","))
+                bool comma = Take(",");
+                if (wrapper == "Tuple" && values.Count == 1 && !comma)
+                    throw Error("E_TUPLE_ARITY: singleton Tuple requires trailing comma");
+                if (!comma)
                 {
                     if (pairEntry && open == "{" && Current.NewlineBefore &&
                         PortableUnicodeIdentifier.IsName(Current.Text)) continue;
