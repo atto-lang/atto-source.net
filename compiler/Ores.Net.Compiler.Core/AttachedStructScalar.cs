@@ -71,6 +71,8 @@ public static partial class OresStructuredParser
         private string Word()
         {
             string s = current.Text;
+            if (scalarClass && s is ("class" or "actor" or "isoactor" or "as" or "end" or "final" or "extends" or "implements" or "rt" or "unsafe" or "suspends" or "await" or "spawn" or "if" or "else" or "while" or "for"))
+                throw Error("E_CLASS_PROFILE", "reserved class profile word");
             if (!IsSimpleNominalWord(s) || s is "self" or "true" or "false" or "int" or "bool" or "void" or "let" or "mut" or "return" or "with" or "constructor" or "mtd" or "define" or "type" or "struct" or "fnc" or "pub" or "private" or "const" or "val" or "new" or "copy" or "take" or "move" or "borrow" or "share")
                 throw Error("E_STRUCT_SYNTAX", "expected unreserved identifier");
             Next(); return s;
@@ -274,6 +276,7 @@ public static partial class OresStructuredParser
                 assignments.Add((field, parameter));
             }
             if (Eat("return")) Expect(";");
+            Require(current.Text == "}", "E_CLASS_PROFILE", "constructor permits only direct field initialization and optional return");
             Expect("}"); Expect("end");
             Require(assigned.Count == owner.Fields.Count, "E_CLASS_INIT", "missing field initialization");
             owner.Constructors.Add(new(parameters, assignments));
@@ -353,6 +356,7 @@ public static partial class OresStructuredParser
             if(Eat("self")){root="self";Require(self is not null,"E_TYPE","self outside method");}
             else root=Word();
             if(self is not null && root!="self" && self.TryGetValue("$arg."+root,out var parameter))return parameter;
+            if (scalarClass && current.Text != ".") throw Error("E_CLASS_PROFILE", "class identity, whole value and escape unavailable");
             Expect("."); string name=Word();
             if(self is null && values.TryGetValue(root,out var value)){
                 if(Eat("(")){
@@ -379,7 +383,7 @@ public static partial class OresStructuredParser
             if (scalarClass)
             {
                 Require(annotated is not null && !explicitCopy, "E_CLASS_PROFILE", "explicit nominal local required");
-                Expect("new");
+                if (!Eat("new")) throw Error("E_CLASS_PROFILE", "class alias/copy unavailable; direct new required");
             }
             Owner owner; Dictionary<string,StructuredExpr> slots=new(StringComparer.Ordinal);
             // A nominal copy reads all source leaves before creating the new value.
