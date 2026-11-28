@@ -321,6 +321,7 @@ internal static class StructuredCfgLoweringTests
     {
         foreach (string body in new[] {
             "const t=();return 42;",
+            "const Tuple t=(42,);return t[0];",
             "const Tuple t=();const Record r=();const Record s={};return 42;",
             "const Record<infer R> r=();const Record<R> s={};return 42;",
             "const Tuple<infer T> t=();const Tuple<T> u=();return 42;",
@@ -335,6 +336,7 @@ internal static class StructuredCfgLoweringTests
             "const Tuple<infer T> t=(1,2);const Tuple<T> u=();return 0;",
             "const t=();const r={...t,a:42};return r.a;",
             "const t=();return t[0];",
+            "const Tuple t=(42);return 0;",
             "const Record r=();return r.a;",
             "const Record r=();return r[0];",
             "const t=();return t.a;",
