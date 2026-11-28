@@ -37,7 +37,7 @@ internal sealed class UdpLoopbackHost : IDisposable
     private readonly int _requestedPort;
     // One logical operation owns the descriptor across suspension. This is
     // not a monitor held across await, nor a queue of pending callers.
-    private const int Idle = 0, Active = 1, Closed = 2;
+    private const int Idle = 0, Active = 1, Retiring = 2, Closed = 3;
     private int _lifecycle;
 
     private UdpLoopbackHost(Socket socket, int requestedPort, Authorize authorize)
@@ -91,7 +91,7 @@ internal sealed class UdpLoopbackHost : IDisposable
     private void Enter()
     {
         int previous = Interlocked.CompareExchange(ref _lifecycle, Active, Idle);
-        if (previous == Closed)
+        if (previous == Closed || previous == Retiring)
             throw new ObjectDisposedException(nameof(UdpLoopbackHost));
         if (previous != Idle)
             throw new InvalidOperationException("concurrent or reentrant UDP operation");
@@ -172,10 +172,13 @@ internal sealed class UdpLoopbackHost : IDisposable
     // no blocking lock, early close, or reuse of an in-flight descriptor.
     public void Dispose()
     {
-        int previous = Interlocked.CompareExchange(ref _lifecycle, Closed, Idle);
+        int previous = Interlocked.CompareExchange(ref _lifecycle, Retiring, Idle);
         if (previous == Closed) return;
         if (previous != Idle)
-            throw new InvalidOperationException("UDP descriptor still has an active operation");
+            throw new InvalidOperationException("UDP descriptor is active or retiring");
+        // Do not acknowledge a concurrent Dispose before physical teardown.
+        // Even if disposal throws, the descriptor remains permanently sealed.
         _socket.Dispose();
+        Volatile.Write(ref _lifecycle, Closed);
     }
 }
