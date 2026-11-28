@@ -346,6 +346,7 @@ internal static class StructuredCfgLoweringTests
             "const struct s={};return 0;",
             "const t=();const Record r=t;return 0;"
         }) Reject("fnc main():int{" + body + "}", "empty product boundary: " + body);
+        Console.WriteLine("EMPTY_LOCAL_PRODUCT_CORECLR_PASS positives=9 negatives=14");
     }
 
     public static void RunStoredPair()
