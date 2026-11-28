@@ -124,8 +124,8 @@ static class Program
         Require(rejected, "revoked receive permitted");
         enabled = true;
 
-        // C# Monitor.TryEnter is reentrant, so policy callback recursion
-        // must be independently fenced, not mistaken for a new operation.
+        // Recursive trusted policy callbacks must not reenter or retire the
+        // active logical descriptor lease.
         UdpLoopbackHost? recursiveSocket = null;
         bool rejectedReentrancy = false;
         bool rejectedRetirement = false;
@@ -144,7 +144,7 @@ static class Program
             recursiveSocket = reentrant;
             await Send(reentrant, second.LocalPort, new byte[]{ 39 });
             Require(rejectedReentrancy,
-                "nested UDP accessor must not pass the same-thread monitor");
+                "nested UDP accessor must not acquire an active lease");
             Require(rejectedRetirement,
                 "same-thread authorization callback retired an active UDP descriptor");
             Require((await AwaitPacket(second, 4)).CopyBytes()[0] == 39,
@@ -180,7 +180,7 @@ static class Program
         bool localEnabled = true;
         using (var receiver = UdpLoopbackHost.Bind(0, (_, action) =>
         {
-            if (!localEnabled && action == UdpLoopbackHost.Action.Local)
+            if (!Volatile.Read(ref localEnabled) && action == UdpLoopbackHost.Action.Local)
                 throw new UnauthorizedAccessException("revoked receiver");
         }))
         {
@@ -188,13 +188,13 @@ static class Program
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var pending = receiver.ReceiveFromAsync(4, deadline.Token);
             Require(!pending.IsCompleted, "revocation test receive did not suspend");
-            localEnabled = false;
+            Volatile.Write(ref localEnabled, false);
             await Send(first, port, new byte[]{ 42 });
             rejected = false;
             try { _ = await pending; }
             catch (UnauthorizedAccessException) { rejected = true; }
             Require(rejected, "revoked receiver published a completed packet");
-            localEnabled = true;
+            Volatile.Write(ref localEnabled, true);
             await Send(first, port, new byte[]{ 43 });
             Require((await AwaitPacket(receiver, 4)).CopyBytes()[0] == 43,
                 "revoked receive poisoned future datagrams");
